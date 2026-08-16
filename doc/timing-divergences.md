@@ -22,9 +22,16 @@ the case — section 9 wins, because it is the MC68010's own table.
 `sim/tb/core_timing_tb.sv` is where the numbers below come from: it runs one
 instruction at a time from reset and reports the clocks between the
 instruction boundary before it and the one after, which is how the reference
-counts. Three instructions whose section 9 entry is not in doubt -- NOP,
-MOVEQ, ADD.W Dn,Dn -- are measured first, so a disagreement further down is
+counts. Four instructions whose section 9 entry is not in doubt -- NOP, MOVEQ,
+ADD.W Dn,Dn and RTS -- are measured first, so a disagreement further down is
 the instruction and not the harness.
+
+**Every row is a regression check, not a report.** It carries what this design
+takes as well as what section 9 gives, and the test fails if the first number
+moves. It was a report until P6, and that let four rows quietly start measuring
+an exception instead of the instruction they name: RTS and RTD popped a return
+address out of memory the harness never wrote, and DIVU and DIVS divided by a
+register that was zero. Each row now sets up what it needs.
 
 ## Divergences
 
@@ -85,21 +92,26 @@ The originals are data-dependent and take up to 40 (MULU), 42 (MULS), 108
 
 | | Section 9 | RD68011 |
 |---|--:|--:|
-| MULU.W D1,D0 | 40 max | 4 |
-| MULS.W D1,D0 | 42 max | 4 |
-| DIVU.W D1,D0 | 108 max | 41 |
-| DIVS.W D1,D0 | 122 max | 41 |
+| MULU.W D1,D0 | 40 max | 5 |
+| MULS.W D1,D0 | 42 max | 5 |
+| DIVU.W D1,D0 | 108 max | 45 |
+| DIVS.W D1,D0 | 122 max | 45 |
 
-**Why.** The multiplier is one ALU operation, for the same reason the shifter
-is: the architectural state and the bus behaviour do not depend on how it is
-done, and a 16x16 multiply is not what limits this design's frequency.
+**Why.** Both are units of their own with registered operands and a registered
+result, started by one microword and read by the next. The multiplier began as
+a single ALU operation, and moving it out is what recovered about ten
+nanoseconds of clock period: the ALU's result feeds the zero flag, which feeds
+a conditional microword's address, which feeds the microcode store, whose
+output has to reach the bus request pins inside half a clock -- and a
+multiplier in that chain puts a DSP in it, whether or not any multiply ever
+takes its operands from read data. `rtl/rd68011_mul.sv` has the argument.
 
-The divider is the one place where a sequential unit was worth building --
-`rtl/rd68011_divider.sv` explains why -- and it takes 33 clocks whatever the
-operands, plus the microcode loop that waits on it. That loop polls every two
-clocks, so the cost is 41 rather than 37; making it one would need a wait state
-in the sequencer of the kind bus cycles already have, which is P8 work if it is
-ever worth doing.
+The divider was sequential from the start, for the more ordinary reason that a
+32-by-16 divide is large; `rtl/rd68011_divider.sv` explains. It takes 33 clocks
+whatever the operands, plus the microcode loop that waits on it. That loop
+polls every two clocks, so the cost is 45 rather than 41; making it one would
+need a wait state in the sequencer of the kind bus cycles already have, which
+is P8 work if it is ever worth doing.
 
 **What it costs.** Nothing a program can observe except elapsed time: no bus
 cycle happens during either, so the transaction list is the reference's, which
@@ -174,6 +186,29 @@ Recorded here only because they are easy to mistake for timing:
   on the real part. The range of lengths is identical — six to fifteen wait
   states, which is exactly what figures B-4 and B-5 draw.
 
+### Loop mode: exact where the manual gives a number
+
+Loop mode (UM appendix A) exists to remove instruction fetches, so its cycle
+counts are the ones most worth getting right -- and they come out right:
+
+| | Section 9 | RD68011 |
+|---|--:|--:|
+| MOVE.W (An)+,(An)+, loop continued | 14 (table 9-3) | 14 |
+| CMPM.W (An)+,(An)+, loop continued | 14 (table 9-17) | 14 |
+| CLR.W (An)+, loop continued | 10 (table 9-11) | 10 |
+| TST.W (An)+, loop continued | 10 | 10 |
+
+That is not a coincidence and it is not tuning. A loop mode iteration here is
+the looped instruction's bus cycles, plus one clock for the prefetch microword
+whose fetch is suppressed, plus five for the DBcc -- test the condition,
+decrement, test the result, and put the looped instruction back in `ir`. Four
+plus one plus five is nine, and MOVE.W (An)+,(An)+ has two operand cycles: 14.
+
+Where it does diverge is leaving the loop on an expired count, which costs four
+more here than section 9's 18: the counter test is a microword and its branch
+arm is another, where the original folds them into work it was doing anyway.
+Leaving on the condition matches exactly, at 20.
+
 ### Fault processing and RTE with a long frame
 
 Section 9 gives RTE 112(27/10) for "Long, Retry Read", 112(26/1) for "Long,
@@ -190,5 +225,6 @@ MC68000 with a seven-word frame.
 
 ## Still to come
 
-P7 adds loop mode, which is a timing feature and nothing else, and the
-measurement harness that produces this list is where it will be judged.
+P8 is implementation readiness, and the one thing on this page it will change
+is the clock period rather than any cycle count. `scripts/rd68011.xdc` has that
+measurement.

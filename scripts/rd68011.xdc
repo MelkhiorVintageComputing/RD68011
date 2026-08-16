@@ -22,24 +22,21 @@
 #     -> the bus request address, which must be at the pins on the rising edge
 #        that ends S7
 #
-# 35.2 ns of it as of P6, against a budget of half a clock, because it starts
-# at a falling-edge flop and ends at a rising-edge one.
+# 31.2 ns of it, against a budget of half a clock, because it starts at a
+# falling-edge flop and ends at a rising-edge one. It was 35.2 ns until the
+# multiplier moved into rd68011_mul: a DSP used to sit between the read data
+# and the ALU result, because synthesis has no way to know that no multiply
+# ever takes its operands from read data. Registering its operands and result
+# was worth 4.0 ns, less than the 5.4 the DSP itself costs, because two thirds
+# of this path is routing.
 #
-# Two things make it long, and both have known fixes that belong to P8:
-#
-#  1. The multiplier is combinational, so a DSP sits between the read data and
-#     the ALU result even though no multiply ever takes its operands from read
-#     data. Registering its operands and result -- one clock, as the divider
-#     already does -- takes it out of this cone entirely. Worth about 5.4 ns.
-#  2. The microcode store is read twice combinationally in series: the current
-#     microword, then the next one, whose bus request has to reach the pins on
-#     the edge that ends the current cycle. That structure is what buys the
-#     exact cycle counts, so it is not something to change casually, but the
-#     store wants to be a block RAM with the handful of request fields split
-#     into a narrow second copy that can be read ahead.
-#
-# Neither is a correctness problem, and the part is already faster than any
-# MC68010 Motorola shipped. See doc/bus-timing-compliance.md.
+# What is left is the microcode store, which is read twice combinationally in
+# series: the current microword, then the next one, whose bus request has to
+# reach the pins on the edge that ends the current cycle. That structure is
+# what buys the exact cycle counts, so it is not something to change casually,
+# but the store wants to be a block RAM with the handful of request fields
+# split into a narrow second copy that can be read ahead. P8's problem, and not
+# a correctness one; see doc/bus-timing-compliance.md.
 #
 # Both edges of clk are used (one bus state per half period), so a single
 # create_clock covers the design and Vivado times the negative-edge paths
@@ -47,7 +44,7 @@
 # UM 3.9 requires a square wave, and the half period is a real timing budget
 # here, not a convention.
 
-set clk_period_ns 72.000
+set clk_period_ns 64.000
 
 create_clock -period $clk_period_ns -name clk -waveform "0.000 [expr {$clk_period_ns / 2.0}]" [get_ports clk]
 

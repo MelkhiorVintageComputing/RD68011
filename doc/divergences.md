@@ -64,7 +64,7 @@ manual and against the vectors before being relied on.
 | **`MOVE from CCR`** is an MC68010 addition and has no MC68000 vectors at all. | Implemented; the sweep has nothing to compare it against, so it is covered by the directed tests. |
 | **`VBR`** relocates the vector table; the MC68000 always used address zero. | Implemented. Reset clears it, as UM 5.5 requires. |
 | **`RTE` checks the frame format** and traps to vector 14 on a code it does not recognise (UM 6.4). | Implemented for format $0; format $8 arrives in P6. |
-| **Loop mode** (UM appendix A). | P7. |
+| **Loop mode** (UM appendix A): a DBcc whose displacement is minus four and whose target is a one-word loop mode instruction stops fetching altogether. | Implemented, and checked by `sim/tb/core_loop_tb.sv` -- which asks the question that matters as a negative one: once the loop is running, no cycle in program space happens at all. |
 
 ### How the sweep tells an exception apart
 
@@ -93,9 +93,17 @@ would have thrown away with the rest.
 
 ## Not yet implemented
 
-Listed so a sweep's "not implemented" count can be read against something.
+Nothing. Every instruction, every exception and both of the MC68010's own
+mechanisms -- instruction continuation and loop mode -- are built. What is left
+is P8, which is implementation readiness rather than behaviour: the clock
+period, the microcode store's shape, and an audit that no register initialises
+outside reset.
 
-**P7** — loop mode.
+## Deliberate divergences added in P7
+
+| | Why |
+|---|--- |
+| **Table A-1 is read as "every one-word instruction whose memory operands use only (An), (An)+ and -(An)"**, which admits MOVE (Ay)+ to (Ax)+ -- a cell table A-1 omits and table 9-3 gives a cycle count for. | The two tables disagree, and the page is the most OCR-damaged in the manual. A missing row in a scanned list is a likelier explanation than one arbitrary hole in an otherwise complete matrix, and table 9-3 having a number in the cell settles it. The hole both tables agree on -- a register source to -(Ax) -- is kept. The list is generated from `tools/ucode/program.py` into `rtl/gen/rd68011_loop_rom.sv`, so it can be read and argued with. |
 
 ## Deliberate divergences added in P6
 

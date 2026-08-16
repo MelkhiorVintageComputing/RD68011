@@ -149,6 +149,28 @@ module rd68011_seq (
   logic [31:0] cur_addr;
   logic [15:0] cur_ssw;
 
+  // ---------------------------------------------------------------------------
+  // Loop mode -- UM appendix A
+  //
+  // "A single instruction is executed repeatedly under control of the test
+  // condition, decrement, and branch (DBcc) instruction without any
+  // instruction fetch bus cycles."
+  //
+  // While it runs, the two instructions live in registers rather than in
+  // memory: `loop_ir` holds the looped one and `irc` holds the DBcc, and
+  // nothing is fetched at all. `ir` alternates between them, which `loop_ph`
+  // tracks -- 0 when the looped instruction is next, 1 when the DBcc is.
+  //
+  // The pipe is left in a state a normal boundary would be happy with, which
+  // is what makes leaving loop mode free: at phase 0, ir is the instruction at
+  // ir_pc and irc is the word after it, exactly as after an ordinary fetch.
+  logic        loop_active;
+  logic        loop_ph;
+  logic [15:0] loop_ir;
+  logic        loop_m4;      // the DBcc's displacement was minus four
+  logic  [1:0] loop_pending; // what RTE read out of a frame, applied at RESUME
+  logic  [1:0] loop_saved;   // ... and what a fault put there
+
   // The MC68010's function code registers, which MOVES uses to reach an
   // address space of the program's choosing. Three bits each; MOVEC reads
   // them back zero-extended to 32, "unimplemented bits are read as zeros"
@@ -187,6 +209,8 @@ module rd68011_seq (
   logic [rd68011_ucode_pkg::U_SIZE_W-1:0]  f_size;
   logic [rd68011_ucode_pkg::U_CCR_W-1:0]   f_ccr;
   logic [rd68011_ucode_pkg::U_MOP_W-1:0]   f_mop;
+  logic [rd68011_ucode_pkg::U_FC_W-1:0]    f_fc;
+  logic [rd68011_ucode_pkg::U_LP_W-1:0]    f_lp;
 
   assign f_seq  = `UF(uw, SEQ);
   assign f_cond = `UF(uw, COND);
@@ -204,6 +228,8 @@ module rd68011_seq (
   assign f_size  = `UF(uw, SIZE);
   assign f_ccr   = `UF(uw, CCR);
   assign f_mop   = `UF(uw, MOP);
+  assign f_fc    = `UF(uw, FC);
+  assign f_lp    = `UF(uw, LP);
 
   // ===========================================================================
   // Retirement
@@ -225,7 +251,8 @@ module rd68011_seq (
   // An address error's cycle never starts, so there is no req_last to wait
   // for; a microword resumed with the rerun flag set has had its access done
   // in software, so there is none either. Both end the microword here.
-  assign retire   = !bus_busy || req_last || addr_err_q || rerun_skip;
+  assign retire   = !bus_busy || req_last || addr_err_q || rerun_skip ||
+                    loop_suppress;
 
   // Retiring and committing are not the same thing once faults exist. A
   // faulted microword ends -- the sequencer moves on to the fault handler --
@@ -249,8 +276,25 @@ module rd68011_seq (
 
   assign pf_adv   = (f_pf == rd68011_ucode_pkg::U_PF_ADV) ||
                     (f_pf == rd68011_ucode_pkg::U_PF_ADVFETCH);
-  assign pf_fetch = (f_pf == rd68011_ucode_pkg::U_PF_FETCH) ||
-                    (f_pf == rd68011_ucode_pkg::U_PF_ADVFETCH);
+  assign pf_fetch = ((f_pf == rd68011_ucode_pkg::U_PF_FETCH) ||
+                     (f_pf == rd68011_ucode_pkg::U_PF_ADVFETCH)) &&
+                    !loop_suppress;
+
+  // In loop mode nothing is fetched. A microword that would have read at the
+  // program counter still does everything else it does -- its ALU result, its
+  // address register update, its condition codes -- but issues no cycle, and
+  // its pipe operation loses the fetch half: ADVFETCH becomes a plain advance,
+  // which is what moves ir on from the looped instruction to the DBcc.
+  //
+  // That one rule covers every shape a loop mode instruction can have. The
+  // ones that prefetch at the end (TST, CMPM, the ALU group) advance there;
+  // the ones that prefetch in the middle because their write comes after it
+  // (MOVE to -(An), and the read-modify-writes) advance there instead. Neither
+  // needs microcode of its own.
+  logic loop_suppress;
+  assign loop_suppress = loop_active && bus_busy &&
+                         (f_fc == rd68011_ucode_pkg::U_FC_PROG) &&
+                         (f_bus == rd68011_ucode_pkg::U_BUS_READ);
 
   // ir takes the *old* irc, so an advance and a fetch in the same microword
   // shift the pipe along by one rather than colliding.
@@ -268,6 +312,13 @@ module rd68011_seq (
         rd68011_ucode_pkg::U_DST_IRC:    irc_nxt    = y[15:0];
         rd68011_ucode_pkg::U_DST_IR_PC:  ir_pc_nxt  = y;
         rd68011_ucode_pkg::U_DST_IRC_PC: irc_pc_nxt = y;
+        rd68011_ucode_pkg::U_DST_LOOPIR: ; // the register block writes it
+        // Round the loop again: the looped instruction goes back into ir, and
+        // ir_pc back to where it came from, which is one word before the DBcc.
+        rd68011_ucode_pkg::U_DST_LOOPBACK: begin
+          ir_nxt    = loop_ir;
+          ir_pc_nxt = irc_pc - 32'd2;
+        end
         default: ;
       endcase
     end
@@ -463,8 +514,11 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_ASRC_SSW:      a_bus = {16'd0, ssw};
       rd68011_ucode_pkg::U_ASRC_FAULT:    a_bus = fault_addr;
       rd68011_ucode_pkg::U_ASRC_DIB:      a_bus = {16'd0, dib};
-      rd68011_ucode_pkg::U_ASRC_VERWORD:  a_bus = {18'd0, rd68011_pkg::FRAME_VERSION,
-                                                   10'd0};
+      // Bits 13-10 are the version number UM 6.4 requires; bits 9-8 are ours,
+      // and carry whether a loop was running and which half of it was next.
+      rd68011_ucode_pkg::U_ASRC_VERWORD:  a_bus = {18'd0,
+                                                   rd68011_pkg::FRAME_VERSION,
+                                                   loop_saved, 8'd0};
       // Format in bits 15-12, the vector offset -- the vector number times
       // four -- in the twelve below it (UM figure 6-8).
       rd68011_ucode_pkg::U_ASRC_FMTVEC8:  a_bus = {16'd0, 4'h8, 2'd0, vec_num,
@@ -491,6 +545,9 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_ASRC_IRQVEC:   a_bus = {8'd0, 20'hFFFFF, irq_taken, 1'b1};
       rd68011_ucode_pkg::U_ASRC_IRQPC:    a_bus = irq_from_stop ? pc : ir_pc;
       rd68011_ucode_pkg::U_ASRC_DIVRES:   a_bus = {div_r, div_q};
+      rd68011_ucode_pkg::U_ASRC_MULRES:   a_bus = mul_res;
+      rd68011_ucode_pkg::U_ASRC_LOOPIR:   a_bus = {16'd0, loop_ir};
+      rd68011_ucode_pkg::U_ASRC_LOOPST:   a_bus = {30'd0, loop_saved};
       default:                            a_bus = 32'd0;
     endcase
   end
@@ -636,6 +693,30 @@ module rd68011_seq (
   // The divider, which is sequential: the sequencer waits on it the way it
   // waits on a bus cycle. See rd68011_divider for why this one unit is not
   // combinational like the rest.
+  // The multiplier. Started by the microword whose ALU operation names it and
+  // read by the one after; rd68011_mul says why it is a unit of its own and
+  // not an ALU operation.
+  // Whether the instruction just fetched can be the looped one. Read against
+  // ir_nxt, because the decision is made on the second fetch of it: "when the
+  // processor fetches the looped instruction the second time and determines
+  // that the looped instruction is a loop mode instruction, the processor
+  // automatically enters the loop mode".
+  logic loop_op_ok;
+  rd68011_loop_rom u_loop_rom (.op (ir_nxt), .is_loop (loop_op_ok));
+
+  logic [31:0] mul_res;
+
+  rd68011_mul u_mul (
+      .clk       (clk),
+      .rst_n     (rst_n),
+      .start     (commit && ((f_alu == rd68011_ucode_pkg::U_ALU_MULU) ||
+                             (f_alu == rd68011_ucode_pkg::U_ALU_MULS))),
+      .is_signed (f_alu == rd68011_ucode_pkg::U_ALU_MULS),
+      .a         (a_bus[15:0]),
+      .b         (b_bus[15:0]),
+      .result    (mul_res)
+  );
+
   logic        div_busy, div_ovf;
   logic [15:0] div_q, div_r;
 
@@ -1020,13 +1101,22 @@ module rd68011_seq (
       // a different implementation and cannot be interpreted.
       rd68011_ucode_pkg::U_COND_VERSION:
         cond_true = (rdata[13:10] == rd68011_pkg::FRAME_VERSION);
+      rd68011_ucode_pkg::U_COND_LOOP:  cond_true = loop_active;
       default:                         cond_true = 1'b0;
     endcase
   end
 
+  // A DBcc decoded while loop mode is running goes to its own routine, which
+  // is the one that knows how to go round again without fetching anything.
+  // Sending it there from the decoder rather than testing loop mode inside the
+  // ordinary DBcc keeps two clocks off every DBcc that is not in a loop.
+  logic dec_dbcc;
+  assign dec_dbcc = (ir_nxt[15:12] == 4'h5) && (ir_nxt[7:3] == 5'b11001);
+
   always_comb begin
     if (f_seq == rd68011_ucode_pkg::U_SEQ_DECODE) begin
-      upc_target = dec_entry;
+      upc_target = (loop_active && dec_dbcc)
+                     ? rd68011_ucode_pkg::ENTRY_DBCC_LOOP : dec_entry;
     end else begin
       // A conditional branch lands on next, or next+1 when the condition
       // holds. The assembler checks the target is even, so setting bit zero
@@ -1056,7 +1146,11 @@ module rd68011_seq (
   logic take_irq;
   logic take_trace;
 
-  assign take_irq   = irq_pending &&
+  // "Any pending interrupt is taken after each execution of the DBcc
+  // instruction, but not after each execution of the looped instruction."
+  // Phase 1 means the DBcc is what comes next, so that boundary is the looped
+  // instruction's and is not an interrupt point.
+  assign take_irq   = irq_pending && !(loop_active && loop_ph) &&
                       ((f_seq == rd68011_ucode_pkg::U_SEQ_DECODE) ||
                        `UF(uw, STOP));
   assign take_trace = trace_armed &&
@@ -1235,8 +1329,18 @@ module rd68011_seq (
                      (retire && (f_seq == rd68011_ucode_pkg::U_SEQ_RESUME) &&
                       rr_flag);
 
+  // In loop mode the instruction fetch that the next microword would make is
+  // not made. Decided on the next microword, like every other request field.
+  // ... and not by the microword that is turning loop mode off: the fetch it
+  // is about to make is the first of the two that refill the pipe.
+  logic n_loop_suppress;
+  assign n_loop_suppress = loop_active &&
+                           !(commit && (f_lp == rd68011_ucode_pkg::U_LP_EXIT)) &&
+                           (n_fc  == rd68011_ucode_pkg::U_FC_PROG) &&
+                           (n_bus == rd68011_ucode_pkg::U_BUS_READ);
+
   assign req_valid = (n_bus != rd68011_ucode_pkg::U_BUS_NONE) && reset_sync_n &&
-                     !n_addr_err && !skip_next && !halted;
+                     !n_addr_err && !skip_next && !halted && !n_loop_suppress;
   assign req_kind  = n_bus;
   assign req_addr  = n_addr[23:1];
   // The write data comes from the microword that is issuing the write, not
@@ -1352,6 +1456,12 @@ module rd68011_seq (
       group0     <= 1'b0;
       halted     <= 1'b0;
       addr_err_q <= 1'b0;
+      loop_active  <= 1'b0;
+      loop_ph      <= 1'b0;
+      loop_ir      <= 16'd0;
+      loop_m4      <= 1'b0;
+      loop_pending <= 2'd0;
+      loop_saved   <= 2'd0;
       cur_addr   <= 32'd0;
       cur_ssw    <= 16'd0;
       irq_taken   <= 3'd0;
@@ -1403,6 +1513,55 @@ module rd68011_seq (
       if (commit && (f_dst == rd68011_ucode_pkg::U_DST_USP)) begin
         usp <= y;
       end
+
+      // -- Loop mode ----------------------------------------------------------
+      //
+      // Entering takes two facts that arrive at different moments: the
+      // displacement was minus four, which is known where the DBcc computes
+      // its target, and the instruction at that target is a one-word loop mode
+      // instruction, which is only known once it has been fetched -- the
+      // second time, since the first fetch is what made the loop a loop.
+      //
+      // Trace keeps it out: "while the T bit is set, a trace exception occurs
+      // at the end of both the looped instruction and the DBcc instruction,
+      // making loop mode unavailable while tracing is enabled".
+      if (commit) begin
+        unique case (f_lp)
+          rd68011_ucode_pkg::U_LP_CHK:  loop_m4 <= (irc == 16'hFFFC);
+          rd68011_ucode_pkg::U_LP_ENTER:
+            if (loop_m4 && loop_op_ok && !sr_nxt[rd68011_pkg::SR_T] &&
+                !trace_armed) begin
+              loop_active <= 1'b1;
+              loop_ph     <= 1'b0;
+              loop_ir     <= ir_nxt;
+            end
+          rd68011_ucode_pkg::U_LP_EXIT: loop_active <= 1'b0;
+          default: ;
+        endcase
+        // Which half comes next. The looped instruction hands over by
+        // advancing the pipe with nothing fetched; the DBcc hands back with
+        // LOOPBACK.
+        if (loop_active && pf_adv)                                loop_ph <= 1'b1;
+        if (f_dst == rd68011_ucode_pkg::U_DST_LOOPBACK)           loop_ph <= 1'b0;
+        if (f_dst == rd68011_ucode_pkg::U_DST_LOOPIR)             loop_ir <= y[15:0];
+        if (f_dst == rd68011_ucode_pkg::U_DST_LOOPST)             loop_pending <= y[9:8];
+      end
+      // A fault suspends the loop rather than ending it: the handler has to
+      // run with instruction fetches working, and RTE puts the loop back --
+      // "when the return from exception (RTE) instruction continues execution
+      // of the looped instruction, the three-word loop is not fetched again".
+      if (fault) begin
+        loop_saved  <= {loop_active, loop_ph};
+        loop_active <= 1'b0;
+      end
+      if (retire && (f_seq == rd68011_ucode_pkg::U_SEQ_RESUME)) begin
+        loop_active <= loop_pending[1];
+        loop_ph     <= loop_pending[0];
+      end
+      // An interrupt or a trace ends it, and can: at the point either is
+      // taken the pipe is what an ordinary instruction boundary would have
+      // left, so there is nothing to unwind.
+      if (commit && (take_irq || take_trace)) loop_active <= 1'b0;
 
       // -- The fault machinery ------------------------------------------------
       //

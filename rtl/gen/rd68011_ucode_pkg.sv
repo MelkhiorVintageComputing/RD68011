@@ -8,7 +8,7 @@
 
 package rd68011_ucode_pkg;
 
-  localparam int UW    = 101;   // microword width
+  localparam int UW    = 103;   // microword width
   localparam int UADDR = 13;   // micro-address width
 
   // next: 13 bits at 0
@@ -44,6 +44,7 @@ package rd68011_ucode_pkg;
   localparam logic [4:0] U_COND_XWDR = 5'd13;
   localparam logic [4:0] U_COND_FMT8 = 5'd14;
   localparam logic [4:0] U_COND_VERSION = 5'd15;
+  localparam logic [4:0] U_COND_LOOP = 5'd16;
 
   // asrc: 6 bits at 21
   localparam int U_ASRC_LSB = 21;
@@ -95,6 +96,9 @@ package rd68011_ucode_pkg;
   localparam logic [5:0] U_ASRC_FMTVEC8 = 6'd44;
   localparam logic [5:0] U_ASRC_FRAMESZ = 6'd45;
   localparam logic [5:0] U_ASRC_FRAMEVER = 6'd46;
+  localparam logic [5:0] U_ASRC_MULRES = 6'd47;
+  localparam logic [5:0] U_ASRC_LOOPIR = 6'd48;
+  localparam logic [5:0] U_ASRC_LOOPST = 6'd49;
 
   // bsrc: 6 bits at 27
   localparam int U_BSRC_LSB = 27;
@@ -146,6 +150,9 @@ package rd68011_ucode_pkg;
   localparam logic [5:0] U_BSRC_FMTVEC8 = 6'd44;
   localparam logic [5:0] U_BSRC_FRAMESZ = 6'd45;
   localparam logic [5:0] U_BSRC_FRAMEVER = 6'd46;
+  localparam logic [5:0] U_BSRC_MULRES = 6'd47;
+  localparam logic [5:0] U_BSRC_LOOPIR = 6'd48;
+  localparam logic [5:0] U_BSRC_LOOPST = 6'd49;
 
   // alu: 5 bits at 33
   localparam int U_ALU_LSB = 33;
@@ -212,6 +219,9 @@ package rd68011_ucode_pkg;
   localparam logic [5:0] U_DST_SSW = 6'd31;
   localparam logic [5:0] U_DST_SRSAVE = 6'd32;
   localparam logic [5:0] U_DST_WDATA = 6'd33;
+  localparam logic [5:0] U_DST_LOOPBACK = 6'd34;
+  localparam logic [5:0] U_DST_LOOPIR = 6'd35;
+  localparam logic [5:0] U_DST_LOOPST = 6'd36;
 
   // bus: 3 bits at 44
   localparam int U_BUS_LSB = 44;
@@ -391,14 +401,23 @@ package rd68011_ucode_pkg;
   localparam int U_G0_LSB = 100;
   localparam int U_G0_W   = 1;
 
+  // lp: 2 bits at 101
+  localparam int U_LP_LSB = 101;
+  localparam int U_LP_W   = 2;
+  localparam logic [1:0] U_LP_NONE = 2'd0;
+  localparam logic [1:0] U_LP_CHK = 2'd1;
+  localparam logic [1:0] U_LP_ENTER = 2'd2;
+  localparam logic [1:0] U_LP_EXIT = 2'd3;
+
   // Entry points the RTL needs by name.
   localparam logic [UADDR-1:0] ENTRY_RESET = 13'd0;
   localparam logic [UADDR-1:0] ENTRY_ILLEGAL = 13'd9;
-  localparam logic [UADDR-1:0] ENTRY_INTERRUPT = 13'd5490;
-  localparam logic [UADDR-1:0] ENTRY_TRACE = 13'd5497;
-  localparam logic [UADDR-1:0] ENTRY_BUSERR = 13'd6566;
-  localparam logic [UADDR-1:0] ENTRY_ADDRERR = 13'd6602;
-  localparam logic [UADDR-1:0] ENTRY_HALTED = 13'd6641;
-  localparam logic [UADDR-1:0] ENTRY_SPURIOUS = 13'd6638;
+  localparam logic [UADDR-1:0] ENTRY_INTERRUPT = 13'd5500;
+  localparam logic [UADDR-1:0] ENTRY_TRACE = 13'd5507;
+  localparam logic [UADDR-1:0] ENTRY_BUSERR = 13'd6598;
+  localparam logic [UADDR-1:0] ENTRY_ADDRERR = 13'd6634;
+  localparam logic [UADDR-1:0] ENTRY_HALTED = 13'd6673;
+  localparam logic [UADDR-1:0] ENTRY_SPURIOUS = 13'd6670;
+  localparam logic [UADDR-1:0] ENTRY_DBCC_LOOP = 13'd4882;
 
 endpackage

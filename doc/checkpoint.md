@@ -132,11 +132,13 @@ here or it does not exist.
 | `rr_flag`, `rerun_skip` | 1+1 | the rerun flag out of a frame, and the one microword it applies to | neither |
 | `group0`, `halted` | 1+1 | inside group 0 processing; and stopped for good | neither |
 
-### Reserved for the phase that needs it
+### Loop mode, added in P7
 
-| Register | Width | Arrives in | For |
+| Register | Width | What it holds | Where it lands |
 |---|--:|---|---|
-| `loop_state` | small | P7 | loop mode (UM appendix A) |
+| `loop_ir` | 16 | the instruction the loop is executing | internal 15, at **SP+56** |
+| `loop_active`, `loop_ph` | 1+1 | whether a loop is running, and which half is next | bits 9-8 of the version word |
+| `loop_m4` | 1 | the DBcc's displacement was minus four | neither: it lives only between the two halves of the entry decision, inside one instruction |
 
 ### The budget
 
@@ -166,8 +168,15 @@ placed field of the frame — the special status word, the fault address, the
 data input buffer — or state that does not have to survive a fault at all: the
 rerun flag lives only between RTE reading it and the microword it applies to,
 and `group0` and `halted` describe the processor rather than the instruction.
-So the internal words still hold 189 bits of the 256, with two of the sixteen
-words spare. Only loop mode is left to fit, and P7 has room.
+So the internal words held 189 bits of the 256 after P6, with one of the
+sixteen words spare and room in the version word.
+
+**P7 spent exactly that.** UM appendix A requires it: "when the return from
+exception (RTE) instruction continues execution of the looped instruction, the
+three-word loop is not fetched again" -- so a loop has to survive a fault, and
+the frame is where it survives. `loop_ir` took the spare word and the two bits
+of loop state went into the eight the version word was not using. 207 bits of
+256, and nothing left to add.
 
 ## Rules this imposes on the microcode
 

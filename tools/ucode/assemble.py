@@ -8,6 +8,8 @@ Writes three generated files under rtl/gen/ and a listing under build/:
   rd68011_ucode_pkg.sv    field positions and every encoding, as localparams
   rd68011_ucode_rom.sv    micro-address -> microword
   rd68011_decode_rom.sv   opcode -> microcode entry point, as a casez
+  rd68011_loop_rom.sv     opcode -> can this be a looped instruction, UM
+                          table A-1, also a casez
   build/ucode.lst         the microcode, disassembled, for reading
 
 The generated files are checked in, so a build does not need Python. Rerun this
@@ -108,7 +110,8 @@ def emit_pkg(labels=None):
     if labels:
         out.append('  // Entry points the RTL needs by name.')
         for name in ('reset', 'illegal', 'interrupt', 'trace',
-                     'buserr', 'addrerr', 'halted', 'spurious'):
+                     'buserr', 'addrerr', 'halted', 'spurious',
+                     'dbcc_loop'):
             out.append("  localparam logic [UADDR-1:0] ENTRY_%s = %d'd%d;"
                        % (name.upper(), isa.UADDR_BITS, labels[name]))
         out.append('')
@@ -173,6 +176,37 @@ def emit_decode(patterns, labels):
                                                           labels['illegal']))
     out.append("        illegal = 1'b1;")
     out.append('      end')
+    out.append('    endcase')
+    out.append('  end')
+    out.append('')
+    out.append('endmodule')
+    out.append('')
+    return '\n'.join(out)
+
+
+def emit_loop(loop_patterns):
+    """Opcode to "can this be the looped instruction" -- UM appendix A."""
+    out = [BANNER, '',
+           '// The loop mode instruction table, UM table A-1.',
+           '//',
+           '// Every one-word instruction whose memory operands use only (An),',
+           '// (An)+ and -(An): with no instruction fetches happening there is',
+           '// nowhere for an extension word to come from. The reasoning behind',
+           '// two readings of that table is in tools/ucode/program.py.', '',
+           'module rd68011_loop_rom (',
+           '    input  logic [15:0] op,',
+           '    output logic        is_loop',
+           ');', '',
+           '  always_comb begin',
+           '    casez (op)']
+    seen = {}
+    for pat, mnem in loop_patterns:
+        if pat in seen:
+            continue
+        seen[pat] = mnem
+        out.append("      16'b%s: is_loop = 1'b1;  // %s"
+                   % (pat.replace('-', '?'), mnem))
+    out.append("      default: is_loop = 1'b0;")
     out.append('    endcase')
     out.append('  end')
     out.append('')
@@ -263,12 +297,14 @@ def main():
             ('rtl/gen/rd68011_ucode_pkg.sv', emit_pkg(labels)),
             ('rtl/gen/rd68011_ucode_rom.sv', emit_urom(words)),
             ('rtl/gen/rd68011_decode_rom.sv', emit_decode(patterns, labels)),
+            ('rtl/gen/rd68011_loop_rom.sv', emit_loop(program.loop_patterns)),
             ('build/ucode.lst', emit_listing(words, labels, patterns))]:
         if write(os.path.join(ROOT, name), text):
             changed.append(name)
 
-    print('%d microwords, %d bits wide, %d opcode patterns'
-          % (len(words), isa.width(), len(patterns)))
+    print('%d microwords, %d bits wide, %d opcode patterns, '
+          '%d loop mode patterns'
+          % (len(words), isa.width(), len(patterns), len(program.loop_patterns)))
     if changed:
         print('updated: ' + ', '.join(changed))
     else:

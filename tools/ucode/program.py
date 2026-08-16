@@ -9,7 +9,7 @@ is two internal microwords and two prefetches.
 """
 
 from isa import SEQ, COND, SRC, ALU, DST, BUS, ASEL, FC, PF, RSEL, SIZE, \
-                EASEL, CCR, WSEL, AUPD, AEASEL, MOP
+                EASEL, CCR, WSEL, AUPD, AEASEL, MOP, LP
 
 # --------------------------------------------------------------------------
 # Assembler state
@@ -36,7 +36,8 @@ def u(comment='', **kw):
                      'bus', 'asel', 'fc', 'pf', 'rsel', 'wsel', 'size', 'easel',
                      'ccr', 'aupd', 'aeasel', 'dhi', 'sh', 'shone',
                      'bitimm', 'vec', 'vsel', 'rstreq', 'stop',
-                     'divst', 'divsg', 'mop', 'mdown', 'hb', 'g0', 'goto'):
+                     'divst', 'divsg', 'mop', 'mdown', 'hb', 'g0', 'lp',
+                     'goto'):
             raise KeyError('no microword field %r' % k)
     goto = kw.pop('goto', None)
     if goto is not None:
@@ -740,6 +741,7 @@ def build():
     movec()
     moves()
     faults()
+    loop_mode_table()
     return words, labels, fixups, patterns, fallthrough
 
 
@@ -1782,10 +1784,58 @@ def dbcc():
       bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['FETCH'])
     final_prefetch('on to the next instruction')
 
+    # The taken path, which is also where loop mode is entered. UM appendix A:
+    # the displacement has to be minus four -- checked as it is read -- and the
+    # instruction at the target has to be a one-word loop mode instruction,
+    # which is only known once the refill below has fetched it. The refill is
+    # written out rather than shared, so that the two marks can go on the right
+    # microwords.
     label('dbcc_take')
     u(comment='target = irc_pc + the displacement word',
-      asrc=SRC['IRC_PC'], bsrc=SRC['IRC_SX'], alu=ALU['ADD'], dst=DST['T0'])
-    refill_from(SRC['T0'])
+      asrc=SRC['IRC_PC'], bsrc=SRC['IRC_SX'], alu=ALU['ADD'], dst=DST['T0'],
+      lp=LP['CHK'])
+    u(comment='take the branch',
+      asrc=SRC['T0'], alu=ALU['A'], dst=DST['PC'])
+    u(comment='fill irc from the new stream',
+      bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['FETCH'])
+    u(comment='and ir; if what arrives can be looped, start looping',
+      bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['ADVFETCH'],
+      lp=LP['ENTER'], seq=SEQ['DECODE'])
+
+    # ------------------------------------------------------------------
+    # The DBcc of a loop that is already running. Reached from the decoder
+    # rather than from `dbcc`, so that an ordinary DBcc pays nothing for it.
+    #
+    # Going round again costs one microword and no bus cycle at all: the
+    # looped instruction goes back into ir out of the register that has been
+    # holding it. Leaving costs one more than an ordinary DBcc's fall-through,
+    # because the program counter is still pointing at the displacement word
+    # that loop mode never read.
+    # ------------------------------------------------------------------
+    label('dbcc_loop')
+    u(comment='test the condition',
+      cond=COND['CC'], seq=SEQ['COND'], goto='dbcc_loop_arms')
+    label('dbcc_loop_arms', align_even=True)
+    u(comment='condition false: try the counter', goto='dbcc_loop_count')
+    u(comment='condition true: the loop is over', goto='dbcc_loop_exit')
+
+    label('dbcc_loop_count')
+    u(comment='decrement the counter word, and test what it becomes',
+      asrc=SRC['ONE'], bsrc=SRC['REG'], rsel=RSEL['EA_D'], easel=EASEL['SRC'],
+      alu=ALU['SUB'], dst=DST['REG'], size=SIZE['WORD'],
+      cond=COND['CNT'], seq=SEQ['COND'], goto='dbcc_loop_cnt_arms')
+    label('dbcc_loop_cnt_arms', align_even=True)
+    u(comment='counter still running: go round again', goto='dbcc_loop_again')
+    u(comment='counter ran out: the loop is over', goto='dbcc_loop_exit')
+
+    label('dbcc_loop_again')
+    u(comment='the looped instruction, straight back into ir',
+      dst=DST['LOOPBACK'], seq=SEQ['DECODE'])
+
+    label('dbcc_loop_exit')
+    u(comment='stop looping, and step the pc over the displacement',
+      asrc=SRC['TWO'], bsrc=SRC['PC'], alu=ALU['ADD'], dst=DST['PC'],
+      lp=LP['EXIT'], goto='dbcc_fall')
 
     opcode('0101----11001---', 'dbcc', 'DBcc')
 
@@ -2189,7 +2239,9 @@ def rte():
         ('the data input buffer', DST['DIB'], None),
         (None, None, None),                     # SP+22, reserved
         ('the instruction input buffer', DST['IRC'], None),
-        ('the version word, already checked', DST['NONE'], None),
+        # Loop mode's two bits ride in the spare part of the version word.
+        ('the version word: already checked, but it carries the loop state',
+         DST['LOOPST'], None),
         ('the micro-address to resume at', DST['UPCSAVE'], None),
         ('the opcode being executed', DST['IR'], None),
         ('the extension-word latch', DST['XW'], None),
@@ -2208,8 +2260,8 @@ def rte():
         ('... and low', DST['T0_SHW'], None),
         ('t1, high', DST['T1'], None),
         ('... and low', DST['T1_SHW'], None),
-        ('the last word, and the stack pointer lands where it belongs',
-         DST['NONE'], None),
+        ('the looped instruction, and the stack pointer lands where it belongs',
+         DST['LOOPIR'], None),
     ]
     for n, (what, dst, joinsrc) in enumerate(reload):
         g0 = 1 if n == 0 else 0
@@ -2729,8 +2781,11 @@ def bcd():
 #   1100 rrr 011 mmmrrr   MULU <ea>,Dn      1100 rrr 111 mmmrrr   MULS
 #
 # Sixteen bits by sixteen into the whole of Dn, and the condition codes come
-# from the thirty-two bit result. The original takes upwards of fifty cycles
-# and this takes one; doc/timing-divergences.md records that.
+# from the thirty-two bit result. The original takes upwards of forty cycles
+# and this takes two microwords: one to start rd68011_mul and one to take its
+# answer. Two rather than one because the multiplier is not in the ALU -- that
+# file says why, and it is worth about ten nanoseconds of clock period.
+# doc/timing-divergences.md records the cycle count.
 # ==========================================================================
 def multiply():
     for iname, opbits, oobits, aluop in (('mulu', '1100', '011', ALU['MULU']),
@@ -2739,20 +2794,25 @@ def multiply():
             lbl = '%s_%s' % (iname, name)
             label(lbl)
             if name == 'dn':
-                u(comment='%s Dm,Dn' % iname.upper(),
+                u(comment='%s Dm,Dn: start the multiplier' % iname.upper(),
                   asrc=SRC['REG'], rsel=RSEL['EA_D'], easel=EASEL['SRC'],
-                  bsrc=SRC['REG2'], alu=aluop, dst=DST['REG_L'],
-                  wsel=WSEL['IR9_D'], size=SIZE['LONG'], ccr=CCR['LOGIC'],
-                  bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
-                  pf=PF['ADVFETCH'], seq=SEQ['DECODE'])
+                  bsrc=SRC['REG2'], alu=aluop)
             else:
                 move_src_fetch(name, 'WORD', EASEL['SRC'])
-                u(comment='%s <ea>,Dn' % iname.upper(),
+                u(comment='%s <ea>,Dn: start the multiplier' % iname.upper(),
                   asrc=SRC['T1'], bsrc=SRC['REG'], rsel=RSEL['IR9_D'],
-                  alu=aluop, dst=DST['REG_L'], wsel=WSEL['IR9_D'],
-                  size=SIZE['LONG'], ccr=CCR['LOGIC'],
-                  bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
-                  pf=PF['ADVFETCH'], seq=SEQ['DECODE'])
+                  alu=aluop)
+            # The answer is ready on the next edge; this microword takes it
+            # and does the prefetch that ends the instruction. Reading the
+            # register number out of ir still works here even though the
+            # prefetch replaces ir, because it is replaced as the microword
+            # retires and read as it runs.
+            u(comment='the product, into the whole of Dn',
+              asrc=SRC['MULRES'], alu=ALU['A'], dst=DST['REG_L'],
+              wsel=WSEL['IR9_D'],
+              size=SIZE['LONG'], ccr=CCR['LOGIC'],
+              bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+              pf=PF['ADVFETCH'], seq=SEQ['DECODE'])
             opcode(pattern(opbits + '---' + oobits, mode, reg), lbl,
                    '%s %s' % (iname.upper(), name))
 
@@ -3278,7 +3338,9 @@ def moves():
 #   SP+50  ... low
 #   SP+52  t1, high
 #   SP+54  ... low
-#   SP+56  zero                       -- internal 15, the word RTE probes first
+#   SP+56  the looped instruction     -- internal 15, and the word RTE probes
+#                                        first. Loop mode's other two bits ride
+#                                        in the version word, which has room.
 #
 # Written from the top down, the stack pointer pre-decrementing by two each
 # time, so that it ends fifty-eight bytes lower with every word in place.
@@ -3287,7 +3349,7 @@ def moves():
 # (source, dhi) for each word, top of the frame first. None means a word that
 # is reserved and not written -- the stack pointer still steps over it.
 FRAME8 = [
-    (SRC['ZERO'],    0),   # SP+56
+    (SRC['LOOPIR'],  0),   # SP+56
     (SRC['T1'],      0),   # SP+54
     (SRC['T1'],      1),   # SP+52
     (SRC['T0'],      0),   # SP+50
@@ -3319,7 +3381,7 @@ FRAME8 = [
 ]
 
 FRAME8_NAMES = [
-    'internal 15, the word RTE probes first', 't1, low', 't1, high',
+    'the looped instruction, and the word RTE probes first', 't1, low', 't1, high',
     't0, low', 't0, high', 'irc_pc, low', 'irc_pc, high',
     'ir_pc, low', 'ir_pc, high', 'the address output buffer, low',
     '... high', 'the data output buffer, high half',
@@ -3391,3 +3453,100 @@ def faults():
     # holds the micro-address here and drives HALT out; this is where it sits.
     label('halted')
     u(comment='double bus fault: nothing more happens', goto='halted')
+
+
+# ==========================================================================
+# Loop mode -- UM appendix A
+#
+# "In the loop mode of the MC68010, a single instruction is executed repeatedly
+# under control of the test condition, decrement, and branch (DBcc) instruction
+# without any instruction fetch bus cycles."
+#
+# The instructions that can be the looped one are table A-1's, which is a list
+# of every *one-word* instruction whose memory operands use only (An), (An)+
+# and -(An) -- there is nowhere to put an extension word when nothing is being
+# fetched. The table below is that list as bit patterns, and it is what
+# rtl/gen/rd68011_loop_rom.sv is generated from.
+#
+# Two readings of the table are worth recording, because it is the most
+# OCR-damaged page in the manual:
+#
+#  - Table A-1 lists eight of the nine memory-to-memory MOVE combinations and
+#    leaves out (Ay)+ to (Ax)+. Table 9-3, which gives the same instructions
+#    their loop mode cycle counts, has a number in that cell. Table 9-3 is
+#    followed: a missing row in a scanned list is a likelier explanation than
+#    one arbitrary hole in an otherwise complete matrix.
+#  - Both tables agree that a *register* source cannot go to -(Ax), and that
+#    one is kept: it is a hole in both, and MOVE Rn,-(An) is the one form whose
+#    prefetch happens before its write, which is exactly what loop mode has
+#    nowhere to put.
+# ==========================================================================
+loop_patterns = []
+
+
+def loop_op(pattern, mnemonic):
+    if len(pattern) != 16 or any(c not in '01-' for c in pattern):
+        raise ValueError('bad loop mode pattern %r' % pattern)
+    loop_patterns.append((pattern, mnemonic))
+
+
+def loop_mode_table():
+    IND = ('010', '011', '100')          # (An), (An)+, -(An)
+    SZ  = ('00', '01', '10')             # byte, word, long
+
+    # MOVE, at all three sizes: any of the three indirect modes or a register
+    # as the source, any of the three as the destination -- except that a
+    # register source cannot go to -(Ax).
+    for szbits, szname in (('01', 'b'), ('11', 'w'), ('10', 'l')):
+        for dmode in IND:
+            for smode in ('000', '001') + IND:
+                if smode == '001' and szbits == '01':
+                    continue             # MOVE.B An is not an instruction
+                if smode in ('000', '001') and dmode == '100':
+                    continue             # the hole both tables agree on
+                loop_op('00' + szbits + '---' + dmode + smode + '---',
+                        'MOVE.%s' % szname)
+
+    # The standard instructions, in both directions, and the address forms.
+    for iname, opbits in (('add', '1101'), ('and', '1100'), ('cmp', '1011'),
+                          ('or', '1000'), ('sub', '1001')):
+        for ss in SZ:
+            for mode in IND:
+                if iname != 'eor':
+                    loop_op(opbits + '---0' + ss + mode + '---',
+                            '%s <ea>,Dn' % iname.upper())
+    for iname, opbits in (('add', '1101'), ('and', '1100'), ('eor', '1011'),
+                          ('or', '1000'), ('sub', '1001')):
+        for ss in SZ:
+            for mode in IND:
+                loop_op(opbits + '---1' + ss + mode + '---',
+                        '%s Dn,<ea>' % iname.upper())
+    for iname, opbits in (('adda', '1101'), ('cmpa', '1011'), ('suba', '1001')):
+        for opmode in ('011', '111'):
+            for mode in IND:
+                loop_op(opbits + '---' + opmode + mode + '---', iname.upper())
+
+    # The multiprecision group, whose loop mode forms are all -(Ay) to -(Ax),
+    # and CMPM, whose are (Ay)+ to (Ax)+ (table 9-17).
+    loop_op('1100---100001---', 'ABCD -(Ay),-(Ax)')
+    loop_op('1000---100001---', 'SBCD -(Ay),-(Ax)')
+    for iname, opbits in (('addx', '1101'), ('subx', '1001'), ('cmpm', '1011')):
+        for ss in SZ:
+            loop_op(opbits + '---1' + ss + '001---', iname.upper())
+
+    # The single-operand group.
+    for iname, opbits in (('negx', '01000000'), ('clr', '01000010'),
+                          ('neg', '01000100'), ('not', '01000110'),
+                          ('tst', '01001010')):
+        for ss in SZ:
+            for mode in IND:
+                loop_op(opbits + ss + mode + '---', iname.upper())
+    for mode in IND:
+        loop_op('0100100000' + mode + '---', 'NBCD')
+
+    # The memory shifts and rotates, which are word only and shift by one.
+    for kk, kind in (('00', 'AS'), ('01', 'LS'), ('10', 'ROX'), ('11', 'RO')):
+        for d in ('0', '1'):
+            for mode in IND:
+                loop_op('11100' + kk + d + '11' + mode + '---',
+                        '%s%s (mem)' % (kind, 'L' if d == '1' else 'R'))

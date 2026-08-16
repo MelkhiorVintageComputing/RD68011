@@ -94,6 +94,7 @@ COND = {
     # MOVES's direction bit, which is in its extension word rather than in the
     # opcode, so the microcode has to branch on it (PRM section 6).
     'XWDR': 13,
+    'LOOP': 16,   # loop mode is running
     # RTE's two checks on a long frame (UM 6.4): the format code, and the
     # version number stamped in the first of the sixteen internal words.
     'FMT8': 14,
@@ -172,6 +173,10 @@ SRC = {
     'FMTVEC8':  44,   # 1000 and the vector offset: the long frame's header
     'FRAMESZ':  45,   # 58, the long frame's size in bytes
     'FRAMEVER': 46,   # 26, the offset of the version word within it
+    'MULRES':   47,   # the product, one clock after the microword that started it
+    # Loop mode (UM appendix A).
+    'LOOPIR':   48,   # the one-word instruction the loop is executing
+    'LOOPST':   49,   # whether loop mode is running, and which half is next
 }
 
 ALU = {
@@ -191,7 +196,11 @@ ALU = {
     'SXB': 10,  # sign-extend the low byte to 32 bits: EXT.W
     'SWAP': 11, # exchange the halves of a long: SWAP
     'NOTX': 12, # ones complement, but of the B bus
-    'MULU': 19,  # b[15:0] * a[15:0], unsigned, to 32 bits
+    # These do not produce a result here: a microword carrying one starts
+    # rd68011_mul with whatever is on the two buses, and the microword after it
+    # reads MULRES. Keeping the multiplier out of the ALU is worth about ten
+    # nanoseconds of clock period -- see rd68011_mul.sv.
+    'MULU': 19,  # start b[15:0] * a[15:0], unsigned, to 32 bits
     'MULS': 20,  # the same, signed
     'ABCD': 17,  # decimal b + a + X
     'SBCD': 18,  # decimal b - a - X
@@ -263,6 +272,25 @@ DST = {
     # register, and going through the data output buffer would destroy the one
     # word of it the frame itself has to record.
     'WDATA':   33,
+    # Loop mode. LOOPBACK is the whole of what a DBcc does when it goes round
+    # again: the looped instruction goes back into ir, and ir_pc back to the
+    # address it came from, with nothing fetched (UM appendix A).
+    'LOOPBACK': 34,
+    'LOOPIR':   35,   # RTE putting a suspended loop back
+    'LOOPST':   36,
+}
+
+# What a microword does about loop mode -- UM appendix A.
+#
+# Entering is a two-part decision that the DBcc's own microcode makes as it
+# goes: the displacement has to be minus four, which is known where the branch
+# target is computed, and the instruction at the target has to be a one-word
+# loop mode instruction, which is only known once it has been fetched.
+LP = {
+    'NONE':  0,
+    'CHK':   1,   # remember whether the displacement was minus four
+    'ENTER': 2,   # ... and if the instruction just fetched qualifies, loop
+    'EXIT':  3,   # stop looping: the microwords after this one prefetch again
 }
 
 # The extension-word latch.
@@ -501,6 +529,7 @@ FIELDS = [
     ('g0',    1,  None),   # enter group 0 processing: a fault from here on is
                            # a double bus fault. RTE sets it once it has
                            # committed to reloading a long frame (UM 6.4).
+    ('lp',    2,  LP),     # loop mode: what this microword does about it
 ]
 
 # Defaults for a microword that does nothing but move to the next address.
@@ -537,6 +566,7 @@ DEFAULTS = {
     'mdown': 0,
     'hb':    0,
     'g0':    0,
+    'lp':    LP['NONE'],
 }
 
 # The addressing-mode dispatch index: the mode field, except that mode 7 uses

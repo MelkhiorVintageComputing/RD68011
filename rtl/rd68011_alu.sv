@@ -78,8 +78,9 @@ module rd68011_alu (
       rd68011_ucode_pkg::U_ALU_SHR16: y = {16'd0, a[31:16]};
       rd68011_ucode_pkg::U_ALU_SHR24: y = {24'd0, a[31:24]};
       rd68011_ucode_pkg::U_ALU_ANDN: y = b & ~a;
-      rd68011_ucode_pkg::U_ALU_MULU: y = mul_u;
-      rd68011_ucode_pkg::U_ALU_MULS: y = mul_s;
+      // MULU and MULS produce nothing here: the microword carrying them
+      // starts rd68011_mul, and the microword after it reads the answer. See
+      // that file for why the multiplier is not in this module.
       rd68011_ucode_pkg::U_ALU_ABCD: y = {b[31:8], bcd_add};
       rd68011_ucode_pkg::U_ALU_SBCD: y = {b[31:8], bcd_sub};
       rd68011_ucode_pkg::U_ALU_ADDX: y = sumx[31:0];
@@ -87,18 +88,6 @@ module rd68011_alu (
       default:                      y = a;
     endcase
   end
-
-  // -- Multiply ---------------------------------------------------------------
-  //
-  // Sixteen bits by sixteen to thirty-two, in one step rather than in the
-  // thirty-odd the original takes. The condition codes come from the result at
-  // long size, which the flag rule already handles, and V and C are cleared
-  // (PRM section 4).
-  logic [31:0] mul_u;
-  logic [31:0] mul_s;
-
-  assign mul_u = {16'd0, b[15:0]} * {16'd0, a[15:0]};
-  assign mul_s = $signed(b[15:0]) * $signed(a[15:0]);
 
   // -- Binary-coded decimal --------------------------------------------------
   //
