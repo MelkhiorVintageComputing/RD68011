@@ -35,7 +35,8 @@ def u(comment='', **kw):
         if k not in ('next', 'seq', 'cond', 'asrc', 'bsrc', 'alu', 'dst',
                      'bus', 'asel', 'fc', 'pf', 'rsel', 'wsel', 'size', 'easel',
                      'ccr', 'aupd', 'aeasel', 'dhi', 'sh', 'shone',
-                     'bitimm', 'goto'):
+                     'bitimm', 'vec', 'vsel', 'rstreq', 'stop',
+                     'goto'):
             raise KeyError('no microword field %r' % k)
     goto = kw.pop('goto', None)
     if goto is not None:
@@ -159,6 +160,9 @@ def bra():
 
     # A displacement byte of zero is the word form. This pattern has to come
     # first to win the priority order.
+    # BRA is Bcc with the always-true condition, and the generic Bcc code
+    # covers it; these entry points stay for the P2 fetch testbench, which
+    # names them directly.
     opcode('0110000000000000', 'bra_w', 'BRA.W')
     opcode('01100000--------', 'bra_b', 'BRA.B')
 
@@ -168,8 +172,12 @@ def bra():
 # processing arrives in P4; for now it stops, which a testbench can see.
 # ==========================================================================
 def illegal():
+    # Where the decoder sends anything it has no pattern for. It jumps to the
+    # illegal-instruction exception, which is set up later in the build, so
+    # this is a one-word trampoline.
     label('illegal')
-    u(comment='no exception processing yet: stand still', goto='illegal')
+    u(comment='an unrecognised opcode is an illegal instruction',
+      goto='illegal_exc')
 
 
 # ==========================================================================
@@ -354,6 +362,55 @@ def ea_needs_double_refill(name):
     for two extension words; only the placement differs.
     """
     return name == 'absl'
+
+
+def ea_setup_nopf(name, easel_v):
+    """Compute the address without prefetching.
+
+    JMP and JSR leave the instruction stream entirely, so there is nothing to
+    top the prefetch pipe up for: the reference gives JMP (d16,An) two bus
+    cycles, both of them refills from the target. The extension word is taken
+    straight out of irc instead.
+
+    (xxx).L is the exception, and the only one: its low half is not in irc and
+    has to be read, which is why the reference gives it three.
+    """
+    if name == 'aind':
+        return
+    if name == 'adisp':
+        u(comment='(d16,An), with no prefetch: the stream is about to change',
+          asrc=SRC['REG'], rsel=RSEL['EA_A'], easel=easel_v,
+          bsrc=SRC['IRC_SX'], alu=ALU['ADD'], dst=DST['T0'])
+    elif name == 'pcdisp':
+        u(comment='(d16,PC), with no prefetch',
+          asrc=SRC['IRC_PC'], bsrc=SRC['IRC_SX'], alu=ALU['ADD'], dst=DST['T0'])
+    elif name == 'absw':
+        u(comment='(xxx).W, with no prefetch',
+          asrc=SRC['IRC_SX'], alu=ALU['A'], dst=DST['T0'])
+    elif name == 'absl':
+        u(comment='(xxx).L: the low half still has to be read',
+          asrc=SRC['IRC'], bsrc=SRC['RDATA'], alu=ALU['CAT'], dst=DST['T0'],
+          bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['NONE'])
+    elif name in ('aidx', 'pcidx'):
+        if name == 'aidx':
+            u(comment='(d8,An,Xn): base plus the displacement byte',
+              asrc=SRC['REG'], rsel=RSEL['EA_A'], easel=easel_v,
+              bsrc=SRC['IRC_SXB'], alu=ALU['ADD'], dst=DST['T0'])
+        else:
+            u(comment='(d8,PC,Xn): base plus the displacement byte',
+              asrc=SRC['IRC_PC'], bsrc=SRC['IRC_SXB'], alu=ALU['ADD'],
+              dst=DST['T0'])
+        u(comment='and the index register',
+          asrc=SRC['T0'], bsrc=SRC['INDEX'], alu=ALU['ADD'], dst=DST['T0'])
+
+
+def jump_return_src(name):
+    """Where the return address comes from, by how many extension words."""
+    if name == 'aind':
+        return SRC['IRC_PC'], None          # no extension word
+    if name == 'absl':
+        return SRC['PC'], SRC['TWO']        # two of them
+    return SRC['PC'], None                  # one
 
 
 def ea_asel(name, second=False):
@@ -637,6 +694,25 @@ def build():
     scc()
     negx()
     tas()
+    # BSR before Bcc: Bcc's catch-all pattern would otherwise swallow the
+    # 0001 condition field that means BSR.
+    bsr()
+    dbcc()
+    bcc()
+    jmp_jsr()
+    rts_rtr()
+    link_unlk()
+    exception_tail()
+    traps()
+    priv_violation()
+    rte()
+    sr_instructions()
+    sr_immediates()
+    move_usp()
+    reset_stop()
+    chk()
+    interrupt()
+    trace()
     return words, labels, fixups, patterns, fallthrough
 
 
@@ -1560,3 +1636,724 @@ def tas():
               bus=BUS['RMW'], asel=asel_v, fc=FC['DATA'])
             final_prefetch()
         opcode(pattern('0100101011', mode, reg), lbl, 'TAS %s' % name)
+
+
+# ==========================================================================
+# Control flow -- PRM section 4
+#
+# The reference's shapes, which fix where the prefetches go relative to the
+# stack traffic and which the microcode below reproduces:
+#
+#   BSR     w w P P     push the return address, then refill from the target
+#   JSR     P w w P     one prefetch from the target, the push, then the other
+#   JMP     P P         no stack traffic at all
+#   RTS     r r P P     pop the return address, then refill
+#   RTR     r r r P P   the condition codes come off the stack first
+#   LINK    P w w P     the displacement, the push, then the prefetch
+#   UNLK    r r P       pop into the register, then prefetch
+#   DBcc    P P         two prefetches, taken or not
+#
+# A push writes the high word at SP-4 and the low word at SP-2, which is the
+# same order PEA uses and the opposite of MOVE.L to -(An).
+# ==========================================================================
+def branch_target(long_form):
+    """T0 <- the branch target. The displacement base is always irc_pc."""
+    if long_form:
+        u(comment='target = irc_pc + the displacement word',
+          asrc=SRC['IRC_PC'], bsrc=SRC['IRC_SX'], alu=ALU['ADD'], dst=DST['T0'])
+    else:
+        u(comment='target = irc_pc + the displacement byte',
+          asrc=SRC['IRC_PC'], bsrc=SRC['IR_SXB'], alu=ALU['ADD'], dst=DST['T0'])
+
+
+def refill_from(addr_src):
+    """Load the program counter and refill both halves of the prefetch pipe."""
+    u(comment='take the branch',
+      asrc=addr_src, alu=ALU['A'], dst=DST['PC'])
+    u(comment='fill irc from the new stream',
+      bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['FETCH'])
+    u(comment='fill ir and irc, then decode',
+      bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['ADVFETCH'],
+      seq=SEQ['DECODE'])
+
+
+def bcc():
+    """Bcc, in both displacement forms.
+
+    A conditional microword lands on `next` or `next+1`, so the two arms have
+    to start as a pair of adjacent microwords at an even address. Each is a
+    single word that jumps on to the rest of its arm.
+
+    The target is computed on the testing microword whether the branch is taken
+    or not: it costs nothing when it is not, and it keeps a taken branch to two
+    internal cycles, which is what the reference charges.
+    """
+    for form, long_form in (('b', False), ('w', True)):
+        lbl_arms = 'bcc_%s_arms' % form
+        label('bcc_%s' % form)
+        if long_form:
+            u(comment='test the condition, and compute the target meanwhile',
+              asrc=SRC['IRC_PC'], bsrc=SRC['IRC_SX'], alu=ALU['ADD'],
+              dst=DST['T0'],
+              cond=COND['CC'], seq=SEQ['COND'], goto=lbl_arms)
+        else:
+            u(comment='test the condition, and compute the target meanwhile',
+              asrc=SRC['IRC_PC'], bsrc=SRC['IR_SXB'], alu=ALU['ADD'],
+              dst=DST['T0'],
+              cond=COND['CC'], seq=SEQ['COND'], goto=lbl_arms)
+
+        label(lbl_arms, align_even=True)
+        u(comment='not taken', goto='bcc_%s_fall' % form)
+        u(comment='taken', goto='bcc_%s_take' % form)
+
+        label('bcc_%s_fall' % form)
+        if long_form:
+            u(comment='step over the displacement word',
+              bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['FETCH'])
+        final_prefetch('on to the next instruction')
+
+        label('bcc_%s_take' % form)
+        refill_from(SRC['T0'])
+
+    # 0000 and 0001 in the condition field are BRA and BSR, whose patterns are
+    # registered before these and so win.
+    opcode('0110----00000000', 'bcc_w', 'Bcc.W')
+    opcode('0110------------', 'bcc_b', 'Bcc.B')
+
+
+def dbcc():
+    """DBcc: test, decrement, and branch while the counter has not run out.
+
+    Two conditional microwords, each with its own pair of arms. The decrement
+    and the test of its result are one microword, because the condition looks
+    at the value on its way to the register rather than at the register.
+    """
+    label('dbcc')
+    u(comment='test the condition',
+      cond=COND['CC'], seq=SEQ['COND'], goto='dbcc_arms')
+
+    label('dbcc_arms', align_even=True)
+    u(comment='condition false: try the counter', goto='dbcc_count')
+    u(comment='condition true: fall through', goto='dbcc_fall')
+
+    label('dbcc_count')
+    u(comment='decrement the counter word, and test what it becomes',
+      asrc=SRC['ONE'], bsrc=SRC['REG'], rsel=RSEL['EA_D'], easel=EASEL['SRC'],
+      alu=ALU['SUB'], dst=DST['REG'], size=SIZE['WORD'],
+      cond=COND['CNT'], seq=SEQ['COND'], goto='dbcc_cnt_arms')
+
+    label('dbcc_cnt_arms', align_even=True)
+    u(comment='counter still running: branch', goto='dbcc_take')
+    u(comment='counter ran out: fall through', goto='dbcc_fall')
+
+    label('dbcc_fall')
+    u(comment='step over the displacement word',
+      bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['FETCH'])
+    final_prefetch('on to the next instruction')
+
+    label('dbcc_take')
+    u(comment='target = irc_pc + the displacement word',
+      asrc=SRC['IRC_PC'], bsrc=SRC['IRC_SX'], alu=ALU['ADD'], dst=DST['T0'])
+    refill_from(SRC['T0'])
+
+    opcode('0101----11001---', 'dbcc', 'DBcc')
+
+
+def bsr():
+    for form, long_form, ret_off in (('b', False, 0), ('w', True, 2)):
+        lbl = 'bsr_%s' % form
+        label(lbl)
+        branch_target(long_form)
+        # The return address is the word after the instruction: irc_pc for the
+        # byte form, two further on for the word form, whose displacement is an
+        # extension word.
+        if ret_off:
+            u(comment='the return address, and room on the stack for it',
+              asrc=SRC['IRC_PC'], bsrc=SRC['TWO'], alu=ALU['ADD'],
+              dst=DST['DBUF'],
+              aeasel=AEASEL['SP'], aupd=AUPD['PRE'], size=SIZE['LONG'])
+        else:
+            u(comment='the return address, and room on the stack for it',
+              asrc=SRC['IRC_PC'], alu=ALU['A'], dst=DST['DBUF'],
+              aeasel=AEASEL['SP'], aupd=AUPD['PRE'], size=SIZE['LONG'])
+        u(comment='high word at the new top of stack',
+          bus=BUS['WRITE'], asel=ASEL['EAL'], fc=FC['DATA'],
+          size=SIZE['LONG'], dhi=1)
+        u(comment='low word above it',
+          bus=BUS['WRITE'], asel=ASEL['EAL_PLUS2'], fc=FC['DATA'],
+          size=SIZE['LONG'], dhi=0)
+        refill_from(SRC['T0'])
+    opcode('0110000100000000', 'bsr_w', 'BSR.W')
+    opcode('01100001--------', 'bsr_b', 'BSR.B')
+
+
+def jmp_jsr():
+    for name, mode, reg in CONTROL:
+        lbl = 'jmp_%s' % name
+        label(lbl)
+        if name == 'aind':
+            u(comment='JMP (An): the target is the register',
+              asrc=SRC['REG'], rsel=RSEL['EA_A'], easel=EASEL['SRC'],
+              alu=ALU['A'], dst=DST['PC'])
+        else:
+            ea_setup_nopf(name, EASEL['SRC'])
+            u(comment='JMP: the computed target',
+              asrc=SRC['T0'], alu=ALU['A'], dst=DST['PC'])
+        u(comment='fill irc from the new stream',
+          bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['FETCH'])
+        u(comment='fill ir and irc, then decode',
+          bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['ADVFETCH'],
+          seq=SEQ['DECODE'])
+        opcode(pattern('0100111011', mode, reg), lbl, 'JMP %s' % name)
+
+    for name, mode, reg in CONTROL:
+        lbl = 'jsr_%s' % name
+        label(lbl)
+        ea_setup_nopf(name, EASEL['SRC'])
+        # The return address is the word after the whole instruction, so it
+        # depends on how many extension words there were. Compute it before
+        # the program counter moves.
+        ret_a, ret_b = jump_return_src(name)
+        if ret_b is None:
+            u(comment='the return address',
+              asrc=ret_a, alu=ALU['A'], dst=DST['DBUF'])
+        else:
+            u(comment='the return address, past both extension words',
+              asrc=ret_a, bsrc=ret_b, alu=ALU['ADD'], dst=DST['DBUF'])
+        if name == 'aind':
+            u(comment='the target',
+              asrc=SRC['REG'], rsel=RSEL['EA_A'], easel=EASEL['SRC'],
+              alu=ALU['A'], dst=DST['PC'])
+        else:
+            u(comment='the target',
+              asrc=SRC['T0'], alu=ALU['A'], dst=DST['PC'])
+        # One refill from the target, then the push, then the other: the
+        # reference's order.
+        u(comment='first refill from the target',
+          bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['FETCH'])
+        u(comment='make room on the stack, high word out',
+          bus=BUS['WRITE'], asel=ASEL['EA'], fc=FC['DATA'],
+          aeasel=AEASEL['SP'], aupd=AUPD['PRE'], size=SIZE['LONG'], dhi=1)
+        u(comment='low word above it',
+          bus=BUS['WRITE'], asel=ASEL['EAL_PLUS2'], fc=FC['DATA'],
+          size=SIZE['LONG'], dhi=0)
+        u(comment='second refill, and decode',
+          bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['ADVFETCH'],
+          seq=SEQ['DECODE'])
+        opcode(pattern('0100111010', mode, reg), lbl, 'JSR %s' % name)
+
+
+# ==========================================================================
+# RTS, RTR, LINK and UNLK -- PRM section 4
+#
+#   RTS   r r P P       pop the return address, then refill from it
+#   RTR   r r r P P     the condition codes come off the stack first
+#   LINK  P w w P       the displacement, the push, then the prefetch
+#   UNLK  r r P         pop into the register, then prefetch
+#
+# A pop reads the high word at (SP) and the low word at (SP)+2, and the stack
+# pointer moves by the whole amount once.
+# ==========================================================================
+def rts_rtr():
+    label('rts')
+    u(comment='return address, high word',
+      asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T1'],
+      bus=BUS['READ'], asel=ASEL['EA'], fc=FC['DATA'],
+      aeasel=AEASEL['SP'], size=SIZE['LONG'])
+    u(comment='and the low word; the stack pointer moves by four',
+      asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T1_SHW'],
+      bus=BUS['READ'], asel=ASEL['EA_PLUS2'], fc=FC['DATA'],
+      aeasel=AEASEL['SP'], aupd=AUPD['POST'], size=SIZE['LONG'])
+    refill_from(SRC['T1'])
+    opcode('0100111001110101', 'rts', 'RTS')
+
+    label('rtr')
+    # The condition codes are the low byte of the word at the top of stack;
+    # the supervisor half of the status register is untouched (PRM section 4).
+    u(comment='the saved condition codes',
+      asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['CCR'],
+      bus=BUS['READ'], asel=ASEL['EA'], fc=FC['DATA'],
+      aeasel=AEASEL['SP'], size=SIZE['WORD'])
+    u(comment='return address, high word',
+      asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T1'],
+      bus=BUS['READ'], asel=ASEL['EA_PLUS2'], fc=FC['DATA'],
+      aeasel=AEASEL['SP'], size=SIZE['LONG'])
+    u(comment='and the low word; the stack pointer moves by six in all',
+      asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T1_SHW'],
+      bus=BUS['READ'], asel=ASEL['EA_PLUS4'], fc=FC['DATA'],
+      aeasel=AEASEL['SP'], aupd=AUPD['POST6'], size=SIZE['LONG'])
+    refill_from(SRC['T1'])
+    opcode('0100111001110111', 'rtr', 'RTR')
+
+
+def link_unlk():
+    label('link')
+    # LINK An,#d: push An, put the stack pointer in An, then add the
+    # displacement to it.
+    #
+    # The displacement has to be taken out of irc before this microword's own
+    # prefetch replaces it, which is why it goes to a working register rather
+    # than being read where it is used.
+    u(comment='the displacement, before the prefetch overwrites it',
+      asrc=SRC['IRC_SX'], alu=ALU['A'], dst=DST['T1'], size=SIZE['LONG'],
+      bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['FETCH'])
+    u(comment='make room, and the high word of An out',
+      asrc=SRC['REG'], rsel=RSEL['EA_A'], easel=EASEL['SRC'],
+      alu=ALU['A'], dst=DST['DBUF'],
+      bus=BUS['WRITE'], asel=ASEL['EA'], fc=FC['DATA'],
+      aeasel=AEASEL['SP'], aupd=AUPD['PRE'], size=SIZE['LONG'], dhi=1)
+    u(comment='the low word, and An takes the new top of stack',
+      asrc=SRC['EAL'], alu=ALU['A'], dst=DST['REG_L'],
+      rsel=RSEL['EA_A'], easel=EASEL['SRC'],
+      bus=BUS['WRITE'], asel=ASEL['EAL_PLUS2'], fc=FC['DATA'],
+      size=SIZE['LONG'], dhi=0)
+    u(comment='and the stack pointer moves by the displacement',
+      asrc=SRC['EAL'], bsrc=SRC['T1'], alu=ALU['ADD'], dst=DST['REG_L'],
+      wsel=WSEL['A7'], size=SIZE['LONG'],
+      bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['ADVFETCH'],
+      seq=SEQ['DECODE'])
+    opcode('0100111001010---', 'link', 'LINK')
+
+    label('unlk')
+    # UNLK An: the stack pointer takes An, then An is popped from it.
+    u(comment='the saved register, high word, read through An itself',
+      asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T1'],
+      bus=BUS['READ'], asel=ASEL['EA'], fc=FC['DATA'],
+      rsel=RSEL['EA_A'], easel=EASEL['SRC'], size=SIZE['LONG'])
+    u(comment='and the low word; An itself moves by four',
+      asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T1_SHW'],
+      bus=BUS['READ'], asel=ASEL['EA_PLUS2'], fc=FC['DATA'],
+      aupd=AUPD['POST'], size=SIZE['LONG'])
+    u(comment='the stack pointer takes what An became, then An is restored',
+      asrc=SRC['REG'], rsel=RSEL['EA_A'], easel=EASEL['SRC'],
+      alu=ALU['A'], dst=DST['REG_L'], wsel=WSEL['A7'], size=SIZE['LONG'])
+    u(comment='An takes the popped value',
+      asrc=SRC['T1'], alu=ALU['A'], dst=DST['REG_L'],
+      rsel=RSEL['EA_A'], easel=EASEL['SRC'], size=SIZE['LONG'],
+      bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['ADVFETCH'],
+      seq=SEQ['DECODE'])
+    opcode('0100111001011---', 'unlk', 'UNLK')
+
+
+# ==========================================================================
+# Exception processing -- UM section 6
+#
+# The MC68010's four-word frame (figure 6-6), and the reason every MC68000
+# vector that reaches exception processing is skipped by the sweep rather than
+# compared: an MC68000 pushes three words and has no format field at all.
+#
+#   SP+0   status register, as it was when the exception began
+#   SP+2   program counter, high
+#   SP+4   program counter, low
+#   SP+6   0000 and the vector offset, which is the vector number times four
+#
+# One shared tail does the whole of it. Each exception sets up three things and
+# jumps to it:
+#
+#   T1     the program counter to stack, which is the faulting instruction for
+#          the ones that are the instruction's own fault and the next one for
+#          the ones the instruction asked for
+#   T0     the vector table address, VBR + vector*4
+#   DBUF   the format-and-offset word
+#
+# The order the four words are written in is this design's own: no reference
+# available records it for an MC68010, only the resulting memory, which is what
+# software sees and which is exactly right. doc/divergences.md says so.
+# ==========================================================================
+def exception_tail():
+    label('except')
+    u(comment='supervisor mode on, trace off, the old status register kept',
+      dst=DST['SR_EXC'])
+    label('except_frame')
+    u(comment='room for four words on the supervisor stack',
+      aeasel=AEASEL['SP'], aupd=AUPD['PRE8'], size=SIZE['LONG'])
+    # The format word is already in the buffer: the caller put it there,
+    # because only the caller knows which vector this is.
+    u(comment='the format and vector offset, at the top of the frame',
+      bus=BUS['WRITE'], asel=ASEL['EAL_PLUS6'], fc=FC['DATA'],
+      size=SIZE['WORD'], dhi=0)
+    u(comment='the program counter, low word',
+      asrc=SRC['T1'], alu=ALU['A'], dst=DST['DBUF'], dhi=0,
+      bus=BUS['WRITE'], asel=ASEL['EAL_PLUS4'], fc=FC['DATA'],
+      size=SIZE['LONG'])
+    u(comment='and its high word',
+      bus=BUS['WRITE'], asel=ASEL['EAL_PLUS2'], fc=FC['DATA'],
+      size=SIZE['LONG'], dhi=1)
+    u(comment='the saved status register, at the bottom of the frame',
+      asrc=SRC['SRSAVE'], alu=ALU['A'], dst=DST['DBUF'],
+      bus=BUS['WRITE'], asel=ASEL['EAL'], fc=FC['DATA'], size=SIZE['WORD'])
+    u(comment='the vector, high word',
+      asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T1'],
+      bus=BUS['READ'], asel=ASEL['T0'], fc=FC['DATA'], size=SIZE['LONG'])
+    u(comment='and its low word',
+      asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T1_SHW'],
+      bus=BUS['READ'], asel=ASEL['T0_PLUS2'], fc=FC['DATA'], size=SIZE['LONG'])
+    refill_from(SRC['T1'])
+
+
+def raise_exception(name, vector, use_next_pc, vsel=0):
+    """Set up the three things the shared tail needs, and jump to it."""
+    u(comment='the vector table address',
+      asrc=SRC['VBR'], bsrc=SRC['VECOFF'], alu=ALU['ADD'], dst=DST['T0'],
+      vec=vector, vsel=vsel)
+    # The instruction's own address for a fault, the next instruction's for an
+    # exception the instruction asked for (UM section 6).
+    u(comment='the program counter to stack',
+      asrc=SRC['IRC_PC'] if use_next_pc else SRC['IR_PC'],
+      alu=ALU['A'], dst=DST['T1'])
+    u(comment='the format and vector word', goto='except',
+      asrc=SRC['FMTVEC'], alu=ALU['A'], dst=DST['DBUF'],
+      vec=vector, vsel=vsel)
+
+
+def traps():
+    # The unrecognised opcodes. `illegal` is where the decoder sends anything
+    # with no pattern, so it has to be an exception now rather than a stall.
+    label('illegal_exc')
+    raise_exception('illegal', 4, False)
+    opcode('0100101011111100', 'illegal_exc', 'ILLEGAL')
+
+    label('line_a')
+    raise_exception('line_a', 10, False)
+    opcode('1010------------', 'line_a', 'line A')
+
+    label('line_f')
+    raise_exception('line_f', 11, False)
+    opcode('1111------------', 'line_f', 'line F')
+
+    # TRAP #n takes vector 32+n and stacks the following instruction.
+    label('trap')
+    raise_exception('trap', 0, True, vsel=1)
+    opcode('010011100100----', 'trap', 'TRAP')
+
+    # TRAPV traps only when the overflow flag is set, and falls through when
+    # it is not.
+    label('trapv')
+    u(comment='test the overflow flag', cond=COND['V'], seq=SEQ['COND'],
+      goto='trapv_arms')
+    label('trapv_arms', align_even=True)
+    u(comment='no overflow: nothing happens', goto='trapv_fall')
+    u(comment='overflow: take the exception', goto='trapv_take')
+    label('trapv_fall')
+    final_prefetch('TRAPV with V clear is a very slow NOP')
+    label('trapv_take')
+    raise_exception('trapv', 7, True)
+    opcode('0100111001110110', 'trapv', 'TRAPV')
+
+
+# ==========================================================================
+# The privileged instructions and RTE -- PRM section 6, UM section 6
+#
+# A privileged instruction checks the supervisor bit before it does anything.
+# The check is three microwords -- a conditional and its two arms -- generated
+# in front of each one rather than shared as a subroutine, because the arms
+# have to be adjacent and a shared version would need a return address the
+# sequencer does not have.
+# ==========================================================================
+def privileged(lbl):
+    """Emit the supervisor check in front of `lbl`_body."""
+    u(comment='privileged: check the supervisor bit',
+      cond=COND['SUPER'], seq=SEQ['COND'], goto='%s_arms' % lbl)
+    label('%s_arms' % lbl, align_even=True)
+    u(comment='user mode: privilege violation', goto='priv_violation')
+    u(comment='supervisor mode: go ahead', goto='%s_body' % lbl)
+    label('%s_body' % lbl)
+
+
+def priv_violation():
+    label('priv_violation')
+    raise_exception('privilege', 8, False)
+
+
+def rte():
+    label('rte')
+    privileged('rte')
+    # Read the whole frame before committing to any of it, so that a bad
+    # format code leaves the stack exactly as it was (UM 6.4).
+    u(comment='the saved status register',
+      asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T0'],
+      bus=BUS['READ'], asel=ASEL['EA'], fc=FC['DATA'],
+      aeasel=AEASEL['SP'], size=SIZE['WORD'])
+    u(comment='the saved program counter, high word',
+      asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T1'],
+      bus=BUS['READ'], asel=ASEL['EA_PLUS2'], fc=FC['DATA'],
+      aeasel=AEASEL['SP'], size=SIZE['LONG'])
+    u(comment='and its low word',
+      asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T1_SHW'],
+      bus=BUS['READ'], asel=ASEL['EA_PLUS4'], fc=FC['DATA'],
+      aeasel=AEASEL['SP'], size=SIZE['LONG'])
+    u(comment='the format word, and the check on it',
+      bus=BUS['READ'], asel=ASEL['EA_PLUS6'], fc=FC['DATA'],
+      aeasel=AEASEL['SP'], size=SIZE['WORD'],
+      cond=COND['FMT0'], seq=SEQ['COND'], goto='rte_fmt_arms')
+
+    label('rte_fmt_arms', align_even=True)
+    u(comment='a format code we do not know', goto='rte_format_error')
+    u(comment='the four-word frame', goto='rte_ok')
+
+    label('rte_ok')
+    u(comment='the frame is good: release it',
+      aeasel=AEASEL['SP'], aupd=AUPD['POST8'], size=SIZE['LONG'])
+    u(comment='restore the status register, which may change the stack',
+      asrc=SRC['T0'], alu=ALU['A'], dst=DST['SR_ALL'])
+    refill_from(SRC['T1'])
+
+    label('rte_format_error')
+    # UM 6.4: the stack pointer is not updated, so the handler still has the
+    # frame it could not use.
+    raise_exception('format error', 14, False)
+
+    opcode('0100111001110011', 'rte', 'RTE')
+
+
+# ==========================================================================
+# The status register instructions -- PRM sections 4 and 6
+#
+# MOVE from SR is privileged on the MC68010 and was not on the MC68000, which
+# is the divergence the sweep skips user-mode vectors for. MOVE from CCR is an
+# MC68010 addition and is not privileged.
+# ==========================================================================
+def sr_instructions():
+    # MOVE from SR: 0100 0000 11 mmmrrr, privileged.
+    for name, mode, reg in DATA_ALT:
+        lbl = 'movefromsr_%s' % name
+        label(lbl)
+        privileged(lbl)
+        if name == 'dn':
+            u(comment='MOVE SR,Dn',
+              asrc=SRC['SR'], alu=ALU['A'], dst=DST['REG'],
+              rsel=RSEL['EA_D'], easel=EASEL['SRC'], size=SIZE['WORD'],
+              bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+              pf=PF['ADVFETCH'], seq=SEQ['DECODE'])
+        else:
+            # It reads the destination first, unlike CLR: UM section 9 lists
+            # CLR among the MC68010's improvements and does not list this, and
+            # the reference reads here too.
+            move_src_fetch(name, 'WORD', EASEL['SRC'])
+            u(comment='the status register, prefetch, then write it',
+              asrc=SRC['SR'], alu=ALU['A'], dst=DST['DBUF'], size=SIZE['WORD'],
+              bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+              pf=PF['ADVFETCH'])
+            rmw_store(name, 'WORD')
+        opcode(pattern('0100000011', mode, reg), lbl, 'MOVE SR,%s' % name)
+
+    # MOVE from CCR: 0100 0010 11 mmmrrr, an MC68010 addition, not privileged.
+    for name, mode, reg in DATA_ALT:
+        lbl = 'movefromccr_%s' % name
+        label(lbl)
+        if name == 'dn':
+            u(comment='MOVE CCR,Dn',
+              asrc=SRC['CCRVAL'], alu=ALU['A'], dst=DST['REG'],
+              rsel=RSEL['EA_D'], easel=EASEL['SRC'], size=SIZE['WORD'],
+              bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+              pf=PF['ADVFETCH'], seq=SEQ['DECODE'])
+        else:
+            move_src_fetch(name, 'WORD', EASEL['SRC'])
+            u(comment='the condition codes, prefetch, then write them',
+              asrc=SRC['CCRVAL'], alu=ALU['A'], dst=DST['DBUF'],
+              size=SIZE['WORD'],
+              bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+              pf=PF['ADVFETCH'])
+            rmw_store(name, 'WORD')
+        opcode(pattern('0100001011', mode, reg), lbl, 'MOVE CCR,%s' % name)
+
+    # MOVE to CCR: 0100 0100 11 mmmrrr, not privileged.
+    for name, mode, reg in DATA_ALL:
+        lbl = 'movetoccr_%s' % name
+        label(lbl)
+        ea_read_operand(name, 'WORD', EASEL['SRC'])
+        u(comment='MOVE <ea>,CCR: the low byte only',
+          asrc=SRC['T1'], alu=ALU['A'], dst=DST['CCR'])
+        sr_refetch()
+        final_prefetch()
+        opcode(pattern('0100010011', mode, reg), lbl, 'MOVE %s,CCR' % name)
+
+    # MOVE to SR: 0100 0110 11 mmmrrr, privileged.
+    for name, mode, reg in DATA_ALL:
+        lbl = 'movetosr_%s' % name
+        label(lbl)
+        privileged(lbl)
+        ea_read_operand(name, 'WORD', EASEL['SRC'])
+        u(comment='MOVE <ea>,SR: the whole register',
+          asrc=SRC['T1'], alu=ALU['A'], dst=DST['SR_ALL'])
+        sr_refetch()
+        final_prefetch()
+        opcode(pattern('0100011011', mode, reg), lbl, 'MOVE %s,SR' % name)
+
+
+def sr_refetch():
+    """The word already in irc, read again.
+
+    MOVE to SR and MOVE to CCR both do it, and it is plainly visible: the
+    reference reads pc-2 before its prefetch and the program counter ends only
+    two further on, not four. Writing the status register can change the
+    privilege mode, and re-reading the word the pipe already holds is how the
+    part makes sure it was fetched in whatever mode now applies.
+    """
+    u(comment='re-read the word already in the pipe, in the new mode',
+      bus=BUS['READ'], asel=ASEL['PC_MINUS2'], fc=FC['PROG'], pf=PF['NONE'])
+
+
+def sr_store(name, src):
+    """Write a status-register word out to memory, without reading first."""
+    if name in ('aind', 'apost', 'apre'):
+        upd = {'aind': AUPD['LATCH'], 'apost': AUPD['POST'],
+               'apre': AUPD['PRE']}[name]
+        u(comment='prefetch, and latch the address',
+          asrc=src, alu=ALU['A'], dst=DST['DBUF'], size=SIZE['WORD'],
+          aupd=upd, aeasel=AEASEL['SRC'], rsel=RSEL['EA_A'],
+          easel=EASEL['SRC'],
+          bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['ADVFETCH'])
+    else:
+        u(comment='prefetch; the address is already in T0',
+          asrc=src, alu=ALU['A'], dst=DST['DBUF'], size=SIZE['WORD'],
+          bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['ADVFETCH'])
+    rmw_store(name, 'WORD')
+
+
+# ==========================================================================
+# The immediate-to-status-register forms, MOVE USP, RESET, STOP and CHK
+# ==========================================================================
+SR_IMM = [('ori', '0000', ALU['OR']), ('andi', '0010', ALU['AND']),
+          ('eori', '1010', ALU['EOR'])]
+
+
+def sr_immediates():
+    for iname, opbits, aluop in SR_IMM:
+        # to CCR: the low byte only, and not privileged.
+        lbl = '%s_to_ccr' % iname
+        label(lbl)
+        u(comment='%s #,CCR' % iname.upper(),
+          asrc=SRC['IRC'], bsrc=SRC['CCRVAL'], alu=aluop, dst=DST['CCR'],
+          bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['FETCH'])
+        sr_refetch()
+        final_prefetch()
+        opcode('0000' + opbits + '00111100', lbl, '%s to CCR' % iname.upper())
+
+        # to SR: the whole register, and privileged.
+        lbl = '%s_to_sr' % iname
+        label(lbl)
+        privileged(lbl)
+        u(comment='%s #,SR' % iname.upper(),
+          asrc=SRC['IRC'], bsrc=SRC['SR'], alu=aluop, dst=DST['SR_ALL'],
+          bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['FETCH'])
+        sr_refetch()
+        final_prefetch()
+        opcode('0000' + opbits + '01111100', lbl, '%s to SR' % iname.upper())
+
+
+def move_usp():
+    label('move_to_usp')
+    privileged('move_to_usp')
+    u(comment='MOVE An,USP',
+      asrc=SRC['REG'], rsel=RSEL['EA_A'], easel=EASEL['SRC'],
+      alu=ALU['A'], dst=DST['USP'], size=SIZE['LONG'],
+      bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['ADVFETCH'],
+      seq=SEQ['DECODE'])
+    opcode('0100111001100---', 'move_to_usp', 'MOVE An,USP')
+
+    label('move_from_usp')
+    privileged('move_from_usp')
+    u(comment='MOVE USP,An',
+      asrc=SRC['USP'], alu=ALU['A'], dst=DST['REG_L'],
+      rsel=RSEL['EA_A'], easel=EASEL['SRC'], size=SIZE['LONG'],
+      bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['ADVFETCH'],
+      seq=SEQ['DECODE'])
+    opcode('0100111001101---', 'move_from_usp', 'MOVE USP,An')
+
+
+def reset_stop():
+    # RESET asserts the pin for 124 clock periods and changes nothing inside
+    # (UM 5.5). The bus unit does the timing; this starts it and waits.
+    label('reset_i')
+    privileged('reset_i')
+    u(comment='start the 124-clock output pulse', rstreq=1)
+    label('reset_wait', align_even=True)
+    u(comment='wait for it', cond=COND['RSTB'], seq=SEQ['COND'],
+      goto='reset_arms')
+    label('reset_arms', align_even=True)
+    u(comment='pulse finished', goto='reset_done')
+    u(comment='still running', goto='reset_wait')
+    label('reset_done')
+    final_prefetch()
+    opcode('0100111001110000', 'reset_i', 'RESET')
+
+    # STOP loads the status register and waits for an interrupt. The sequencer
+    # holds on the marked microword until one arrives, and then takes it
+    # instead of moving on.
+    label('stop')
+    privileged('stop')
+    u(comment='the immediate word into the status register',
+      asrc=SRC['IRC'], alu=ALU['A'], dst=DST['SR_ALL'])
+    label('stop_wait')
+    u(comment='wait here until an interrupt arrives', stop=1)
+    opcode('0100111001110010', 'stop', 'STOP')
+
+
+def chk():
+    """CHK: trap if the register is negative or above the bound."""
+    for name, mode, reg in DATA_ALL:
+        lbl = 'chk_%s' % name
+        label(lbl)
+        ea_read_operand(name, 'WORD', EASEL['SRC'])
+        u(comment='is the register negative?',
+          asrc=SRC['ZERO'], bsrc=SRC['REG2'], alu=ALU['SUB'],
+          size=SIZE['WORD'], ccr=CCR['CMP'],
+          cond=COND['N'], seq=SEQ['COND'], goto='%s_arms' % lbl)
+        label('%s_arms' % lbl, align_even=True)
+        u(comment='not negative: check the upper bound', goto='%s_upper' % lbl)
+        u(comment='negative: trap', goto='chk_trap')
+        label('%s_upper' % lbl)
+        # PRM section 4 leaves Z, V and C undefined after CHK and defines N
+        # only for the two trapping cases. The reference's behaviour is that
+        # the flags come from the first test and the second leaves them alone,
+        # so that is what this does.
+        u(comment='is it above the bound? flags unchanged by this one',
+          asrc=SRC['REG2'], bsrc=SRC['T1'], alu=ALU['SUB'],
+          size=SIZE['WORD'],
+          cond=COND['N'], seq=SEQ['COND'], goto='%s_uarms' % lbl)
+        label('%s_uarms' % lbl, align_even=True)
+        u(comment='within the bound: nothing happens', goto='%s_ok' % lbl)
+        u(comment='above it: trap', goto='chk_trap')
+        label('%s_ok' % lbl)
+        final_prefetch()
+        opcode(pattern('0100---110', mode, reg), lbl, 'CHK %s' % name)
+
+    label('chk_trap')
+    raise_exception('CHK', 6, True)
+
+
+def interrupt():
+    """The interrupt sequence -- UM 5.1.4 and section 6.
+
+    The acknowledge cycle runs in CPU space with the level on A1-A3 and every
+    other address line high. A device that answers with DTACK supplies its own
+    vector number on the data bus; one that answers with VPA is asking for the
+    autovector for its level.
+    """
+    label('interrupt')
+    u(comment='supervisor mode, trace off, mask raised to this level',
+      dst=DST['SR_IRQ'])
+    u(comment='the acknowledge address: the level, and ones everywhere else',
+      asrc=SRC['IRQVEC'], alu=ALU['A'], dst=DST['T0'])
+    u(comment='the acknowledge cycle, in CPU space',
+      bus=BUS['IACK'], asel=ASEL['T0'], fc=FC['CPU'], size=SIZE['WORD'])
+    u(comment='the vector table address, from whichever vector came back',
+      asrc=SRC['VBR'], bsrc=SRC['VECOFF'], alu=ALU['ADD'], dst=DST['T0'],
+      vsel=2)
+    u(comment='the program counter to stack is the instruction not run',
+      asrc=SRC['IRQPC'], alu=ALU['A'], dst=DST['T1'])
+    u(comment='the format and vector word', goto='except_irq',
+      asrc=SRC['FMTVEC'], alu=ALU['A'], dst=DST['DBUF'], vsel=2)
+
+    # The shared tail sets the supervisor bit again, which is harmless, but it
+    # would also overwrite the saved status register -- so an interrupt uses
+    # its own copy of the tail's first step, taken before the mask was raised.
+    label('except_irq')
+    u(comment='into the shared frame builder', goto='except_frame')
+
+
+def trace():
+    """The trace exception, taken after an instruction that ran with T set."""
+    label('trace')
+    raise_exception('trace', 9, False)

@@ -57,14 +57,25 @@
 
   assign dbus = d_oe     ? d_o       : 16'bz;
   assign dbus = mem_d_oe ? mem_d_out : 16'bz;
+  // The interrupting device puts its vector number on the low byte.
+  assign dbus = (is_iack && !iack_auto) ? {8'h00, iack_vector} : 16'bz;
   assign d_i  = dbus;
 
   wire [23:1] abus;
   assign abus = a_oe ? a_o : 23'bx;
 
   logic mem_dtack_n, mem_vpa_n;
-  assign dtack_n_i = mem_dtack_n;
-  assign vpa_n_i   = mem_vpa_n;
+
+  // Interrupt acknowledge. A cycle in CPU space with the function code all
+  // ones is answered either with VPA, which asks for the autovector for the
+  // level, or with DTACK and a vector number on the data bus (UM 5.1.4).
+  logic       iack_auto;      // 1: answer with VPA
+  logic [7:0] iack_vector;
+  wire        is_iack;
+  assign is_iack = !as_n_o && (fc_o == 3'b111);
+
+  assign dtack_n_i = mem_dtack_n & ~(is_iack && !iack_auto);
+  assign vpa_n_i   = mem_vpa_n   & ~(is_iack &&  iack_auto);
 
   rd68011_slave #(.ADDR_BITS (14), .BASE (23'h000000), .MASK (23'h400000)) mem (
       .clk (clk), .rst_n (rst_n),
@@ -197,13 +208,16 @@
     end
   endtask
 
+  // Does not zero the error count: a test that resets the core between
+  // sections should still report every error it found.
   task automatic core_reset();
     begin
-      errors     = 0;
       rst_n      = 1'b0;
       mem_waits  = 8'd0;
       mem_m6800  = 1'b0;
-      br_n_i     = 1'b1;
+      br_n_i      = 1'b1;
+      iack_auto   = 1'b1;
+      iack_vector = 8'd64;
       bgack_n_i  = 1'b1;
       ipl_n_i    = 3'b111;
       berr_n_i   = 1'b1;

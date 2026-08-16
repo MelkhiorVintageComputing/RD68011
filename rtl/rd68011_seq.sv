@@ -49,6 +49,7 @@ module rd68011_seq (
     input  logic        halt_sync_n,
     input  logic        bus_idle,
     output logic        reset_req,
+    input  logic        reset_busy,   // the RESET instruction's pulse is running
     output logic        dbf
 );
 
@@ -83,7 +84,15 @@ module rd68011_seq (
   logic [31:0] dbuf;
   logic [15:0] sr;
   logic [31:0] vbr;
-  logic [31:0] regs [0:15];
+  // The status register as it was when an exception began, kept where the
+  // stack frame can find it after the supervisor bit has already been set.
+  logic [15:0] sr_save;
+  // D0-D7 and A0-A6. A7 is not in the array: it is whichever of the two stack
+  // pointers the S bit selects, so that an exception entering supervisor mode
+  // switches stacks without moving anything (PRM section 1).
+  logic [31:0] regs [0:14];
+  logic [31:0] usp;
+  logic [31:0] ssp;
 
   // ===========================================================================
   // The current microword, and the one that follows it
@@ -199,13 +208,17 @@ module rd68011_seq (
   // The register in bits 11:9, available at the same time as the one the
   // addressing mode names: ADD <ea>,Dn needs both in one microword.
   logic [31:0] reg2_val;
+  // Reading a register: index 15 is the active stack pointer.
+  `define RDREG(i) (((i) == 4'd15) ? (sr[rd68011_pkg::SR_S] ? ssp : usp) \
+                                   : regs[(i)])
+
   logic [31:0] index_reg;
   logic [31:0] index_val;
   assign reg2_val  = regs[{1'b0, ir[11:9]}];
   // ADDQ and SUBQ take their operand from bits 11:9, where zero means eight.
   logic [31:0] quick_val;
   assign quick_val = (ir[11:9] == 3'd0) ? 32'd8 : {29'd0, ir[11:9]};
-  assign index_reg = regs[{irc[15], irc[14:12]}];
+  assign index_reg = `RDREG({irc[15], irc[14:12]});
   assign index_val = irc[11] ? index_reg
                              : {{16{index_reg[15]}}, index_reg[15:0]};
 
@@ -287,7 +300,7 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_ASRC_T1:       a_bus = t1;
       rd68011_ucode_pkg::U_ASRC_RDATA:    a_bus = {16'd0, req_rdata};
       rd68011_ucode_pkg::U_ASRC_RDATA_SX: a_bus = {{16{req_rdata[15]}}, req_rdata};
-      rd68011_ucode_pkg::U_ASRC_REG:      a_bus = regs[reg_index];
+      rd68011_ucode_pkg::U_ASRC_REG:      a_bus = `RDREG(reg_index);
       rd68011_ucode_pkg::U_ASRC_RDATA_B:  a_bus = {24'd0, rdata_byte};
       rd68011_ucode_pkg::U_ASRC_INDEX:    a_bus = index_val;
       rd68011_ucode_pkg::U_ASRC_IRC_SXB:  a_bus = {{24{irc[7]}}, irc[7:0]};
@@ -297,6 +310,16 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_ASRC_BITMASK:  a_bus = bit_mask;
       rd68011_ucode_pkg::U_ASRC_SCC:      a_bus = {32{cc_true}};
       rd68011_ucode_pkg::U_ASRC_BIT7:     a_bus = 32'h0000_0080;
+      rd68011_ucode_pkg::U_ASRC_EAL:      a_bus = ea_latch;
+      rd68011_ucode_pkg::U_ASRC_SRSAVE:   a_bus = {16'd0, sr_save};
+      rd68011_ucode_pkg::U_ASRC_VBR:      a_bus = vbr;
+      rd68011_ucode_pkg::U_ASRC_VECOFF:   a_bus = {22'd0, vec_num, 2'd0};
+      rd68011_ucode_pkg::U_ASRC_FMTVEC:   a_bus = {18'd0, 4'h0, vec_num, 2'd0};
+      rd68011_ucode_pkg::U_ASRC_SR:       a_bus = {16'd0, sr};
+      rd68011_ucode_pkg::U_ASRC_CCRVAL:   a_bus = {24'd0, 3'd0, sr[4:0]};
+      rd68011_ucode_pkg::U_ASRC_USP:      a_bus = usp;
+      rd68011_ucode_pkg::U_ASRC_IRQVEC:   a_bus = {8'd0, 20'hFFFFF, irq_taken, 1'b1};
+      rd68011_ucode_pkg::U_ASRC_IRQPC:    a_bus = irq_from_stop ? pc : ir_pc;
       default:                            a_bus = 32'd0;
     endcase
   end
@@ -317,7 +340,7 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_BSRC_T1:       b_bus = t1;
       rd68011_ucode_pkg::U_BSRC_RDATA:    b_bus = {16'd0, req_rdata};
       rd68011_ucode_pkg::U_BSRC_RDATA_SX: b_bus = {{16{req_rdata[15]}}, req_rdata};
-      rd68011_ucode_pkg::U_BSRC_REG:      b_bus = regs[reg_index];
+      rd68011_ucode_pkg::U_BSRC_REG:      b_bus = `RDREG(reg_index);
       rd68011_ucode_pkg::U_BSRC_RDATA_B:  b_bus = {24'd0, rdata_byte};
       rd68011_ucode_pkg::U_BSRC_INDEX:    b_bus = index_val;
       rd68011_ucode_pkg::U_BSRC_IRC_SXB:  b_bus = {{24{irc[7]}}, irc[7:0]};
@@ -327,6 +350,16 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_BSRC_BITMASK:  b_bus = bit_mask;
       rd68011_ucode_pkg::U_BSRC_SCC:      b_bus = {32{cc_true}};
       rd68011_ucode_pkg::U_BSRC_BIT7:     b_bus = 32'h0000_0080;
+      rd68011_ucode_pkg::U_BSRC_EAL:      b_bus = ea_latch;
+      rd68011_ucode_pkg::U_BSRC_SRSAVE:   b_bus = {16'd0, sr_save};
+      rd68011_ucode_pkg::U_BSRC_VBR:      b_bus = vbr;
+      rd68011_ucode_pkg::U_BSRC_VECOFF:   b_bus = {22'd0, vec_num, 2'd0};
+      rd68011_ucode_pkg::U_BSRC_FMTVEC:   b_bus = {18'd0, 4'h0, vec_num, 2'd0};
+      rd68011_ucode_pkg::U_BSRC_SR:       b_bus = {16'd0, sr};
+      rd68011_ucode_pkg::U_BSRC_CCRVAL:   b_bus = {24'd0, 3'd0, sr[4:0]};
+      rd68011_ucode_pkg::U_BSRC_USP:      b_bus = usp;
+      rd68011_ucode_pkg::U_BSRC_IRQVEC:   b_bus = {8'd0, 20'hFFFFF, irq_taken, 1'b1};
+      rd68011_ucode_pkg::U_BSRC_IRQPC:    b_bus = irq_from_stop ? pc : ir_pc;
       default:                            b_bus = 32'd0;
     endcase
   end
@@ -367,6 +400,43 @@ module rd68011_seq (
                        !sr[rd68011_pkg::SR_Z];                     // GT
       default: cc_true = (sr[rd68011_pkg::SR_N] != sr[rd68011_pkg::SR_V]) ||
                           sr[rd68011_pkg::SR_Z];                   // LE
+    endcase
+  end
+
+  // -- Interrupts -----------------------------------------------------------
+  //
+  // UM section 6: a request is taken when its level is higher than the mask in
+  // the status register, and level seven is taken whatever the mask says. The
+  // decision is made where an instruction ends, which is the only place the
+  // machine is in a state an exception can be built from.
+  logic [2:0] irq_level;
+  logic       irq_pending;
+  logic [2:0] irq_taken;      // the level being serviced, latched
+  logic       trace_armed;    // the trace bit as the current instruction began
+  logic       irq_from_stop;  // this interrupt woke a STOP
+  logic [7:0] irq_vec;
+  logic       irq_auto;
+
+  assign irq_level   = ~ipl_sync_n;
+  assign irq_pending = (irq_level == 3'd7) ||
+                       (irq_level > sr[rd68011_pkg::SR_I0+2 -: 3]);
+
+  // The vector number: the one the device put on the bus, or the autovector
+  // for its level when it answered with VPA instead (UM 5.1.4, appendix B.2).
+  assign irq_auto = (req_end == rd68011_pkg::CE_AVEC);
+  assign irq_vec  = irq_auto ? (rd68011_pkg::VEC_AUTOVEC0 + {5'd0, irq_taken})
+                             : req_rdata[7:0];
+
+  // The vector an exception is taking, and the two things built from it: the
+  // offset into the vector table, and the frame's format-and-offset word,
+  // whose top four bits are the format code -- zero for the four-word frame
+  // (UM section 6, figure 6-6).
+  logic  [7:0] vec_num;
+  always_comb begin
+    unique case (`UF(uw, VSEL))
+      2'd1:    vec_num = {4'd2, ir[3:0]};   // TRAP #n is vector 32 + n
+      2'd2:    vec_num = irq_vec;           // the interrupt's own
+      default: vec_num = `UF(uw, VEC);
     endcase
   end
 
@@ -459,7 +529,7 @@ module rd68011_seq (
   end
 
   assign ea_areg = {1'b1, aea_reg};
-  assign ea_base = regs[ea_areg];
+  assign ea_base = `RDREG(ea_areg);
 
   always_comb begin
     unique case (f_size)
@@ -476,6 +546,22 @@ module rd68011_seq (
     unique case (f_aupd)
       rd68011_ucode_pkg::U_AUPD_POST: begin
         ea_updated = ea_base + ea_inc;
+        aupd_we    = 1'b1;
+      end
+      // RTR pops a status word and a long together, so its stack pointer
+      // moves by six rather than by an operand size.
+      rd68011_ucode_pkg::U_AUPD_POST6: begin
+        ea_updated = ea_base + 32'd6;
+        aupd_we    = 1'b1;
+      end
+      // Room for the four-word exception frame, in one step.
+      rd68011_ucode_pkg::U_AUPD_PRE8: begin
+        ea_updated = ea_base - 32'd8;
+        ea_used    = ea_base - 32'd8;
+        aupd_we    = 1'b1;
+      end
+      rd68011_ucode_pkg::U_AUPD_POST8: begin
+        ea_updated = ea_base + 32'd8;
         aupd_we    = 1'b1;
       end
       rd68011_ucode_pkg::U_AUPD_PRE: begin
@@ -499,11 +585,15 @@ module rd68011_seq (
   // place to look for what a microword does to the datapath.
   // ===========================================================================
   logic [31:0] pc_nxt, t0_nxt, t1_nxt, ea_latch_nxt;
+  // The destination register's current value, for the byte and word merges.
+  logic [31:0] wreg_val;
   logic [31:0] dbuf_nxt;
   logic [31:0] reg_wdata;
   logic        reg_we;
   logic        addr_lsb;      // low bit of the address of the cycle in progress
   logic [15:0] sr_nxt;
+
+  assign wreg_val = `RDREG(wreg_index);
 
   always_comb begin
     pc_nxt       = pc;
@@ -553,14 +643,18 @@ module rd68011_seq (
           reg_we = 1'b1;
           unique case (f_size)
             rd68011_ucode_pkg::U_SIZE_BYTE:
-              reg_wdata = {regs[wreg_index][31:8], y[7:0]};
+              reg_wdata = {wreg_val[31:8], y[7:0]};
             rd68011_ucode_pkg::U_SIZE_WORD:
-              reg_wdata = {regs[wreg_index][31:16], y[15:0]};
+              reg_wdata = {wreg_val[31:16], y[15:0]};
             default:
               reg_wdata = y;
           endcase
         end
         rd68011_ucode_pkg::U_DST_REG_L: reg_we = 1'b1;
+        rd68011_ucode_pkg::U_DST_USP:   ;   // written in the register block
+        // RTR restores the condition codes and leaves the supervisor half of
+        // the status register alone (PRM section 4).
+        rd68011_ucode_pkg::U_DST_CCR: ;
         default: ;   // NONE and SR, which is not written from here yet
       endcase
     end
@@ -630,6 +724,25 @@ module rd68011_seq (
         default: ;
       endcase
       if (f_dst == rd68011_ucode_pkg::U_DST_SR) sr_nxt = y[15:0];
+      // The whole status register, including the bits that decide which stack
+      // pointer A7 is. RTE and MOVE to SR both write it.
+      if (f_dst == rd68011_ucode_pkg::U_DST_SR_ALL) begin
+        sr_nxt = y[15:0] & rd68011_pkg::SR_IMPLEMENTED;
+      end
+      if (f_dst == rd68011_ucode_pkg::U_DST_CCR) begin
+        sr_nxt[7:0] = y[7:0] & 8'h1F;   // only the five defined bits
+      end
+      // Entering exception processing: supervisor mode on, trace off, and the
+      // old value kept for the frame. UM section 6.
+      if (f_dst == rd68011_ucode_pkg::U_DST_SR_EXC) begin
+        sr_nxt[rd68011_pkg::SR_S] = 1'b1;
+        sr_nxt[rd68011_pkg::SR_T] = 1'b0;
+      end
+      if (f_dst == rd68011_ucode_pkg::U_DST_SR_IRQ) begin
+        sr_nxt[rd68011_pkg::SR_S] = 1'b1;
+        sr_nxt[rd68011_pkg::SR_T] = 1'b0;
+        sr_nxt[rd68011_pkg::SR_I0+2 -: 3] = irq_taken;
+      end
     end
   end
 
@@ -642,6 +755,15 @@ module rd68011_seq (
     unique case (f_cond)
       rd68011_ucode_pkg::U_COND_SUPER: cond_true = sr[rd68011_pkg::SR_S];
       rd68011_ucode_pkg::U_COND_CC:    cond_true = cc_true;
+      // DBcc's counter, tested on the value being written rather than on the
+      // register, so the decrement and the test are one microword.
+      rd68011_ucode_pkg::U_COND_CNT:   cond_true = (y[15:0] == 16'hFFFF);
+      rd68011_ucode_pkg::U_COND_V:     cond_true = sr[rd68011_pkg::SR_V];
+      // UM 6.4: RTE checks the frame's format code before it commits to
+      // anything, and raises a format error on one it does not know.
+      rd68011_ucode_pkg::U_COND_FMT0:  cond_true = (req_rdata[15:12] == 4'h0);
+      rd68011_ucode_pkg::U_COND_N:     cond_true = n_flag;
+      rd68011_ucode_pkg::U_COND_RSTB:  cond_true = reset_busy;
       default:                         cond_true = 1'b0;
     endcase
   end
@@ -661,8 +783,35 @@ module rd68011_seq (
   end
 
   // An external reset holds the sequencer at the reset entry point (UM 5.5).
+  //
+  // A pending interrupt is taken instead of the next instruction, at the point
+  // the microcode would have decoded one -- which is where the machine is in a
+  // state the exception frame can be built from. STOP waits here too, for the
+  // same signal.
+  // Trace, and the order the two are taken in. UM table 6-1 puts trace above
+  // interrupt: an instruction that both completes under trace and finds an
+  // interrupt waiting is traced first, and the interrupt is taken by the
+  // handler's first instruction boundary.
+  //
+  // UM section 6: "If the trace state is on at the beginning of the execution
+  // of an instruction, a trace exception will be generated after the execution
+  // of that instruction is completed" -- so the bit is sampled where an
+  // instruction starts, not where it ends.
+  logic take_irq;
+  logic take_trace;
+
+  assign take_irq   = irq_pending &&
+                      ((f_seq == rd68011_ucode_pkg::U_SEQ_DECODE) ||
+                       `UF(uw, STOP));
+  assign take_trace = trace_armed &&
+                      (f_seq == rd68011_ucode_pkg::U_SEQ_DECODE);
+
   assign upc_nxt = !reset_sync_n ? rd68011_ucode_pkg::ENTRY_RESET
-                                 : (retire ? upc_target : upc);
+                 : !retire       ? upc
+                 : take_trace    ? rd68011_ucode_pkg::ENTRY_TRACE
+                 : take_irq      ? rd68011_ucode_pkg::ENTRY_INTERRUPT
+                 : `UF(uw, STOP) ? upc
+                                 : upc_target;
 
   // ===========================================================================
   // The bus request, built from the microword that comes next
@@ -703,7 +852,7 @@ module rd68011_seq (
   // own incremented value as the address -- addressing An+2 instead of An.
   assign n_ea_base = (reg_we && (wreg_index == n_ea_areg))          ? reg_wdata
                    : (retire && aupd_we && (ea_areg == n_ea_areg))  ? ea_updated
-                   : regs[n_ea_areg];
+                   : `RDREG(n_ea_areg);
 
   always_comb begin
     unique case (n_easize)
@@ -730,6 +879,11 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_ASEL_T1:       n_addr = t1_nxt;
       rd68011_ucode_pkg::U_ASEL_EA:       n_addr = n_ea_addr;
       rd68011_ucode_pkg::U_ASEL_EA_PLUS2: n_addr = n_ea_addr + 32'd2;
+      rd68011_ucode_pkg::U_ASEL_EA_PLUS4:  n_addr = n_ea_addr + 32'd4;
+      rd68011_ucode_pkg::U_ASEL_EA_PLUS6:  n_addr = n_ea_addr + 32'd6;
+      rd68011_ucode_pkg::U_ASEL_PC_MINUS2: n_addr = pc_nxt - 32'd2;
+      rd68011_ucode_pkg::U_ASEL_EAL_PLUS4: n_addr = ea_latch_nxt + 32'd4;
+      rd68011_ucode_pkg::U_ASEL_EAL_PLUS6: n_addr = ea_latch_nxt + 32'd6;
       rd68011_ucode_pkg::U_ASEL_EAL:       n_addr = ea_latch_nxt;
       rd68011_ucode_pkg::U_ASEL_EAL_PLUS2: n_addr = ea_latch_nxt + 32'd2;
       default:                            n_addr = pc_nxt;
@@ -737,13 +891,19 @@ module rd68011_seq (
   end
 
   // UM table 3-3: program and data space follow the S bit; CPU space is 7.
+  //
+  // The *next* S bit, for the same reason every other request field comes from
+  // the next microword: the bus unit latches the function code on the edge
+  // that ends the previous cycle. MOVE to SR is where it shows -- the re-fetch
+  // it does afterwards happens in whatever mode the new status register says,
+  // which is the entire point of it.
   always_comb begin
     unique case (n_fc)
-      rd68011_ucode_pkg::U_FC_DATA: req_fc = sr[rd68011_pkg::SR_S] ?
+      rd68011_ucode_pkg::U_FC_DATA: req_fc = sr_nxt[rd68011_pkg::SR_S] ?
                                              rd68011_pkg::FC_SUPER_D :
                                              rd68011_pkg::FC_USER_D;
       rd68011_ucode_pkg::U_FC_CPU:  req_fc = rd68011_pkg::FC_CPU;
-      default:                      req_fc = sr[rd68011_pkg::SR_S] ?
+      default:                      req_fc = sr_nxt[rd68011_pkg::SR_S] ?
                                              rd68011_pkg::FC_SUPER_P :
                                              rd68011_pkg::FC_USER_P;
     endcase
@@ -786,8 +946,9 @@ module rd68011_seq (
     end
   end
 
-  // Not driven yet: the RESET instruction and double bus fault detection.
-  assign reset_req = 1'b0;
+  // The RESET instruction's output pulse, started by the microcode and timed
+  // by the bus unit (UM 5.5). Double bus fault detection is P6.
+  assign reset_req = retire && `UF(uw, RSTREQ);
   assign dbf       = 1'b0;
 
   // ===========================================================================
@@ -807,15 +968,21 @@ module rd68011_seq (
       t1       <= 32'd0;
       ea_latch <= 32'd0;
       dbuf     <= 32'd0;
+      sr_save  <= 16'd0;
+      irq_taken   <= 3'd0;
+      trace_armed <= 1'b0;
+      irq_from_stop <= 1'b0;
       // UM 5.5: the interrupt level is initialised to seven and, on the
       // MC68010, the vector base register is cleared. The supervisor bit is
       // set because reset always leaves the processor in supervisor mode.
       sr       <= 16'h2700;
       vbr      <= 32'd0;
       addr_lsb <= 1'b0;
-      for (i = 0; i < 16; i = i + 1) begin
+      for (i = 0; i < 15; i = i + 1) begin
         regs[i] <= 32'd0;
       end
+      usp <= 32'd0;
+      ssp <= 32'd0;
     end else begin
       upc      <= upc_nxt;
       sr       <= sr_nxt;
@@ -829,23 +996,57 @@ module rd68011_seq (
       t1       <= t1_nxt;
       ea_latch <= ea_latch_nxt;
       dbuf   <= dbuf_nxt;
+      // Both ways into exception processing keep the old status register for
+      // the frame: the interrupt path raises the mask as well, but it still
+      // has to stack what was there before.
+      if (retire && ((f_dst == rd68011_ucode_pkg::U_DST_SR_EXC) ||
+                     (f_dst == rd68011_ucode_pkg::U_DST_SR_IRQ))) begin
+        sr_save <= sr;
+      end
+      // The level is latched as the interrupt is taken: it has to survive the
+      // acknowledge cycle, which is what decides the vector.
+      if (retire && take_irq) begin
+        irq_taken     <= irq_level;
+        irq_from_stop <= `UF(uw, STOP);
+      end
+      if (retire && (f_seq == rd68011_ucode_pkg::U_SEQ_DECODE)) begin
+        trace_armed <= take_trace ? 1'b0 : sr_nxt[rd68011_pkg::SR_T];
+      end
+      // MOVE An,USP reaches the user stack pointer from supervisor mode, so
+      // it cannot go through the ordinary A7 path.
+      if (retire && (f_dst == rd68011_ucode_pkg::U_DST_USP)) begin
+        usp <= y;
+      end
       if (reg_we) begin
-        regs[wreg_index] <= reg_wdata;
+        if (wreg_index == 4'd15) begin
+          if (sr[rd68011_pkg::SR_S]) ssp <= reg_wdata;
+          else                       usp <= reg_wdata;
+        end else begin
+          regs[wreg_index] <= reg_wdata;
+        end
       end
       // The address register update is a separate port. A microword that both
       // writes a register through the ALU and modifies the same one through
       // the address unit is a microcode error; the assembler checks for it.
       if (retire && aupd_we) begin
-        regs[ea_areg] <= ea_updated;
+        if (ea_areg == 4'd15) begin
+          if (sr[rd68011_pkg::SR_S]) ssp <= ea_updated;
+          else                       usp <= ea_updated;
+        end else begin
+          regs[ea_areg] <= ea_updated;
+        end
       end
     end
   end
 
   // Inputs the sequencer will consume once exceptions and interrupts exist.
   logic unused_seq;
+  // wreg_val's low bits: a byte merge keeps only the top 24 of the old value
+  // and a word merge only the top 16, so the bottom byte is never read back.
   assign unused_seq = &{1'b1, req_ack, req_end, ipl_sync_n, halt_sync_n,
-                        bus_idle, dec_illegal, vbr};
+                        bus_idle, dec_illegal, vbr, wreg_val[7:0]};
 
   `undef UF
+  `undef RDREG
 
 endmodule

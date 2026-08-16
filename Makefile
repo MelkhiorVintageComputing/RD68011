@@ -119,7 +119,11 @@ HARTE_OPS ?= NOP MOVE.q MOVE.b MOVE.w MOVE.l MOVEA.w MOVEA.l Bcc \
              ASL.b ASL.w ASL.l ASR.b ASR.w ASR.l \
              LSL.b LSL.w LSL.l LSR.b LSR.w LSR.l \
              ROL.b ROL.w ROL.l ROR.b ROR.w ROR.l \
-             ROXL.b ROXL.w ROXL.l ROXR.b ROXR.w ROXR.l
+             ROXL.b ROXL.w ROXL.l ROXR.b ROXR.w ROXR.l \
+             BSR DBcc JMP JSR RTS RTR LINK UNLINK \
+             MOVEfromSR MOVEtoSR MOVEtoCCR \
+             ANDItoCCR ANDItoSR ORItoCCR ORItoSR EORItoCCR EORItoSR \
+             MOVEfromUSP MOVEtoUSP RESET STOP CHK TRAPV RTE
 
 harte-all: dirs
 	@fail=0; for op in $(HARTE_OPS); do \

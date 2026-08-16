@@ -72,6 +72,13 @@ COND = {
     'NEVER': 0,    # makes seq=COND behave as NEXT; useful as a placeholder
     'CC':    1,    # the condition in ir[11:8], against the CCR
     'SUPER': 2,    # the S bit of SR
+    # The loop counter of DBcc has run out: the low word of the value being
+    # written is all ones, which is what -1 looks like after the decrement.
+    'CNT':   3,
+    'V':     4,   # the overflow flag alone: TRAPV
+    'FMT0':  5,   # the word just read is a format $0 frame header
+    'N':     6,   # the negative flag: CHK's two bounds tests
+    'RSTB':  7,   # the RESET instruction's output pulse is still running
 }
 
 # Sources onto the A and B buses. Everything is 32 bits wide by the time it
@@ -115,6 +122,20 @@ SRC = {
     'BITMASK':  22,
     'SCC':      23,   # all ones if the condition in bits 11:8 holds, else zero
     'BIT7':     24,   # 0x80, the bit TAS sets
+    'EAL':      25,   # the address output buffer, read back: LINK needs it
+    'SRSAVE':   26,   # the status register as it was when the exception began
+    'VBR':      27,
+    'VECOFF':   28,   # the vector number times four
+    'FMTVEC':   29,   # the frame's format and vector-offset word
+    'SR':       30,   # the whole status register
+    'CCRVAL':   31,   # its low byte, zero-extended
+    'USP':      32,   # the user stack pointer, for MOVE USP
+    'IRQVEC':   33,   # the interrupt vector: from the bus, or the autovector
+    # The program counter an interrupt stacks. Normally the instruction that
+    # was about to run, but an interrupt that wakes a STOP stacks the
+    # instruction after the STOP -- which the pipe never advanced to, because
+    # STOP does no prefetch at all.
+    'IRQPC':    34,
 }
 
 ALU = {
@@ -156,6 +177,16 @@ DST = {
     'DBUF':    8,  # loads all 32 bits; `dhi` picks the half that goes out
     'DBUF_SHW': 11,  # shift a word into the buffer's low half
     'REG_L':  10,  # write the register full width whatever the size says
+    'CCR':    12,  # the low byte of the status register only
+    # Enter exception processing: keep the old status register where the frame
+    # can find it, set the supervisor bit and clear the trace bit, all in one
+    # step so that nothing runs in between (UM section 6).
+    'SR_EXC': 13,
+    'SR_ALL': 14,   # the whole status register, mode bits and all
+    # Entering an interrupt: supervisor on, trace off, and the mask raised to
+    # the level being serviced (UM section 6).
+    'SR_IRQ': 15,
+    'USP':    16,   # the user stack pointer, written from supervisor mode
 }
 
 # Bus request kinds. These are the values rd68011_pkg::cycle_kind_e uses, so
@@ -183,6 +214,11 @@ ASEL = {
     'EA_PLUS2':  6,   # that register + 2: the second word of a long
     'EAL':       7,   # the latched address of the last `aupd` microword
     'EAL_PLUS2': 8,
+    'EA_PLUS4':  9,   # the third word of a six-byte pop: RTR
+    'EAL_PLUS4': 10,  # the four-word exception frame is written from the top
+    'EAL_PLUS6': 11,
+    'EA_PLUS6':  12,  # the fourth word of an eight-byte pop: RTE
+    'PC_MINUS2': 13,  # the word already in irc, re-read: MOVE to SR and CCR
 }
 
 # What a microword does to the address register the mode names.
@@ -201,6 +237,9 @@ AUPD = {
     'NONE':  0,
     'POST':  1,
     'PRE':   2,
+    'POST6': 4,   # advance by six: RTR pops a status word and a long
+    'PRE8':  5,   # back by eight: room for a four-word exception frame
+    'POST8': 6,   # and forward by eight again: RTE
     # Compute the address and put it in the output buffer without touching the
     # register. Plain (An) needs this: a read-modify-write prefetches between
     # the read and the write, so the register field naming the address is gone
@@ -314,14 +353,14 @@ UADDR_BITS = 13
 FIELDS = [
     ('next',  UADDR_BITS, None),
     ('seq',   3,  SEQ),
-    ('cond',  2,  COND),
-    ('asrc',  5,  SRC),
-    ('bsrc',  5,  SRC),
+    ('cond',  3,  COND),
+    ('asrc',  6,  SRC),
+    ('bsrc',  6,  SRC),
     ('alu',   5,  ALU),
-    ('dst',   4,  DST),
+    ('dst',   5,  DST),
     ('bus',   3,  BUS),
     ('asel',  4,  ASEL),
-    ('aupd',  2,  AUPD),
+    ('aupd',  3,  AUPD),
     ('fc',    2,  FC),
     ('pf',    2,  PF),
     ('rsel',  3,  RSEL),
@@ -331,6 +370,10 @@ FIELDS = [
     ('dhi',   1,  None),   # drive the high half of the data output buffer
     ('size',  2,  SIZE),
     ('ccr',   3,  CCR),
+    ('rstreq', 1, None),   # start the RESET instruction's output pulse
+    ('stop',   1, None),   # stop until an interrupt arrives
+    ('vec',   8,  None),   # a constant vector number
+    ('vsel',  2,  None),   # 0 constant, 1 TRAP's own number, 2 the interrupt
     ('sh',    3,  None),   # {shift kind, left}: see rd68011_shifter
     ('bitimm', 1, None),   # the bit number is in the extension word
     ('shone', 1,  None),   # shift by one, not by the opcode's count: the
@@ -359,6 +402,10 @@ DEFAULTS = {
     'dhi':   0,
     'size':  SIZE['WORD'],
     'ccr':   CCR['NONE'],
+    'rstreq': 0,
+    'stop':  0,
+    'vec':   0,
+    'vsel':  0,
     'sh':    0,
     'bitimm': 0,
     'shone': 0,

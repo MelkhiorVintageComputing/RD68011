@@ -101,19 +101,25 @@ module harte_tb;
   //
   // So: latch `boundary` on the edge itself, and copy the registers out on the
   // edge after, which sees the values that edge wrote and nothing later.
+  // STOP never decodes another instruction -- that is the whole instruction --
+  // so the microword that waits counts as a boundary too.
   logic boundary;
   assign boundary = dut.u_seq.retire &&
-                    (dut.u_seq.f_seq == rd68011_ucode_pkg::U_SEQ_DECODE);
+                    ((dut.u_seq.f_seq == rd68011_ucode_pkg::U_SEQ_DECODE) ||
+                     dut.u_seq.uw[rd68011_ucode_pkg::U_STOP_LSB]);
 
   logic        cap_arm, cap_done;
-  logic [31:0] cap_regs [0:15];
+  logic [31:0] cap_regs [0:14];
+  logic [31:0] cap_usp, cap_ssp;
   logic [15:0] cap_sr, cap_ir, cap_irc;
   logic [31:0] cap_pc;
   int          ci;
 
   always @(posedge clk) begin
     if (cap_arm && !cap_done) begin
-      for (ci = 0; ci < 16; ci = ci + 1) cap_regs[ci] <= dut.u_seq.regs[ci];
+      for (ci = 0; ci < 15; ci = ci + 1) cap_regs[ci] <= dut.u_seq.regs[ci];
+      cap_usp <= dut.u_seq.usp;
+      cap_ssp <= dut.u_seq.ssp;
       cap_sr   <= dut.u_seq.sr;
       cap_pc   <= dut.u_seq.pc;
       cap_ir   <= dut.u_seq.ir;
@@ -224,10 +230,11 @@ module harte_tb;
   task automatic load_state();
     begin
       for (i = 0; i < 15; i = i + 1) dut.u_seq.regs[i] = ireg[i];
-      // The vectors carry USP and SSP separately; A7 is whichever one the
-      // S bit of the status register selects. The other becomes live only
-      // when MOVE USP or a mode change exists, which is P4.
-      dut.u_seq.regs[15] = ireg[17][13] ? ireg[16] : ireg[15];
+      // The vectors carry USP and SSP separately, and so does the core: A7 is
+      // whichever the S bit selects, so an exception that enters supervisor
+      // mode switches stacks without moving anything.
+      dut.u_seq.usp = ireg[15];
+      dut.u_seq.ssp = ireg[16];
       dut.u_seq.sr       = ireg[17][15:0];
       dut.u_seq.pc       = ireg[18];
       dut.u_seq.ir       = ipf0;
@@ -339,6 +346,23 @@ module harte_tb;
         skipped = 1'b1;
         why     = "documented MC68000/MC68010 divergence";
       end
+      // A test whose reference took an exception cannot be compared at all:
+      // the MC68000 pushed a three-word frame where an MC68010 pushes four,
+      // so the supervisor stack pointer ends six bytes lower instead of eight
+      // and every word of the frame is in a different place. Detected from
+      // the reference itself rather than from a list of opcodes, which also
+      // lets the non-trapping cases of CHK and TRAPV through to be checked.
+      // The signature is unmistakable and does not depend on what the
+      // instruction did first: three words pushed, then a longword read from
+      // the vector table down in low memory.
+      for (i = 0; i + 3 < nvtr; i = i + 1) begin
+        if ((vtr_k[i] == 1) && (vtr_k[i+1] == 1) && (vtr_k[i+2] == 1) &&
+            (vtr_k[i+3] == 2) && (vtr_a[i+3] < 23'd512)) begin
+          skipped = 1'b1;
+          why     = "the reference took an MC68000 exception";
+        end
+      end
+
       // Not built yet: the decoder has no pattern for it. Counted separately
       // from the divergences so a sweep says what is missing rather than
       // quietly passing.
@@ -387,11 +411,20 @@ module harte_tb;
           ok = 1'b0;
         end else begin
           for (i = 0; i < 15; i = i + 1) check_reg(i, rn[i]);
-          // A7 is compared against whichever stack pointer is active.
-          if (cap_regs[15] !== (ireg[17][13] ? freg[16] : freg[15])) begin
+          // Both stack pointers, always: an instruction that changes mode
+          // moves between them, and comparing only the active one would miss
+          // it.
+          if (cap_usp !== freg[15]) begin
             if (firstfail == 0) begin
-              $display("    A7 is %08h, reference says %08h", cap_regs[15],
-                       ireg[17][13] ? freg[16] : freg[15]);
+              $display("    USP is %08h, reference says %08h",
+                       cap_usp, freg[15]);
+            end
+            ok = 1'b0;
+          end
+          if (cap_ssp !== freg[16]) begin
+            if (firstfail == 0) begin
+              $display("    SSP is %08h, reference says %08h",
+                       cap_ssp, freg[16]);
             end
             ok = 1'b0;
           end
@@ -497,11 +530,41 @@ module harte_tb;
   // Divergences that make a vector inapplicable to an MC68010. Kept as a
   // function so the reason for each is next to its test.
   function automatic logic tb_skip(input logic [15:0] op, input logic [15:0] sr);
+    logic priv;
     begin
       tb_skip = 1'b0;
-      // MOVE from SR is privileged on the MC68010 and not on the MC68000
-      // (PRM section 6). A user-mode vector traps where the reference did not.
-      if (((op & 16'hFFC0) == 16'h40C0) && !sr[13]) tb_skip = 1'b1;
+
+      // Anything that reaches exception processing pushes a four-word frame
+      // where the MC68000 the vectors came from pushed three, so the whole
+      // shape differs and there is nothing useful left to compare.
+      //
+      // The privileged instructions, which trap in user mode:
+      priv = ((op & 16'hFFC0) == 16'h40C0) ||    // MOVE from SR
+             ((op & 16'hFFC0) == 16'h46C0) ||    // MOVE to SR
+             ((op & 16'hFFF0) == 16'h4E60) ||    // MOVE USP, both directions
+             (op == 16'h4E70) ||                 // RESET
+             (op == 16'h4E72) ||                 // STOP
+             (op == 16'h4E73) ||                 // RTE
+             (op == 16'h027C) ||                 // ANDI to SR
+             (op == 16'h007C) ||                 // ORI to SR
+             (op == 16'h0A7C);                   // EORI to SR
+      if (priv && !sr[13]) tb_skip = 1'b1;
+
+      // MOVE from SR is privileged on the MC68010 and was not on the MC68000
+      // (PRM section 6), so a user-mode vector for it traps where the
+      // reference simply ran.
+      //
+      // RTE is skipped in both modes: it *pops* a frame, and the frame the
+      // reference built is three words with no format field.
+      if (op == 16'h4E73) tb_skip = 1'b1;
+
+      // The instructions whose whole purpose is to take an exception. The
+      // rest -- CHK and TRAPV, which trap only sometimes -- are caught by the
+      // frame-shape test in the caller, which lets their quiet cases through.
+      if ((op & 16'hFFF0) == 16'h4E40) tb_skip = 1'b1;   // TRAP #n
+      if (op == 16'h4AFC) tb_skip = 1'b1;                // ILLEGAL
+      if ((op & 16'hF000) == 16'hA000) tb_skip = 1'b1;   // line A
+      if ((op & 16'hF000) == 16'hF000) tb_skip = 1'b1;   // line F
     end
   endfunction
 

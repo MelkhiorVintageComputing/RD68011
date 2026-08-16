@@ -107,7 +107,7 @@ def emit_pkg(labels=None):
         out.append('')
     if labels:
         out.append('  // Entry points the RTL needs by name.')
-        for name in ('reset', 'illegal'):
+        for name in ('reset', 'illegal', 'interrupt', 'trace'):
             out.append("  localparam logic [UADDR-1:0] ENTRY_%s = %d'd%d;"
                        % (name.upper(), isa.UADDR_BITS, labels[name]))
         out.append('')

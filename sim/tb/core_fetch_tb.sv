@@ -43,6 +43,7 @@ module core_fetch_tb;
   int nop_clocks, brab_clocks, braw_clocks;
 
   initial begin
+    errors = 0;
     core_reset();
 
     // Reset vector table.
@@ -73,7 +74,7 @@ module core_fetch_tb;
     expect_tr(5, 32'h001002, SP, 1'b1, "reset prefetch, ir and irc");
 
     // The reset sequence loaded A7 and PC from the vector table.
-    expect_u32("A7 after reset", dut.u_seq.regs[15], SSP0);
+    expect_u32("SSP after reset", dut.u_seq.ssp, SSP0);
     // Two prefetches past the entry point.
     expect_u32("pc after reset", dut.u_seq.pc, PC0 + 32'd4);
     expect_u32("ir after reset",  {16'd0, dut.u_seq.ir},  32'h4E71);

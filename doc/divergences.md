@@ -23,6 +23,9 @@ A sweep therefore reports three numbers: passed, failed, and skipped — with th
 skips broken down into "not implemented" and "needing exception processing", so
 a partial implementation says what is missing rather than quietly passing.
 
+As of P4 the sweep runs **106 opcode files and 8083 tests with zero failures**,
+and 39 tests remain skipped as not implemented: CMPM, which is P5.
+
 ## MC68000 to MC68010 differences the vectors expose
 
 These are not RD68011 divergences — they are the MC68010 behaving as it should,
@@ -32,12 +35,27 @@ manual and against the vectors before being relied on.
 | | |
 |---|---|
 | **CLR does not read its operand.** UM section 9's execution times give the MC68010 two cycles fewer than the MC68000 for every memory destination. The shape is `P w`, not `r P w`. | The runner removes the reference's operand read and compares the rest. 250-odd tests per size are compared this way. |
-| **MOVE from SR is privileged.** PRM section 6: on the MC68010 it traps in user mode, where the MC68000 allowed it. | User-mode vectors for it are skipped; the instruction itself arrives with the supervisor group in P4. |
-| **Exception stack frames carry a format and vector word.** A privilege violation on the MC68000 pushes SR and PC as three words; the MC68010 pushes four. Confirmed empirically from the user-mode RESET vectors, where all 1267 of them take the trap. | The tests that reach exception processing are skipped until P4. |
+| **MOVE from SR is privileged.** PRM section 6: on the MC68010 it traps in user mode, where the MC68000 allowed it. | Implemented. User-mode vectors for it are skipped, since the reference simply ran where this traps. |
+| **Exception stack frames carry a format and vector word.** A privilege violation on the MC68000 pushes SR and PC as three words; the MC68010 pushes four. Confirmed empirically from the user-mode RESET vectors, where all 1267 of them take the trap. | Implemented, and the reason every vector whose reference took an exception is skipped -- see below. |
 | **Bus and address error frames are the 29-word format $8**, not the MC68000's seven-word one. | P6. |
-| **New instructions**: `BKPT`, `MOVE from CCR`, `MOVEC`, `MOVES`, `RTD`, and the `VBR`, `SFC` and `DFC` registers. | P5. |
-| **`RTE` checks the frame format** and traps to vector 14 on a bad one. | P4 and P6. |
+| **New instructions**: `BKPT`, `MOVEC`, `MOVES`, `RTD`, and the `SFC` and `DFC` registers. | P5. |
+| **`MOVE from CCR`** is an MC68010 addition and has no MC68000 vectors at all. | Implemented; the sweep has nothing to compare it against, so it is covered by the directed tests. |
+| **`VBR`** relocates the vector table; the MC68000 always used address zero. | Implemented. Reset clears it, as UM 5.5 requires. |
+| **`RTE` checks the frame format** and traps to vector 14 on a code it does not recognise (UM 6.4). | Implemented for format $0; format $8 arrives in P6. |
 | **Loop mode** (UM appendix A). | P7. |
+
+### How the sweep tells an exception apart
+
+A vector whose reference took an exception cannot be compared at all: the
+MC68000 pushed three words where an MC68010 pushes four, so the supervisor
+stack pointer ends six bytes lower instead of eight and every word of the frame
+is somewhere else.
+
+The runner detects that from the reference's own transaction list rather than
+from a list of opcodes -- three words pushed, then a longword read from the
+vector table down in low memory. Doing it that way lets the *non*-trapping
+cases of CHK and TRAPV through to be checked normally, which a list of opcodes
+would have thrown away with the rest.
 
 ## Deliberate divergences
 
@@ -48,19 +66,15 @@ manual and against the vectors before being relied on.
 | **The format $8 frame's 16 internal words use our own encoding**, stamped with our own version number. | This is what the architecture asks for. UM 6.4: the first internal word carries "a processor version number (in bits 10-13) and proprietary internal information that must match the version number of the MC68010 attempting to read the data", and RTE must raise a format error when it does not match. Software that saves and restores a frame — which is every operating system — cannot tell the difference. Software that synthesises internal words from scratch was already not portable between MC68010 versions. `doc/checkpoint.md` has the full argument. |
 | **The address bus stays driven between bus cycles.** UM 5.1.1, 5.1.2, 5.1.3 and appendix B all say it goes to high impedance at the end of a cycle; table 3-4 and figure 5-3 say it stays driven. | The manual contradicts itself. Table 3-4 is followed by default because that is what systems built around this part rely on; the `ADDR_HIZ_BETWEEN_CYCLES` parameter selects the other reading. `doc/bus-timing-compliance.md` has both citations. |
 | **Nanosecond output delays are not modelled.** | An RTL model has no analogue delays; those limits are an STA and pad concern. What *is* checked is the placement of every edge in the bus-state ruler, which is the part that belongs to the design. |
+| **The order the four words of a format $0 frame are written in.** They go out from the top of the frame down: the format word, the low half of the program counter, its high half, then the status register. | No available reference records the order for an MC68010 -- the vectors are an MC68000 with a different frame -- so this one was chosen rather than measured. The resulting memory is exactly what UM figure 6-6 specifies, which is what software sees; only a bus analyser could tell the difference. |
+| **CHK's Z, V and C flags.** PRM section 4 leaves all three undefined and defines N only for the two trapping cases. This takes the flags from the first bound test and leaves the second alone. | Undefined is undefined, but matching something real is better than matching nothing: this is what the reference does, and it is what the sweep checks against. |
 
 ## Not yet implemented
 
 Listed so a sweep's "not implemented" count can be read against something.
 
-**P4** — exception processing: TRAP, TRAPV, CHK, ILLEGAL, line A and line F,
-privilege violations, trace, interrupts and their acknowledge cycles, RESET and
-STOP, Bcc, DBcc, BSR, JMP, JSR, RTS, RTR, LINK, UNLK, and RTE with a format $0
-frame.
-
 **P5** — MULU, MULS, DIVU, DIVS, the BCD group (ABCD, SBCD, NBCD), ADDX, SUBX,
-CMPM, MOVEM, MOVEP, EXG, MOVE USP, the status-register forms of ANDI, ORI and
-EORI, and the MC68010's own MOVEC, MOVES, RTD and BKPT.
+CMPM, MOVEM, MOVEP, EXG, and the MC68010's own MOVEC, MOVES, RTD and BKPT.
 
 **P6** — bus error, address error, the format $8 frame and instruction
 continuation.
@@ -69,9 +83,16 @@ continuation.
 
 ## What is implemented and passing
 
-82 opcode files, every one at zero failures: MOVE and MOVEA at all three sizes
+106 opcode files, every one at zero failures: MOVE and MOVEA at all three sizes
 and every addressing mode, MOVEQ, TST, CLR, NEG, NEGX, NOT, the ALU group
 (ADD, SUB, AND, OR, EOR, CMP) in both directions, ADDA/SUBA/CMPA, the immediate
 group, ADDQ and SUBQ, EXT, SWAP, LEA, PEA, Scc, TAS, the four bit operations in
 both their dynamic and static forms, and all twenty-four shift and rotate
-variants.
+variants; Bcc, BSR, DBcc, JMP, JSR, RTS, RTR, LINK and UNLK; TRAP, TRAPV, CHK,
+ILLEGAL, line A and line F, privilege violations, trace, and interrupts with
+both the autovectored and the vectored acknowledge; MOVE to and from SR and
+CCR, the immediate-to-SR and to-CCR forms, MOVE USP, RESET, STOP and RTE.
+
+The exception frame itself, the vector table, RTE's format check, the interrupt
+priority against the mask, trace, and waking from STOP are covered by
+`sim/tb/core_exception_tb.sv` instead of by the sweep, for the reason above.

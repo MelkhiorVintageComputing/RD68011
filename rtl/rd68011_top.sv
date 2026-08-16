@@ -103,6 +103,7 @@ module rd68011_top (
       .halt_sync_n  (halt_sync_n),
       .bus_idle     (bus_idle),
       .reset_req    (reset_req),
+      .reset_busy   (reset_busy),
       .dbf          (dbf)
   );
 
@@ -150,6 +151,6 @@ module rd68011_top (
   // reset_busy tells the sequencer when the RESET instruction's output pulse
   // has finished; nothing issues one until that instruction exists.
   logic unused_biu;
-  assign unused_biu = &{1'b1, reset_busy};
+  assign unused_biu = 1'b1;
 
 endmodule
