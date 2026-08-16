@@ -25,24 +25,58 @@ package rd68011_pkg;
   localparam logic [2:0] FC_CPU      = 3'b111;
 
   // ---------------------------------------------------------------------------
-  // Bus states -- UM section 5. One state per CLK half period; a minimum-length
-  // asynchronous cycle is S0..S7, i.e. four clocks. Wait states are inserted by
-  // repeating S4/S5 until DTACK, BERR or VPA is recognised.
+  // Bus states -- UM section 5, keeping the manual's own state names.
+  //
+  // One state per CLK half period. Even-numbered states begin on a rising edge
+  // and odd-numbered ones on a falling edge: UM 5.1.1 has the processor
+  // asserting AS "on the rising edge of S2" and driving the address "entering
+  // S1", and figure 10-4's recovered state ruler puts t=0 at the S0 rising edge.
+  //
+  // A minimum-length asynchronous cycle is S0..S7, four clocks. Wait states are
+  // inserted as (low, high) pairs between S4 and S5 until DTACK, BERR or VPA is
+  // recognised on a falling edge. A cycle terminated by BERR alone runs one
+  // clock longer, to S9 (UM 5.1.1 note, 5.4.1).
+  //
+  // Read-modify-write keeps AS asserted across S0..S19: read in S0..S7, four
+  // states of internal modification in S8..S11, write in S12..S19, with the
+  // bus-error extension at S21 (UM 5.1.3, 5.4.1).
+  //
+  // ST_IDLE, ST_HALT, ST_ARB and ST_RETRY are not manual state names; they are
+  // the between-cycle conditions of UM 5.4.3, 5.2 and 5.4.2.
   // ---------------------------------------------------------------------------
-  typedef enum logic [3:0] {
-    BS_S0    = 4'd0,
-    BS_S1    = 4'd1,
-    BS_S2    = 4'd2,
-    BS_S3    = 4'd3,
-    BS_S4    = 4'd4,
-    BS_S5    = 4'd5,
-    BS_S6    = 4'd6,
-    BS_S7    = 4'd7,
-    BS_IDLE  = 4'd8,   // bus held, no cycle in progress
-    BS_WAIT  = 4'd9,   // the repeated S4/S5 wait pair
-    BS_ARB   = 4'd10,  // bus relinquished to an external master
-    BS_HALT  = 4'd11,  // halted by HALT input or double bus fault
-    BS_M6800 = 4'd12   // synchronous cycle, waiting on E -- UM Appendix B
+  typedef enum logic [4:0] {
+    ST_IDLE  = 5'd0,
+    ST_S0    = 5'd1,
+    ST_S1    = 5'd2,
+    ST_S2    = 5'd3,
+    ST_S3    = 5'd4,
+    ST_S4    = 5'd5,
+    ST_WL    = 5'd6,   // wait pair, low half
+    ST_WH    = 5'd7,   // wait pair, high half; sampled on its falling edge
+    ST_S5    = 5'd8,
+    ST_S6    = 5'd9,
+    ST_S7    = 5'd10,
+    ST_BE8   = 5'd11,  // BERR without DTACK: cycle runs on to S9
+    ST_BE9   = 5'd12,
+    ST_M8    = 5'd13,  // read-modify-write internal modification, S8..S11
+    ST_M9    = 5'd14,
+    ST_M10   = 5'd15,
+    ST_M11   = 5'd16,
+    ST_S12   = 5'd17,  // read-modify-write, write portion
+    ST_S13   = 5'd18,
+    ST_S14   = 5'd19,
+    ST_S15   = 5'd20,
+    ST_S16   = 5'd21,
+    ST_WL2   = 5'd22,  // wait pair in the write portion
+    ST_WH2   = 5'd23,
+    ST_S17   = 5'd24,
+    ST_S18   = 5'd25,
+    ST_S19   = 5'd26,
+    ST_BE20  = 5'd27,  // RMW write BERR extension, terminates in S21
+    ST_BE21  = 5'd28,
+    ST_HALT  = 5'd29,  // halted by the HALT input (UM 5.4.3)
+    ST_ARB   = 5'd30,  // bus relinquished to an external master (UM 5.2)
+    ST_RETRY = 5'd31   // BERR+HALT: buses released, waiting for HALT (UM 5.4.2)
   } bus_state_e;
 
   // ---------------------------------------------------------------------------
@@ -57,13 +91,15 @@ package rd68011_pkg;
   // ---------------------------------------------------------------------------
   // Bus cycle kinds the sequencer can request of the bus interface.
   // ---------------------------------------------------------------------------
+  // A read-modify-write is one request, not two: the bus unit runs the whole
+  // indivisible S0..S19 sequence and the sequencer supplies the write data
+  // during the four modify states (UM 5.1.3).
   typedef enum logic [2:0] {
     CT_READ  = 3'd0,
     CT_WRITE = 3'd1,
-    CT_RMW_R = 3'd2,  // TAS read half, AS stays asserted
-    CT_RMW_W = 3'd3,  // TAS write half
-    CT_IACK  = 3'd4,  // interrupt acknowledge, CPU space
-    CT_BKPT  = 3'd5   // breakpoint acknowledge, CPU space -- MC68010 only
+    CT_RMW   = 3'd2,  // TAS: read, modify, write, with AS held throughout
+    CT_IACK  = 3'd3,  // interrupt acknowledge, CPU space
+    CT_BKPT  = 3'd4   // breakpoint acknowledge, CPU space -- MC68010 only
   } cycle_kind_e;
 
   // How a bus cycle ended.

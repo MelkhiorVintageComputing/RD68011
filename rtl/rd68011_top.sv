@@ -4,8 +4,10 @@
 // of the original is split into _i / _o / _oe, with _oe active high meaning the
 // core drives.
 //
-// Skeleton: the E ring counter is live; everything else is held inactive until
-// the bus interface lands in P1.
+// P1: the bus interface unit is in place and the sequencer that will drive it
+// is not. The request interface is held idle, so the core sits in ST_IDLE with
+// the buses driven and every strobe negated. Unit tests exercise rd68011_biu
+// directly; this level exists to fix the pinout and the wiring.
 //
 // Note the fully-scoped rd68011_pkg:: references and the plain-vector ports:
 // yosys 0.52 supports neither `import pkg::*` nor user types on ports.
@@ -63,62 +65,62 @@ module rd68011_top (
     output logic        fc_oe
 );
 
-  // ---------------------------------------------------------------------------
-  // M6800 enable clock (UM 3.7, figure 10-6).
-  //
-  // Ten clock periods: six low then four high, free-running and unrelated to
-  // the bus cycle. Specification 41 measures the transition from clock LOW, so
-  // the counter and the output both live in the negative-edge domain.
-  //
-  // The real part's ring counter "may come up in any state"; ours starts from a
-  // defined reset state, which is a divergence recorded in doc/divergences.md.
-  // ---------------------------------------------------------------------------
-  logic [3:0] e_cnt;
+  // Sequencer interface, idle until P2.
+  logic        req_ack;
+  logic        req_last;
+  logic [15:0] req_rdata;
+  logic  [2:0] req_end;
+  logic        reset_busy;
+  logic  [2:0] ipl_sync_n;
+  logic        reset_sync_n;
+  logic        halt_sync_n;
+  logic        bus_idle;
 
-  always_ff @(negedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      e_cnt <= 4'd0;
-      e_o   <= 1'b0;
-    end else begin
-      if (e_cnt == rd68011_pkg::E_PERIOD_CLKS - 4'd1) begin
-        e_cnt <= 4'd0;
-      end else begin
-        e_cnt <= e_cnt + 4'd1;
-      end
-      // Next state's level: low for the first six clocks, high for the last four.
-      e_o <= (e_cnt >= rd68011_pkg::E_LOW_CLKS - 4'd1) &&
-             (e_cnt != rd68011_pkg::E_PERIOD_CLKS - 4'd1);
-    end
-  end
+  rd68011_biu u_biu (
+      .clk        (clk),
+      .rst_n      (rst_n),
 
-  // ---------------------------------------------------------------------------
-  // Everything else: inactive. Replaced by the bus interface in P1.
-  // ---------------------------------------------------------------------------
-  assign a_o        = '0;
-  assign a_oe       = 1'b0;
-  assign d_o        = '0;
-  assign d_oe       = 1'b0;
-  assign as_n_o     = 1'b1;
-  assign as_oe      = 1'b0;
-  assign rw_o       = 1'b1;
-  assign rw_oe      = 1'b0;
-  assign uds_n_o    = 1'b1;
-  assign lds_n_o    = 1'b1;
-  assign ds_oe      = 1'b0;
-  assign bg_n_o     = 1'b1;
-  assign reset_n_o  = 1'b0;   // open drain, only ever pulls low
-  assign reset_n_oe = 1'b0;
-  assign halt_n_o   = 1'b0;   // open drain, only ever pulls low
-  assign halt_n_oe  = 1'b0;
-  assign vma_n_o    = 1'b1;
-  assign vma_oe     = 1'b0;
-  assign fc_o       = rd68011_pkg::FC_SUPER_P;
-  assign fc_oe      = 1'b0;
+      .req_valid  (1'b0),
+      .req_kind   (rd68011_pkg::CT_READ),
+      .req_fc     (rd68011_pkg::FC_SUPER_P),
+      .req_addr   (23'd0),
+      .req_uds    (1'b0),
+      .req_lds    (1'b0),
+      .req_wdata  (16'd0),
+      .req_ack    (req_ack),
+      .req_last   (req_last),
+      .req_rdata  (req_rdata),
+      .req_end    (req_end),
 
-  // Inputs not consumed yet. Kept visible so the list shrinks as the design
-  // fills in, rather than being silenced wholesale.
-  logic unused_inputs;
-  assign unused_inputs = &{1'b1, d_i, dtack_n_i, br_n_i, bgack_n_i, ipl_n_i,
-                           berr_n_i, reset_n_i, halt_n_i, vpa_n_i};
+      .reset_req  (1'b0),
+      .reset_busy (reset_busy),
+
+      .ipl_sync_n   (ipl_sync_n),
+      .reset_sync_n (reset_sync_n),
+      .halt_sync_n  (halt_sync_n),
+      .bus_idle     (bus_idle),
+      .dbf          (1'b0),
+
+      .a_o        (a_o),        .a_oe       (a_oe),
+      .d_i        (d_i),        .d_o        (d_o),        .d_oe (d_oe),
+      .as_n_o     (as_n_o),     .as_oe      (as_oe),
+      .rw_o       (rw_o),       .rw_oe      (rw_oe),
+      .uds_n_o    (uds_n_o),    .lds_n_o    (lds_n_o),    .ds_oe (ds_oe),
+      .dtack_n_i  (dtack_n_i),
+      .br_n_i     (br_n_i),     .bg_n_o     (bg_n_o),     .bgack_n_i (bgack_n_i),
+      .ipl_n_i    (ipl_n_i),
+      .berr_n_i   (berr_n_i),
+      .reset_n_i  (reset_n_i),  .reset_n_o  (reset_n_o),  .reset_n_oe (reset_n_oe),
+      .halt_n_i   (halt_n_i),   .halt_n_o   (halt_n_o),   .halt_n_oe  (halt_n_oe),
+      .e_o        (e_o),        .vpa_n_i    (vpa_n_i),
+      .vma_n_o    (vma_n_o),    .vma_oe     (vma_oe),
+      .fc_o       (fc_o),       .fc_oe      (fc_oe)
+  );
+
+  // Bus unit outputs the sequencer will consume in P2. Named here so the list
+  // shrinks visibly as the design fills in, rather than being silenced.
+  logic unused_biu;
+  assign unused_biu = &{1'b1, req_ack, req_last, req_rdata, req_end, reset_busy,
+                        ipl_sync_n, reset_sync_n, halt_sync_n, bus_idle};
 
 endmodule

@@ -35,6 +35,9 @@ manual is worth something.
   yosys infers `$_DFF_PN0_` and `$_DFF_NN0_` correctly. This matters — the whole bus-state
   scheme depends on it.
 - Asynchronous active-low reset in the sensitivity list
+- A **posedge flop and a negedge flop combined with XOR** to make an output that
+  changes on both edges (`rd68011_dedge_ff`). Only one side can change at any
+  instant, so the result is glitch-free, and all four tools infer it correctly.
 
 ### Forbidden — project rules rather than tool limits
 
@@ -124,5 +127,7 @@ and `*/rtl/foo.sv` does not.
 | Verilator | `-Wall` flags every unused package parameter | the `.vlt` waiver above |
 | yosys | no `import` in any form | fully-scoped references |
 | Vivado | needs the package file read before its users | `synth.tcl` sorts `rd68011_pkg.sv` first |
+| iverilog | assigning a ternary of two enum values to an enum variable is "This assignment requires an explicit cast" | use `if`/`else` inside the case item |
+| iverilog | `unique`/`unique0` on a case are parsed but ignored, with a "sorry" note per occurrence | harmless; keep them for the other three tools |
 
 Add to this table whenever a tool surprises you. It is cheaper than rediscovering it.

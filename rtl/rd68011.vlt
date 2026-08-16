@@ -20,4 +20,4 @@
 // a reason, never as an inline lint_off in the RTL.
 
 lint_off -rule UNUSEDPARAM -file "*rtl/rd68011_pkg.sv"
-lint_off -rule UNUSEDSIGNAL -file "*rtl/rd68011_top.sv" -match "*unused_inputs*"
+lint_off -rule UNUSEDSIGNAL -file "*rtl/rd68011_top.sv" -match "*unused_biu*"
