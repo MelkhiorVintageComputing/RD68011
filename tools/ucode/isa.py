@@ -93,6 +93,28 @@ SRC = {
     'RDATA_SX': 13,   # the word just read, sign-extended
     'REG':      14,   # the register file, selected by rsel
     'RDATA_B':  15,   # the byte just read, picked by the address's low bit
+    # The index register of a brief extension word (PRM section 2): bit 15
+    # picks data or address, bits 14-12 the number, and bit 11 whether the
+    # whole register is used or only its sign-extended low word.
+    'INDEX':    16,
+    'IRC_SXB':  17,   # the displacement byte of a brief extension word
+    'DBUF':     18,   # the data output buffer, read back
+    # The register in bits 11:9, read alongside the one the mode names:
+    # a two-operand instruction needs both in the same microword.
+    'REG2':     19,
+    # The quick operand of ADDQ/SUBQ: bits 11:9, with zero meaning eight
+    # (PRM section 4).
+    'QUICK':    20,
+    # The shift count: bits 11:9 as an immediate one to eight, or the low six
+    # bits of the register those bits name (PRM section 4).
+    'SHCNT':    21,
+    # A single-bit mask, from the bit number the instruction names: bits 11:9
+    # name a register for the dynamic forms, and the extension word carries it
+    # for the static ones. The number is taken modulo 32 for a register
+    # destination and modulo 8 for a memory one (PRM section 4).
+    'BITMASK':  22,
+    'SCC':      23,   # all ones if the condition in bits 11:8 holds, else zero
+    'BIT7':     24,   # 0x80, the bit TAS sets
 }
 
 ALU = {
@@ -108,6 +130,14 @@ ALU = {
     # from the extension word already in irc and the one being read in this
     # same cycle. Doing it in one step is what keeps the bus cycle order right.
     'CAT': 8,
+    'SXW': 9,   # sign-extend the low word to 32 bits: MOVEA.W, EXT.L, ADDA.W
+    'SXB': 10,  # sign-extend the low byte to 32 bits: EXT.W
+    'SWAP': 11, # exchange the halves of a long: SWAP
+    'NOTX': 12, # ones complement, but of the B bus
+    'SHIFT': 13, # the shifter's result; `sh` says which of the eight
+    'ANDN': 14,  # b & ~a: BCLR
+    'ADDX': 15,  # b + a + X
+    'SUBX': 16,  # b - a - X
 }
 
 DST = {
@@ -124,6 +154,7 @@ DST = {
     # unit latches the write data at the start of the cycle -- one microword
     # too early for that microword's own ALU result to reach it.
     'DBUF':    8,  # loads all 32 bits; `dhi` picks the half that goes out
+    'DBUF_SHW': 11,  # shift a word into the buffer's low half
     'REG_L':  10,  # write the register full width whatever the size says
 }
 
@@ -167,9 +198,14 @@ ASEL = {
 # The amount is the microword's size, except that a byte access through A7
 # moves it by two, because the stack pointer stays even (PRM section 2).
 AUPD = {
-    'NONE': 0,
-    'POST': 1,
-    'PRE':  2,
+    'NONE':  0,
+    'POST':  1,
+    'PRE':   2,
+    # Compute the address and put it in the output buffer without touching the
+    # register. Plain (An) needs this: a read-modify-write prefetches between
+    # the read and the write, so the register field naming the address is gone
+    # by the time the write happens, and nothing else would have latched it.
+    'LATCH': 3,
 }
 
 # Which address space. PROG and DATA pick up the S bit of SR at the pin.
@@ -234,6 +270,8 @@ EASEL = {
 AEASEL = {
     'SRC':  0,
     'DST':  1,
+    'SP':   2,   # A7, whatever the opcode says: PEA, LINK, and the stacking
+                 # every exception does
 }
 
 # Transfer size. BYTE picks its data strobe from the address's low bit rather
@@ -254,20 +292,32 @@ CCR = {
     'LOGIC': 1,   # N and Z from the result, V and C cleared, X untouched
     'ARITH': 2,   # N Z V C from the operation, X <- C
     'CMP':   3,   # N Z V C from the operation, X untouched
+    'SHIFT': 4,   # N and Z from the result, C and V from the shifter, and X
+                  # from C only where the operation writes X at all
+    'BIT':   5,   # Z alone, from the bit that was tested, and nothing else
+    # As ARITH, but Z is only ever cleared, never set: the extended
+    # operations leave it alone when their result is zero so that a
+    # multi-precision result reads as zero only if every part of it was
+    # (PRM section 4, under ADDX/SUBX/NEGX).
+    'ARITHX': 6,
+    # N and Z from the A bus rather than from the result. TAS needs it: its
+    # flags describe the operand as it was read, and the result it writes back
+    # always has bit 7 set (PRM section 4).
+    'LOGIC_A': 7,
 }
 
 # --------------------------------------------------------------------------
 # The microword layout. Order here is the bit order, least significant first.
 # --------------------------------------------------------------------------
-UADDR_BITS = 10
+UADDR_BITS = 13
 
 FIELDS = [
     ('next',  UADDR_BITS, None),
     ('seq',   3,  SEQ),
     ('cond',  2,  COND),
-    ('asrc',  4,  SRC),
-    ('bsrc',  4,  SRC),
-    ('alu',   4,  ALU),
+    ('asrc',  5,  SRC),
+    ('bsrc',  5,  SRC),
+    ('alu',   5,  ALU),
     ('dst',   4,  DST),
     ('bus',   3,  BUS),
     ('asel',  4,  ASEL),
@@ -277,10 +327,15 @@ FIELDS = [
     ('rsel',  3,  RSEL),
     ('wsel',  3,  WSEL),
     ('easel', 1,  EASEL),
-    ('aeasel', 1, AEASEL),
+    ('aeasel', 2, AEASEL),
     ('dhi',   1,  None),   # drive the high half of the data output buffer
     ('size',  2,  SIZE),
-    ('ccr',   2,  CCR),
+    ('ccr',   3,  CCR),
+    ('sh',    3,  None),   # {shift kind, left}: see rd68011_shifter
+    ('bitimm', 1, None),   # the bit number is in the extension word
+    ('shone', 1,  None),   # shift by one, not by the opcode's count: the
+                           # memory forms, whose count bits are the addressing
+                           # mode
 ]
 
 # Defaults for a microword that does nothing but move to the next address.
@@ -304,6 +359,9 @@ DEFAULTS = {
     'dhi':   0,
     'size':  SIZE['WORD'],
     'ccr':   CCR['NONE'],
+    'sh':    0,
+    'bitimm': 0,
+    'shone': 0,
 }
 
 # The addressing-mode dispatch index: the mode field, except that mode 7 uses

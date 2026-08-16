@@ -108,7 +108,18 @@ VECDIR := $(BUILD)/vectors
 
 # A sweep across every opcode file the ISA covers so far, for a regression
 # rather than a single-opcode debug loop.
-HARTE_OPS ?= NOP MOVE.q MOVE.b MOVE.w MOVE.l Bcc
+HARTE_OPS ?= NOP MOVE.q MOVE.b MOVE.w MOVE.l MOVEA.w MOVEA.l Bcc \
+             TST.b TST.w TST.l CLR.b CLR.w CLR.l NEG.b NEG.w NEG.l \
+             NEGX.b NEGX.w NEGX.l NOT.b NOT.w NOT.l \
+             ADD.b ADD.w ADD.l SUB.b SUB.w SUB.l \
+             AND.b AND.w AND.l OR.b OR.w OR.l EOR.b EOR.w EOR.l \
+             CMP.b CMP.w CMP.l ADDA.w ADDA.l SUBA.w SUBA.l CMPA.w CMPA.l \
+             EXT.w EXT.l SWAP LEA PEA Scc TAS \
+             BTST BCHG BCLR BSET \
+             ASL.b ASL.w ASL.l ASR.b ASR.w ASR.l \
+             LSL.b LSL.w LSL.l LSR.b LSR.w LSR.l \
+             ROL.b ROL.w ROL.l ROR.b ROR.w ROR.l \
+             ROXL.b ROXL.w ROXL.l ROXR.b ROXR.w ROXR.l
 
 harte-all: dirs
 	@fail=0; for op in $(HARTE_OPS); do \

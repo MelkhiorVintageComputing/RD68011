@@ -49,6 +49,11 @@ module rd68011_alu (
   assign sum = {1'b0, b} + {1'b0, a};
   assign dif = {1'b0, b} - {1'b0, a};
 
+  // The extended forms carry X in and out, for multi-precision arithmetic.
+  logic [32:0] sumx, difx;
+  assign sumx = {1'b0, b} + {1'b0, a} + {32'd0, x_in};
+  assign difx = {1'b0, b} - {1'b0, a} - {32'd0, x_in};
+
   always_comb begin
     unique case (op)
       rd68011_ucode_pkg::U_ALU_A:   y = a;
@@ -59,7 +64,14 @@ module rd68011_alu (
       rd68011_ucode_pkg::U_ALU_OR:  y = a | b;
       rd68011_ucode_pkg::U_ALU_EOR: y = a ^ b;
       rd68011_ucode_pkg::U_ALU_NOT: y = ~a;
-      rd68011_ucode_pkg::U_ALU_CAT: y = {a[15:0], b[15:0]};
+      rd68011_ucode_pkg::U_ALU_CAT:  y = {a[15:0], b[15:0]};
+      rd68011_ucode_pkg::U_ALU_SXW:  y = {{16{a[15]}}, a[15:0]};
+      rd68011_ucode_pkg::U_ALU_SXB:  y = {{24{a[7]}},  a[7:0]};
+      rd68011_ucode_pkg::U_ALU_SWAP: y = {a[15:0], a[31:16]};
+      rd68011_ucode_pkg::U_ALU_NOTX: y = ~b;
+      rd68011_ucode_pkg::U_ALU_ANDN: y = b & ~a;
+      rd68011_ucode_pkg::U_ALU_ADDX: y = sumx[31:0];
+      rd68011_ucode_pkg::U_ALU_SUBX: y = difx[31:0];
       default:                      y = a;
     endcase
   end
@@ -68,30 +80,51 @@ module rd68011_alu (
   // bit that falls off the top of the operation, which for a subtraction is
   // the borrow -- so both come out of one extra bit above the width, not out
   // of a comparison.
-  logic  [8:0] sum_b, dif_b;
-  logic [16:0] sum_w, dif_w;
+  logic  [8:0] sum_b, dif_b, sumx_b, difx_b;
+  logic [16:0] sum_w, dif_w, sumx_w, difx_w;
+  logic        xb;
 
-  assign sum_b = {1'b0, b[7:0]}  + {1'b0, a[7:0]};
-  assign dif_b = {1'b0, b[7:0]}  - {1'b0, a[7:0]};
-  assign sum_w = {1'b0, b[15:0]} + {1'b0, a[15:0]};
-  assign dif_w = {1'b0, b[15:0]} - {1'b0, a[15:0]};
+  assign xb     = x_in;
+  assign sum_b  = {1'b0, b[7:0]}  + {1'b0, a[7:0]};
+  assign dif_b  = {1'b0, b[7:0]}  - {1'b0, a[7:0]};
+  assign sumx_b = {1'b0, b[7:0]}  + {1'b0, a[7:0]}  + {8'd0, xb};
+  assign difx_b = {1'b0, b[7:0]}  - {1'b0, a[7:0]}  - {8'd0, xb};
+  assign sum_w  = {1'b0, b[15:0]} + {1'b0, a[15:0]};
+  assign dif_w  = {1'b0, b[15:0]} - {1'b0, a[15:0]};
+  assign sumx_w = {1'b0, b[15:0]} + {1'b0, a[15:0]} + {16'd0, xb};
+  assign difx_w = {1'b0, b[15:0]} - {1'b0, a[15:0]} - {16'd0, xb};
 
   always_comb begin
     if (is_byte) begin
       sm    = a[7];
       dm    = b[7];
       rm    = y[7];
-      carry = (op == rd68011_ucode_pkg::U_ALU_SUB) ? dif_b[8] : sum_b[8];
+      unique case (op)
+        rd68011_ucode_pkg::U_ALU_SUB:  carry = dif_b[8];
+        rd68011_ucode_pkg::U_ALU_ADDX: carry = sumx_b[8];
+        rd68011_ucode_pkg::U_ALU_SUBX: carry = difx_b[8];
+        default:                       carry = sum_b[8];
+      endcase
     end else if (is_word) begin
       sm    = a[15];
       dm    = b[15];
       rm    = y[15];
-      carry = (op == rd68011_ucode_pkg::U_ALU_SUB) ? dif_w[16] : sum_w[16];
+      unique case (op)
+        rd68011_ucode_pkg::U_ALU_SUB:  carry = dif_w[16];
+        rd68011_ucode_pkg::U_ALU_ADDX: carry = sumx_w[16];
+        rd68011_ucode_pkg::U_ALU_SUBX: carry = difx_w[16];
+        default:                       carry = sum_w[16];
+      endcase
     end else begin
       sm    = a[31];
       dm    = b[31];
       rm    = y[31];
-      carry = (op == rd68011_ucode_pkg::U_ALU_SUB) ? dif[32] : sum[32];
+      unique case (op)
+        rd68011_ucode_pkg::U_ALU_SUB:  carry = dif[32];
+        rd68011_ucode_pkg::U_ALU_ADDX: carry = sumx[32];
+        rd68011_ucode_pkg::U_ALU_SUBX: carry = difx[32];
+        default:                       carry = sum[32];
+      endcase
     end
   end
 
@@ -105,10 +138,12 @@ module rd68011_alu (
 
   always_comb begin
     unique case (op)
-      rd68011_ucode_pkg::U_ALU_ADD: begin
+      rd68011_ucode_pkg::U_ALU_ADD,
+      rd68011_ucode_pkg::U_ALU_ADDX: begin
         v_out = (sm && dm && !rm) || (!sm && !dm && rm);
         c_out = carry;
       end
+      rd68011_ucode_pkg::U_ALU_SUBX,
       rd68011_ucode_pkg::U_ALU_SUB: begin
         v_out = (!sm && dm && !rm) || (sm && !dm && rm);
         c_out = carry;
@@ -129,7 +164,7 @@ module rd68011_alu (
   // X takes its value from C where an operation sets it at all; which
   // operations those are is the microcode's decision, through the flag rule.
   logic unused;
-  assign unused = &{1'b1, x_in, sum_b[7:0], dif_b[7:0],
-                    sum_w[15:0], dif_w[15:0]};
+  assign unused = &{1'b1, sum_b[7:0], dif_b[7:0], sum_w[15:0], dif_w[15:0],
+                    sumx_b[7:0], difx_b[7:0], sumx_w[15:0], difx_w[15:0]};
 
 endmodule

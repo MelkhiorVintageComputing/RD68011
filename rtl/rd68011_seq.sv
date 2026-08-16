@@ -186,12 +186,28 @@ module rd68011_seq (
   // ===========================================================================
   logic [31:0] a_bus, b_bus, y;
   logic  [7:0] rdata_byte;
-  logic        n_flag, z_flag, v_flag, c_flag;
+  logic        n_flag, n_flag_alu, z_flag, z_flag_alu, v_flag, c_flag;
 
   // UM table 3-1: a byte at an even address arrives on D15-D8 and one at an
   // odd address on D7-D0. The address's low bit is the only thing that decides
   // it, so the microcode never has to know how an address turned out.
   assign rdata_byte = addr_lsb ? req_rdata[7:0] : req_rdata[15:8];
+
+  // The index register of a brief extension word (PRM section 2). Bit 15 picks
+  // data or address, bits 14-12 the number, and bit 11 selects the whole
+  // register or its sign-extended low word.
+  // The register in bits 11:9, available at the same time as the one the
+  // addressing mode names: ADD <ea>,Dn needs both in one microword.
+  logic [31:0] reg2_val;
+  logic [31:0] index_reg;
+  logic [31:0] index_val;
+  assign reg2_val  = regs[{1'b0, ir[11:9]}];
+  // ADDQ and SUBQ take their operand from bits 11:9, where zero means eight.
+  logic [31:0] quick_val;
+  assign quick_val = (ir[11:9] == 3'd0) ? 32'd8 : {29'd0, ir[11:9]};
+  assign index_reg = regs[{irc[15], irc[14:12]}];
+  assign index_val = irc[11] ? index_reg
+                             : {{16{index_reg[15]}}, index_reg[15:0]};
 
   // Register selection.
   //
@@ -273,6 +289,14 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_ASRC_RDATA_SX: a_bus = {{16{req_rdata[15]}}, req_rdata};
       rd68011_ucode_pkg::U_ASRC_REG:      a_bus = regs[reg_index];
       rd68011_ucode_pkg::U_ASRC_RDATA_B:  a_bus = {24'd0, rdata_byte};
+      rd68011_ucode_pkg::U_ASRC_INDEX:    a_bus = index_val;
+      rd68011_ucode_pkg::U_ASRC_IRC_SXB:  a_bus = {{24{irc[7]}}, irc[7:0]};
+      rd68011_ucode_pkg::U_ASRC_DBUF:     a_bus = dbuf;
+      rd68011_ucode_pkg::U_ASRC_REG2:     a_bus = reg2_val;
+      rd68011_ucode_pkg::U_ASRC_QUICK:    a_bus = quick_val;
+      rd68011_ucode_pkg::U_ASRC_BITMASK:  a_bus = bit_mask;
+      rd68011_ucode_pkg::U_ASRC_SCC:      a_bus = {32{cc_true}};
+      rd68011_ucode_pkg::U_ASRC_BIT7:     a_bus = 32'h0000_0080;
       default:                            a_bus = 32'd0;
     endcase
   end
@@ -295,15 +319,115 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_BSRC_RDATA_SX: b_bus = {{16{req_rdata[15]}}, req_rdata};
       rd68011_ucode_pkg::U_BSRC_REG:      b_bus = regs[reg_index];
       rd68011_ucode_pkg::U_BSRC_RDATA_B:  b_bus = {24'd0, rdata_byte};
+      rd68011_ucode_pkg::U_BSRC_INDEX:    b_bus = index_val;
+      rd68011_ucode_pkg::U_BSRC_IRC_SXB:  b_bus = {{24{irc[7]}}, irc[7:0]};
+      rd68011_ucode_pkg::U_BSRC_DBUF:     b_bus = dbuf;
+      rd68011_ucode_pkg::U_BSRC_REG2:     b_bus = reg2_val;
+      rd68011_ucode_pkg::U_BSRC_QUICK:    b_bus = quick_val;
+      rd68011_ucode_pkg::U_BSRC_BITMASK:  b_bus = bit_mask;
+      rd68011_ucode_pkg::U_BSRC_SCC:      b_bus = {32{cc_true}};
+      rd68011_ucode_pkg::U_BSRC_BIT7:     b_bus = 32'h0000_0080;
       default:                            b_bus = 32'd0;
     endcase
   end
 
+  // The shift count: an immediate one to eight from bits 11:9, or the low six
+  // bits of the register they name, depending on bit 5 (PRM section 4).
+  logic [5:0] shift_count;
+  // The memory forms shift by one and have no count field at all -- the bits
+  // a register form would take it from are their addressing mode.
+  assign shift_count = `UF(uw, SHONE) ? 6'd1
+                     : ir[5] ? regs[{1'b0, ir[11:9]}][5:0]
+                             : ((ir[11:9] == 3'd0) ? 6'd8 : {3'd0, ir[11:9]});
+
+  // The bit a BTST/BCHG/BCLR/BSET names, as a mask. The number comes from a
+  // register for the dynamic forms and from the extension word for the static
+  // ones, and it is taken modulo the operand's width -- 32 for a register
+  // destination, 8 for a memory one (PRM section 4).
+  // The condition code test of PRM section 3, on bits 11:8. Bcc, DBcc and Scc
+  // all use it, and it is the only place the flags are read as a group.
+  logic cc_true;
+  always_comb begin
+    unique case (ir[11:8])
+      4'h0: cc_true = 1'b1;                                        // T
+      4'h1: cc_true = 1'b0;                                        // F
+      4'h2: cc_true = !sr[rd68011_pkg::SR_C] && !sr[rd68011_pkg::SR_Z];  // HI
+      4'h3: cc_true =  sr[rd68011_pkg::SR_C] ||  sr[rd68011_pkg::SR_Z];  // LS
+      4'h4: cc_true = !sr[rd68011_pkg::SR_C];                      // CC
+      4'h5: cc_true =  sr[rd68011_pkg::SR_C];                      // CS
+      4'h6: cc_true = !sr[rd68011_pkg::SR_Z];                      // NE
+      4'h7: cc_true =  sr[rd68011_pkg::SR_Z];                      // EQ
+      4'h8: cc_true = !sr[rd68011_pkg::SR_V];                      // VC
+      4'h9: cc_true =  sr[rd68011_pkg::SR_V];                      // VS
+      4'hA: cc_true = !sr[rd68011_pkg::SR_N];                      // PL
+      4'hB: cc_true =  sr[rd68011_pkg::SR_N];                      // MI
+      4'hC: cc_true =  (sr[rd68011_pkg::SR_N] == sr[rd68011_pkg::SR_V]); // GE
+      4'hD: cc_true =  (sr[rd68011_pkg::SR_N] != sr[rd68011_pkg::SR_V]); // LT
+      4'hE: cc_true =  (sr[rd68011_pkg::SR_N] == sr[rd68011_pkg::SR_V]) &&
+                       !sr[rd68011_pkg::SR_Z];                     // GT
+      default: cc_true = (sr[rd68011_pkg::SR_N] != sr[rd68011_pkg::SR_V]) ||
+                          sr[rd68011_pkg::SR_Z];                   // LE
+    endcase
+  end
+
+  logic  [4:0] bit_num;
+  logic [31:0] bit_mask;
+  logic        bit_z;
+
+  always_comb begin
+    // Modulo 32 covers both cases: a memory destination reduces further, to
+    // modulo 8, and a register destination uses all five bits.
+    bit_num = `UF(uw, BITIMM) ? irc[4:0] : regs[{1'b0, ir[11:9]}][4:0];
+    if (f_size == rd68011_ucode_pkg::U_SIZE_LONG) begin
+      bit_mask = 32'd1 << bit_num;
+    end else begin
+      bit_mask = 32'd1 << bit_num[2:0];
+    end
+  end
+
+  // The tested bit, taken from the two source buses rather than from the mask
+  // directly: the static forms have to save the mask before the prefetch
+  // replaces the extension word it came from, so by the time the test happens
+  // it arrives on the A bus out of the data output buffer.
+  assign bit_z = ((b_bus & a_bus) == 32'd0);
+
+  logic [31:0] sh_out;
+  logic        sh_c, sh_v, sh_xupd;
+
+  rd68011_shifter u_shifter (
+      .sh    (`UF(uw, SH)),
+      .size  (f_size),
+      .count (shift_count),
+      .din   (b_bus),
+      .x_in  (sr[rd68011_pkg::SR_X]),
+      .dout  (sh_out),
+      .c_out (sh_c),
+      .v_out (sh_v),
+      .x_upd (sh_xupd)
+  );
+
+  logic [31:0] alu_y;
+
   rd68011_alu u_alu (
       .op (f_alu), .size (f_size), .a (a_bus), .b (b_bus),
-      .x_in (sr[rd68011_pkg::SR_X]), .y (y),
-      .n_out (n_flag), .z_out (z_flag), .v_out (v_flag), .c_out (c_flag)
+      .x_in (sr[rd68011_pkg::SR_X]), .y (alu_y),
+      .n_out (n_flag_alu), .z_out (z_flag_alu), .v_out (v_flag),
+      .c_out (c_flag)
   );
+
+  // The shifter shares the result path, so everything downstream -- the
+  // destination merge, the register write, the data output buffer -- is the
+  // same for a shift as for anything else.
+  assign y      = (f_alu == rd68011_ucode_pkg::U_ALU_SHIFT) ? sh_out : alu_y;
+  assign n_flag = (f_alu == rd68011_ucode_pkg::U_ALU_SHIFT)
+                    ? ((f_size == rd68011_ucode_pkg::U_SIZE_BYTE) ? y[7]
+                     : (f_size == rd68011_ucode_pkg::U_SIZE_WORD) ? y[15] : y[31])
+                    : n_flag_alu;
+  assign z_flag = (f_alu == rd68011_ucode_pkg::U_ALU_SHIFT)
+                    ? ((f_size == rd68011_ucode_pkg::U_SIZE_BYTE) ? (y[7:0] == 8'd0)
+                     : (f_size == rd68011_ucode_pkg::U_SIZE_WORD) ? (y[15:0] == 16'd0)
+                     : (y == 32'd0))
+                    : z_flag_alu;
 
   // ===========================================================================
   // The address register update
@@ -327,8 +451,11 @@ module rd68011_seq (
   // always the same half of the opcode the data side uses.
   logic [2:0] aea_reg;
   always_comb begin
-    if (`UF(uw, AEASEL) == rd68011_ucode_pkg::U_AEASEL_DST) aea_reg = ir[11:9];
-    else                                                    aea_reg = ir[2:0];
+    unique case (`UF(uw, AEASEL))
+      rd68011_ucode_pkg::U_AEASEL_DST: aea_reg = ir[11:9];
+      rd68011_ucode_pkg::U_AEASEL_SP:  aea_reg = 3'b111;
+      default:                         aea_reg = ir[2:0];
+    endcase
   end
 
   assign ea_areg = {1'b1, aea_reg};
@@ -356,7 +483,7 @@ module rd68011_seq (
         ea_used    = ea_base - ea_inc;
         aupd_we    = 1'b1;
       end
-      default: ;
+      default: ;   // NONE and LATCH leave the register alone
     endcase
     // The address the cycle actually uses is computed on the next-microword
     // path (n_ea_addr), for the same reason every other request field is:
@@ -382,7 +509,17 @@ module rd68011_seq (
     pc_nxt       = pc;
     t0_nxt       = t0;
     t1_nxt       = t1;
-    ea_latch_nxt = (retire && aupd_we) ? ea_used : ea_latch;
+    // The address output buffer keeps whatever address the address unit last
+    // produced. Every read-modify-write needs it: the reference shape is
+    // read, prefetch, write, and the prefetch replaces ir, so by the time the
+    // write runs the register field that named the address has gone.
+    //
+    // Only the base form latches, not EA_PLUS2, so the second word of a long
+    // transfer leaves the base intact for the write that follows.
+    ea_latch_nxt = (retire &&
+                    ((f_aupd != rd68011_ucode_pkg::U_AUPD_NONE) ||
+                     (bus_busy && (f_asel == rd68011_ucode_pkg::U_ASEL_EA))))
+                     ? ea_used : ea_latch;
     dbuf_nxt  = dbuf;
     reg_wdata = y;
     reg_we    = 1'b0;
@@ -403,6 +540,7 @@ module rd68011_seq (
         rd68011_ucode_pkg::U_DST_T1:      t1_nxt   = y;
         rd68011_ucode_pkg::U_DST_T0_SHW:  t0_nxt   = {t0[15:0], y[15:0]};
         rd68011_ucode_pkg::U_DST_T1_SHW:  t1_nxt   = {t1[15:0], y[15:0]};
+        rd68011_ucode_pkg::U_DST_DBUF_SHW: dbuf_nxt = {dbuf[15:0], y[15:0]};
         // UM table 3-1's footnote: a byte write drives the byte on both
         // halves of the bus and lets the strobe decide which lands. Doing the
         // duplication here means it holds however the buffer is read back.
@@ -459,6 +597,36 @@ module rd68011_seq (
           sr_nxt[rd68011_pkg::SR_V] = v_flag;
           sr_nxt[rd68011_pkg::SR_C] = c_flag;
         end
+        rd68011_ucode_pkg::U_CCR_ARITHX: begin
+          sr_nxt[rd68011_pkg::SR_N] = n_flag;
+          // Z is only ever cleared: a multi-precision result reads as zero
+          // only if every part of it was.
+          if (!z_flag) sr_nxt[rd68011_pkg::SR_Z] = 1'b0;
+          sr_nxt[rd68011_pkg::SR_V] = v_flag;
+          sr_nxt[rd68011_pkg::SR_C] = c_flag;
+          sr_nxt[rd68011_pkg::SR_X] = c_flag;
+        end
+        rd68011_ucode_pkg::U_CCR_LOGIC_A: begin
+          sr_nxt[rd68011_pkg::SR_N] =
+              (f_size == rd68011_ucode_pkg::U_SIZE_BYTE) ? a_bus[7]
+            : (f_size == rd68011_ucode_pkg::U_SIZE_WORD) ? a_bus[15] : a_bus[31];
+          sr_nxt[rd68011_pkg::SR_Z] =
+              (f_size == rd68011_ucode_pkg::U_SIZE_BYTE) ? (a_bus[7:0] == 8'd0)
+            : (f_size == rd68011_ucode_pkg::U_SIZE_WORD) ? (a_bus[15:0] == 16'd0)
+            : (a_bus == 32'd0);
+          sr_nxt[rd68011_pkg::SR_V] = 1'b0;
+          sr_nxt[rd68011_pkg::SR_C] = 1'b0;
+        end
+        rd68011_ucode_pkg::U_CCR_BIT: begin
+          sr_nxt[rd68011_pkg::SR_Z] = bit_z;
+        end
+        rd68011_ucode_pkg::U_CCR_SHIFT: begin
+          sr_nxt[rd68011_pkg::SR_N] = n_flag;
+          sr_nxt[rd68011_pkg::SR_Z] = z_flag;
+          sr_nxt[rd68011_pkg::SR_V] = sh_v;
+          sr_nxt[rd68011_pkg::SR_C] = sh_c;
+          if (sh_xupd) sr_nxt[rd68011_pkg::SR_X] = sh_c;
+        end
         default: ;
       endcase
       if (f_dst == rd68011_ucode_pkg::U_DST_SR) sr_nxt = y[15:0];
@@ -473,7 +641,7 @@ module rd68011_seq (
   always_comb begin
     unique case (f_cond)
       rd68011_ucode_pkg::U_COND_SUPER: cond_true = sr[rd68011_pkg::SR_S];
-      // The Bcc condition test arrives with the condition codes.
+      rd68011_ucode_pkg::U_COND_CC:    cond_true = cc_true;
       default:                         cond_true = 1'b0;
     endcase
   end
@@ -518,11 +686,11 @@ module rd68011_seq (
   assign n_easize = `UF(uw_nxt, SIZE);
 
   always_comb begin
-    if (`UF(uw_nxt, AEASEL) == rd68011_ucode_pkg::U_AEASEL_DST) begin
-      n_ea_reg = ir_nxt[11:9];
-    end else begin
-      n_ea_reg = ir_nxt[2:0];
-    end
+    unique case (`UF(uw_nxt, AEASEL))
+      rd68011_ucode_pkg::U_AEASEL_DST: n_ea_reg = ir_nxt[11:9];
+      rd68011_ucode_pkg::U_AEASEL_SP:  n_ea_reg = 3'b111;
+      default:                         n_ea_reg = ir_nxt[2:0];
+    endcase
   end
 
   assign n_ea_areg = {1'b1, n_ea_reg};

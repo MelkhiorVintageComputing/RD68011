@@ -133,10 +133,16 @@ module harte_tb;
   // instruction starts on that same edge and asserts AS a clock later, which
   // is exactly when the runner freezes the core -- a race that showed up as a
   // spurious extra bus cycle on about one test in fifteen.
+  // Triggered by a data strobe rather than by AS: a read-modify-write holds AS
+  // across both of its halves (UM 5.1.3), so watching AS would record one
+  // transaction where the reference records two.
+  wire ds_active;
+  assign ds_active = !uds_n_o || !lds_n_o;
+
   initial begin
     ntr = 0;
     forever begin
-      @(negedge as_n_o);
+      @(posedge ds_active);
       if (ntr < MAXTR && !cap_arm && !cap_done) begin
         tr_addr[ntr] = a_o;
         tr_fc[ntr]   = fc_o;
@@ -167,7 +173,7 @@ module harte_tb;
   int          vtr_fc [0:MAXTR-1];
   logic [22:0] vtr_a  [0:MAXTR-1];
 
-  int t, i, r, nfail, npass, nskip, ndiverge, nunimpl;
+  int t, i, j, r, nfail, npass, nskip, ndiverge, nunimpl;
   int firstfail;
   logic ok;
   logic skipped;
@@ -292,6 +298,33 @@ module harte_tb;
     for (t = 0; t < ntests; t = t + 1) begin
       read_test();
 
+      // Where an MC68010 must differ from the MC68000 the vectors came from,
+      // adjust the expectation rather than skip the test: everything else the
+      // test checks is still worth checking.
+      //
+      // CLR on a memory destination is the case that matters here. UM section
+      // 9's execution times give the MC68010 two cycles fewer for every memory
+      // CLR, because it does not read an operand it is about to overwrite. So
+      // the reference's operand read -- the only data-space read a CLR does --
+      // is removed, and the write, the flags and the final state are compared
+      // as usual. See doc/divergences.md.
+      if (((ipf0 & 16'hFF00) == 16'h4200) && (ipf0[5:3] != 3'b000) &&
+          (ipf0[7:6] != 2'b11)) begin
+        j = 0;
+        for (i = 0; i < nvtr; i = i + 1) begin
+          if (!((vtr_k[i] == 2) && ((vtr_fc[i] == 1) || (vtr_fc[i] == 5)))) begin
+            vtr_k[j]  = vtr_k[i];
+            vtr_fc[j] = vtr_fc[i];
+            vtr_a[j]  = vtr_a[i];
+            j = j + 1;
+          end
+        end
+        if (j != nvtr) begin
+          nvtr     = j;
+          ndiverge = ndiverge + 1;
+        end
+      end
+
       // An MC68010 does not run these the way an MC68000 did, or the test
       // exercises something not built yet. Skipped, and counted.
       skipped = 1'b0;
@@ -305,7 +338,6 @@ module harte_tb;
       if (tb_skip(ipf0, ireg[17][15:0])) begin
         skipped = 1'b1;
         why     = "documented MC68000/MC68010 divergence";
-        ndiverge = ndiverge + 1;
       end
       // Not built yet: the decoder has no pattern for it. Counted separately
       // from the divergences so a sweep says what is missing rather than
@@ -450,8 +482,12 @@ module harte_tb;
     $display("%s: %0d passed, %0d failed, %0d skipped (of %0d)",
              vecfile, npass, nfail, nskip, ntests);
     if (nskip > 0) begin
-      $display("  skipped: %0d not implemented, %0d divergences, %0d needing exceptions",
-               nunimpl, ndiverge, nskip - nunimpl - ndiverge);
+      $display("  skipped: %0d not implemented, %0d needing exceptions",
+               nunimpl, nskip - nunimpl);
+    end
+    if (ndiverge > 0) begin
+      $display("  %0d tests compared with a documented MC68010 divergence applied",
+               ndiverge);
     end
     if (nfail == 0) $display("PASS: harte");
     else            $display("FAIL: harte");

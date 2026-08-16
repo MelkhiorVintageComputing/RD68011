@@ -8,15 +8,15 @@
 
 package rd68011_ucode_pkg;
 
-  localparam int UW    = 57;   // microword width
-  localparam int UADDR = 10;   // micro-address width
+  localparam int UW    = 70;   // microword width
+  localparam int UADDR = 13;   // micro-address width
 
-  // next: 10 bits at 0
+  // next: 13 bits at 0
   localparam int U_NEXT_LSB = 0;
-  localparam int U_NEXT_W   = 10;
+  localparam int U_NEXT_W   = 13;
 
-  // seq: 3 bits at 10
-  localparam int U_SEQ_LSB = 10;
+  // seq: 3 bits at 13
+  localparam int U_SEQ_LSB = 13;
   localparam int U_SEQ_W   = 3;
   localparam logic [2:0] U_SEQ_NEXT = 3'd0;
   localparam logic [2:0] U_SEQ_DECODE = 3'd1;
@@ -24,68 +24,94 @@ package rd68011_ucode_pkg;
   localparam logic [2:0] U_SEQ_EACALL = 3'd3;
   localparam logic [2:0] U_SEQ_RET = 3'd4;
 
-  // cond: 2 bits at 13
-  localparam int U_COND_LSB = 13;
+  // cond: 2 bits at 16
+  localparam int U_COND_LSB = 16;
   localparam int U_COND_W   = 2;
   localparam logic [1:0] U_COND_NEVER = 2'd0;
   localparam logic [1:0] U_COND_CC = 2'd1;
   localparam logic [1:0] U_COND_SUPER = 2'd2;
 
-  // asrc: 4 bits at 15
-  localparam int U_ASRC_LSB = 15;
-  localparam int U_ASRC_W   = 4;
-  localparam logic [3:0] U_ASRC_ZERO = 4'd0;
-  localparam logic [3:0] U_ASRC_ONE = 4'd1;
-  localparam logic [3:0] U_ASRC_TWO = 4'd2;
-  localparam logic [3:0] U_ASRC_FOUR = 4'd3;
-  localparam logic [3:0] U_ASRC_PC = 4'd4;
-  localparam logic [3:0] U_ASRC_IR_PC = 4'd5;
-  localparam logic [3:0] U_ASRC_IRC_PC = 4'd6;
-  localparam logic [3:0] U_ASRC_IRC = 4'd7;
-  localparam logic [3:0] U_ASRC_IRC_SX = 4'd8;
-  localparam logic [3:0] U_ASRC_IR_SXB = 4'd9;
-  localparam logic [3:0] U_ASRC_T0 = 4'd10;
-  localparam logic [3:0] U_ASRC_T1 = 4'd11;
-  localparam logic [3:0] U_ASRC_RDATA = 4'd12;
-  localparam logic [3:0] U_ASRC_RDATA_SX = 4'd13;
-  localparam logic [3:0] U_ASRC_REG = 4'd14;
-  localparam logic [3:0] U_ASRC_RDATA_B = 4'd15;
+  // asrc: 5 bits at 18
+  localparam int U_ASRC_LSB = 18;
+  localparam int U_ASRC_W   = 5;
+  localparam logic [4:0] U_ASRC_ZERO = 5'd0;
+  localparam logic [4:0] U_ASRC_ONE = 5'd1;
+  localparam logic [4:0] U_ASRC_TWO = 5'd2;
+  localparam logic [4:0] U_ASRC_FOUR = 5'd3;
+  localparam logic [4:0] U_ASRC_PC = 5'd4;
+  localparam logic [4:0] U_ASRC_IR_PC = 5'd5;
+  localparam logic [4:0] U_ASRC_IRC_PC = 5'd6;
+  localparam logic [4:0] U_ASRC_IRC = 5'd7;
+  localparam logic [4:0] U_ASRC_IRC_SX = 5'd8;
+  localparam logic [4:0] U_ASRC_IR_SXB = 5'd9;
+  localparam logic [4:0] U_ASRC_T0 = 5'd10;
+  localparam logic [4:0] U_ASRC_T1 = 5'd11;
+  localparam logic [4:0] U_ASRC_RDATA = 5'd12;
+  localparam logic [4:0] U_ASRC_RDATA_SX = 5'd13;
+  localparam logic [4:0] U_ASRC_REG = 5'd14;
+  localparam logic [4:0] U_ASRC_RDATA_B = 5'd15;
+  localparam logic [4:0] U_ASRC_INDEX = 5'd16;
+  localparam logic [4:0] U_ASRC_IRC_SXB = 5'd17;
+  localparam logic [4:0] U_ASRC_DBUF = 5'd18;
+  localparam logic [4:0] U_ASRC_REG2 = 5'd19;
+  localparam logic [4:0] U_ASRC_QUICK = 5'd20;
+  localparam logic [4:0] U_ASRC_SHCNT = 5'd21;
+  localparam logic [4:0] U_ASRC_BITMASK = 5'd22;
+  localparam logic [4:0] U_ASRC_SCC = 5'd23;
+  localparam logic [4:0] U_ASRC_BIT7 = 5'd24;
 
-  // bsrc: 4 bits at 19
-  localparam int U_BSRC_LSB = 19;
-  localparam int U_BSRC_W   = 4;
-  localparam logic [3:0] U_BSRC_ZERO = 4'd0;
-  localparam logic [3:0] U_BSRC_ONE = 4'd1;
-  localparam logic [3:0] U_BSRC_TWO = 4'd2;
-  localparam logic [3:0] U_BSRC_FOUR = 4'd3;
-  localparam logic [3:0] U_BSRC_PC = 4'd4;
-  localparam logic [3:0] U_BSRC_IR_PC = 4'd5;
-  localparam logic [3:0] U_BSRC_IRC_PC = 4'd6;
-  localparam logic [3:0] U_BSRC_IRC = 4'd7;
-  localparam logic [3:0] U_BSRC_IRC_SX = 4'd8;
-  localparam logic [3:0] U_BSRC_IR_SXB = 4'd9;
-  localparam logic [3:0] U_BSRC_T0 = 4'd10;
-  localparam logic [3:0] U_BSRC_T1 = 4'd11;
-  localparam logic [3:0] U_BSRC_RDATA = 4'd12;
-  localparam logic [3:0] U_BSRC_RDATA_SX = 4'd13;
-  localparam logic [3:0] U_BSRC_REG = 4'd14;
-  localparam logic [3:0] U_BSRC_RDATA_B = 4'd15;
+  // bsrc: 5 bits at 23
+  localparam int U_BSRC_LSB = 23;
+  localparam int U_BSRC_W   = 5;
+  localparam logic [4:0] U_BSRC_ZERO = 5'd0;
+  localparam logic [4:0] U_BSRC_ONE = 5'd1;
+  localparam logic [4:0] U_BSRC_TWO = 5'd2;
+  localparam logic [4:0] U_BSRC_FOUR = 5'd3;
+  localparam logic [4:0] U_BSRC_PC = 5'd4;
+  localparam logic [4:0] U_BSRC_IR_PC = 5'd5;
+  localparam logic [4:0] U_BSRC_IRC_PC = 5'd6;
+  localparam logic [4:0] U_BSRC_IRC = 5'd7;
+  localparam logic [4:0] U_BSRC_IRC_SX = 5'd8;
+  localparam logic [4:0] U_BSRC_IR_SXB = 5'd9;
+  localparam logic [4:0] U_BSRC_T0 = 5'd10;
+  localparam logic [4:0] U_BSRC_T1 = 5'd11;
+  localparam logic [4:0] U_BSRC_RDATA = 5'd12;
+  localparam logic [4:0] U_BSRC_RDATA_SX = 5'd13;
+  localparam logic [4:0] U_BSRC_REG = 5'd14;
+  localparam logic [4:0] U_BSRC_RDATA_B = 5'd15;
+  localparam logic [4:0] U_BSRC_INDEX = 5'd16;
+  localparam logic [4:0] U_BSRC_IRC_SXB = 5'd17;
+  localparam logic [4:0] U_BSRC_DBUF = 5'd18;
+  localparam logic [4:0] U_BSRC_REG2 = 5'd19;
+  localparam logic [4:0] U_BSRC_QUICK = 5'd20;
+  localparam logic [4:0] U_BSRC_SHCNT = 5'd21;
+  localparam logic [4:0] U_BSRC_BITMASK = 5'd22;
+  localparam logic [4:0] U_BSRC_SCC = 5'd23;
+  localparam logic [4:0] U_BSRC_BIT7 = 5'd24;
 
-  // alu: 4 bits at 23
-  localparam int U_ALU_LSB = 23;
-  localparam int U_ALU_W   = 4;
-  localparam logic [3:0] U_ALU_A = 4'd0;
-  localparam logic [3:0] U_ALU_B = 4'd1;
-  localparam logic [3:0] U_ALU_ADD = 4'd2;
-  localparam logic [3:0] U_ALU_SUB = 4'd3;
-  localparam logic [3:0] U_ALU_AND = 4'd4;
-  localparam logic [3:0] U_ALU_OR = 4'd5;
-  localparam logic [3:0] U_ALU_EOR = 4'd6;
-  localparam logic [3:0] U_ALU_NOT = 4'd7;
-  localparam logic [3:0] U_ALU_CAT = 4'd8;
+  // alu: 5 bits at 28
+  localparam int U_ALU_LSB = 28;
+  localparam int U_ALU_W   = 5;
+  localparam logic [4:0] U_ALU_A = 5'd0;
+  localparam logic [4:0] U_ALU_B = 5'd1;
+  localparam logic [4:0] U_ALU_ADD = 5'd2;
+  localparam logic [4:0] U_ALU_SUB = 5'd3;
+  localparam logic [4:0] U_ALU_AND = 5'd4;
+  localparam logic [4:0] U_ALU_OR = 5'd5;
+  localparam logic [4:0] U_ALU_EOR = 5'd6;
+  localparam logic [4:0] U_ALU_NOT = 5'd7;
+  localparam logic [4:0] U_ALU_CAT = 5'd8;
+  localparam logic [4:0] U_ALU_SXW = 5'd9;
+  localparam logic [4:0] U_ALU_SXB = 5'd10;
+  localparam logic [4:0] U_ALU_SWAP = 5'd11;
+  localparam logic [4:0] U_ALU_NOTX = 5'd12;
+  localparam logic [4:0] U_ALU_SHIFT = 5'd13;
+  localparam logic [4:0] U_ALU_ANDN = 5'd14;
+  localparam logic [4:0] U_ALU_ADDX = 5'd15;
+  localparam logic [4:0] U_ALU_SUBX = 5'd16;
 
-  // dst: 4 bits at 27
-  localparam int U_DST_LSB = 27;
+  // dst: 4 bits at 33
+  localparam int U_DST_LSB = 33;
   localparam int U_DST_W   = 4;
   localparam logic [3:0] U_DST_NONE = 4'd0;
   localparam logic [3:0] U_DST_PC = 4'd1;
@@ -97,9 +123,10 @@ package rd68011_ucode_pkg;
   localparam logic [3:0] U_DST_SR = 4'd7;
   localparam logic [3:0] U_DST_DBUF = 4'd8;
   localparam logic [3:0] U_DST_REG_L = 4'd10;
+  localparam logic [3:0] U_DST_DBUF_SHW = 4'd11;
 
-  // bus: 3 bits at 31
-  localparam int U_BUS_LSB = 31;
+  // bus: 3 bits at 37
+  localparam int U_BUS_LSB = 37;
   localparam int U_BUS_W   = 3;
   localparam logic [2:0] U_BUS_READ = 3'd0;
   localparam logic [2:0] U_BUS_WRITE = 3'd1;
@@ -108,8 +135,8 @@ package rd68011_ucode_pkg;
   localparam logic [2:0] U_BUS_BKPT = 3'd4;
   localparam logic [2:0] U_BUS_NONE = 3'd7;
 
-  // asel: 4 bits at 34
-  localparam int U_ASEL_LSB = 34;
+  // asel: 4 bits at 40
+  localparam int U_ASEL_LSB = 40;
   localparam int U_ASEL_W   = 4;
   localparam logic [3:0] U_ASEL_PC = 4'd0;
   localparam logic [3:0] U_ASEL_T0 = 4'd1;
@@ -121,30 +148,31 @@ package rd68011_ucode_pkg;
   localparam logic [3:0] U_ASEL_EAL = 4'd7;
   localparam logic [3:0] U_ASEL_EAL_PLUS2 = 4'd8;
 
-  // aupd: 2 bits at 38
-  localparam int U_AUPD_LSB = 38;
+  // aupd: 2 bits at 44
+  localparam int U_AUPD_LSB = 44;
   localparam int U_AUPD_W   = 2;
   localparam logic [1:0] U_AUPD_NONE = 2'd0;
   localparam logic [1:0] U_AUPD_POST = 2'd1;
   localparam logic [1:0] U_AUPD_PRE = 2'd2;
+  localparam logic [1:0] U_AUPD_LATCH = 2'd3;
 
-  // fc: 2 bits at 40
-  localparam int U_FC_LSB = 40;
+  // fc: 2 bits at 46
+  localparam int U_FC_LSB = 46;
   localparam int U_FC_W   = 2;
   localparam logic [1:0] U_FC_PROG = 2'd0;
   localparam logic [1:0] U_FC_DATA = 2'd1;
   localparam logic [1:0] U_FC_CPU = 2'd2;
 
-  // pf: 2 bits at 42
-  localparam int U_PF_LSB = 42;
+  // pf: 2 bits at 48
+  localparam int U_PF_LSB = 48;
   localparam int U_PF_W   = 2;
   localparam logic [1:0] U_PF_NONE = 2'd0;
   localparam logic [1:0] U_PF_FETCH = 2'd1;
   localparam logic [1:0] U_PF_ADV = 2'd2;
   localparam logic [1:0] U_PF_ADVFETCH = 2'd3;
 
-  // rsel: 3 bits at 44
-  localparam int U_RSEL_LSB = 44;
+  // rsel: 3 bits at 50
+  localparam int U_RSEL_LSB = 50;
   localparam int U_RSEL_W   = 3;
   localparam logic [2:0] U_RSEL_NONE = 3'd0;
   localparam logic [2:0] U_RSEL_A7 = 3'd1;
@@ -154,8 +182,8 @@ package rd68011_ucode_pkg;
   localparam logic [2:0] U_RSEL_IR9_D = 3'd5;
   localparam logic [2:0] U_RSEL_IR9_A = 3'd6;
 
-  // wsel: 3 bits at 47
-  localparam int U_WSEL_LSB = 47;
+  // wsel: 3 bits at 53
+  localparam int U_WSEL_LSB = 53;
   localparam int U_WSEL_W   = 3;
   localparam logic [2:0] U_WSEL_SAME = 3'd0;
   localparam logic [2:0] U_WSEL_A7 = 3'd1;
@@ -165,39 +193,56 @@ package rd68011_ucode_pkg;
   localparam logic [2:0] U_WSEL_IR9_D = 3'd5;
   localparam logic [2:0] U_WSEL_IR9_A = 3'd6;
 
-  // easel: 1 bits at 50
-  localparam int U_EASEL_LSB = 50;
+  // easel: 1 bits at 56
+  localparam int U_EASEL_LSB = 56;
   localparam int U_EASEL_W   = 1;
   localparam logic [0:0] U_EASEL_SRC = 1'd0;
   localparam logic [0:0] U_EASEL_DST = 1'd1;
 
-  // aeasel: 1 bits at 51
-  localparam int U_AEASEL_LSB = 51;
-  localparam int U_AEASEL_W   = 1;
-  localparam logic [0:0] U_AEASEL_SRC = 1'd0;
-  localparam logic [0:0] U_AEASEL_DST = 1'd1;
+  // aeasel: 2 bits at 57
+  localparam int U_AEASEL_LSB = 57;
+  localparam int U_AEASEL_W   = 2;
+  localparam logic [1:0] U_AEASEL_SRC = 2'd0;
+  localparam logic [1:0] U_AEASEL_DST = 2'd1;
+  localparam logic [1:0] U_AEASEL_SP = 2'd2;
 
-  // dhi: 1 bits at 52
-  localparam int U_DHI_LSB = 52;
+  // dhi: 1 bits at 59
+  localparam int U_DHI_LSB = 59;
   localparam int U_DHI_W   = 1;
 
-  // size: 2 bits at 53
-  localparam int U_SIZE_LSB = 53;
+  // size: 2 bits at 60
+  localparam int U_SIZE_LSB = 60;
   localparam int U_SIZE_W   = 2;
   localparam logic [1:0] U_SIZE_BYTE = 2'd0;
   localparam logic [1:0] U_SIZE_WORD = 2'd1;
   localparam logic [1:0] U_SIZE_LONG = 2'd2;
 
-  // ccr: 2 bits at 55
-  localparam int U_CCR_LSB = 55;
-  localparam int U_CCR_W   = 2;
-  localparam logic [1:0] U_CCR_NONE = 2'd0;
-  localparam logic [1:0] U_CCR_LOGIC = 2'd1;
-  localparam logic [1:0] U_CCR_ARITH = 2'd2;
-  localparam logic [1:0] U_CCR_CMP = 2'd3;
+  // ccr: 3 bits at 62
+  localparam int U_CCR_LSB = 62;
+  localparam int U_CCR_W   = 3;
+  localparam logic [2:0] U_CCR_NONE = 3'd0;
+  localparam logic [2:0] U_CCR_LOGIC = 3'd1;
+  localparam logic [2:0] U_CCR_ARITH = 3'd2;
+  localparam logic [2:0] U_CCR_CMP = 3'd3;
+  localparam logic [2:0] U_CCR_SHIFT = 3'd4;
+  localparam logic [2:0] U_CCR_BIT = 3'd5;
+  localparam logic [2:0] U_CCR_ARITHX = 3'd6;
+  localparam logic [2:0] U_CCR_LOGIC_A = 3'd7;
+
+  // sh: 3 bits at 65
+  localparam int U_SH_LSB = 65;
+  localparam int U_SH_W   = 3;
+
+  // bitimm: 1 bits at 68
+  localparam int U_BITIMM_LSB = 68;
+  localparam int U_BITIMM_W   = 1;
+
+  // shone: 1 bits at 69
+  localparam int U_SHONE_LSB = 69;
+  localparam int U_SHONE_W   = 1;
 
   // Entry points the RTL needs by name.
-  localparam logic [UADDR-1:0] ENTRY_RESET = 10'd0;
-  localparam logic [UADDR-1:0] ENTRY_ILLEGAL = 10'd9;
+  localparam logic [UADDR-1:0] ENTRY_RESET = 13'd0;
+  localparam logic [UADDR-1:0] ENTRY_ILLEGAL = 13'd9;
 
 endpackage
