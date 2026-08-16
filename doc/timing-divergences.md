@@ -174,9 +174,21 @@ Recorded here only because they are easy to mistake for timing:
   on the real part. The range of lengths is identical — six to fifteen wait
   states, which is exactly what figures B-4 and B-5 draw.
 
+### Fault processing and RTE with a long frame
+
+Section 9 gives RTE 112(27/10) for "Long, Retry Read", 112(26/1) for "Long,
+Retry Write" and 110(26/0) for "Long, No Retry" -- read counts of 26 and 27
+against ours of 26, because the accessibility probe at SP+56 and the version
+word at SP+26 are read separately here before the walk that reads them again.
+That makes ours 28 reads and a few internal microwords longer than the
+original's, in exchange for doing UM 6.4's three checks in the order it
+specifies them.
+
+Building a frame is 26 writes and a two-word vector fetch either way. Neither
+number is measured against a reference, because none exists: the vectors are an
+MC68000 with a seven-word frame.
+
 ## Still to come
 
-P6 adds bus and address error processing, whose section 9 entries
-(112(27/10) and the rest) describe a stack frame that does not exist yet. P7
-adds loop mode, which is a timing feature and nothing else, and the measurement
-harness that produces this list is where it will be judged.
+P7 adds loop mode, which is a timing feature and nothing else, and the
+measurement harness that produces this list is where it will be judged.

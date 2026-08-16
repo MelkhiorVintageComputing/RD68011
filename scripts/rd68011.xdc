@@ -22,8 +22,8 @@
 #     -> the bus request address, which must be at the pins on the rising edge
 #        that ends S7
 #
-# 33.0 ns of it, against a budget of half a clock -- 26 ns at 52 -- because it
-# starts at a falling-edge flop and ends at a rising-edge one.
+# 35.2 ns of it as of P6, against a budget of half a clock, because it starts
+# at a falling-edge flop and ends at a rising-edge one.
 #
 # Two things make it long, and both have known fixes that belong to P8:
 #
@@ -47,7 +47,7 @@
 # UM 3.9 requires a square wave, and the half period is a real timing budget
 # here, not a convention.
 
-set clk_period_ns 68.000
+set clk_period_ns 72.000
 
 create_clock -period $clk_period_ns -name clk -waveform "0.000 [expr {$clk_period_ns / 2.0}]" [get_ports clk]
 

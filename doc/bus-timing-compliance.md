@@ -209,9 +209,15 @@ to get there -- which is where every hard path in the design lives.
 
 Measured on the Artix-7 part `make synth` targets, the clock period has moved
 as the design grew: 20 ns with the bus interface alone, 40 ns with MOVE, 44 ns
-with the integer set, 52 ns with control flow and exceptions, and **68 ns after
-P5** -- 14.7 MHz, against 12.5 MHz for the fastest MC68010 Motorola shipped.
-That build closes with 0.95 ns to spare, in 12396 LUTs and 1148 flip-flops.
+with the integer set, 52 ns with control flow and exceptions, 68 ns with the
+rest of the instruction set, and **72 ns after P6** -- 13.9 MHz, against 12.5
+MHz for the fastest MC68010 Motorola shipped, in 13889 LUTs and 1262
+flip-flops, with 0.54 ns to spare.
+
+It has been the same path since P5, and it lengthens every time the microcode
+store widens or the bus request gains a term. That is a reason to fix it rather
+than to keep moving the number, and P8 is where that happens; the two fixes are
+written up at the constraint itself and are worth about 10 ns between them.
 
 The critical path and the two known fixes for it are written out in
 `scripts/rd68011.xdc`, at the constraint itself, because that is where anyone
@@ -221,14 +227,15 @@ correctness problem.
 ## Not yet implemented
 
 The bus unit is complete; the parts of §5 and §6 that belong to the sequencer
-are not, and arrive in later phases:
+were finished in P4 and P6, and are listed here with where they landed:
 
 - The reset *exception* — reading the initial SSP from $000000 and PC from
   $000004, setting the interrupt mask to 7 and clearing VBR (UM 5.5). Done in
   P4.
-- Double bus fault detection. The bus unit drives HALT out when told to via
-  `dbf`; deciding that a second bus error arrived during exception processing is
-  P6's (UM 5.4.4).
+- Double bus fault detection. Done in P6: the sequencer tracks whether it is
+  inside group 0 exception processing and drives `dbf` when a fault arrives
+  while it is, which the bus unit turns into HALT out (UM 5.4.4). Only an
+  external reset clears it.
 - Interrupt recognition and priority. Done in P4.
 - Breakpoint acknowledge cycles are wired as a cycle kind (`CT_BKPT`); BKPT
   issues one as of P5, with function codes all ones and zeros on every address

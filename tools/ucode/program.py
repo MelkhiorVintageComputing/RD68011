@@ -36,7 +36,7 @@ def u(comment='', **kw):
                      'bus', 'asel', 'fc', 'pf', 'rsel', 'wsel', 'size', 'easel',
                      'ccr', 'aupd', 'aeasel', 'dhi', 'sh', 'shone',
                      'bitimm', 'vec', 'vsel', 'rstreq', 'stop',
-                     'divst', 'divsg', 'mop', 'mdown', 'goto'):
+                     'divst', 'divsg', 'mop', 'mdown', 'hb', 'g0', 'goto'):
             raise KeyError('no microword field %r' % k)
     goto = kw.pop('goto', None)
     if goto is not None:
@@ -739,6 +739,7 @@ def build():
     bkpt()
     movec()
     moves()
+    faults()
     return words, labels, fixups, patterns, fallthrough
 
 
@@ -2118,7 +2119,7 @@ def rte():
       cond=COND['FMT0'], seq=SEQ['COND'], goto='rte_fmt_arms')
 
     label('rte_fmt_arms', align_even=True)
-    u(comment='a format code we do not know', goto='rte_format_error')
+    u(comment='not the four-word frame: try the long one', goto='rte_try_long')
     u(comment='the four-word frame', goto='rte_ok')
 
     label('rte_ok')
@@ -2127,6 +2128,123 @@ def rte():
     u(comment='restore the status register, which may change the stack',
       asrc=SRC['T0'], alu=ALU['A'], dst=DST['SR_ALL'])
     refill_from(SRC['T1'])
+
+    label('rte_try_long')
+    # Re-read the format word rather than keeping it: RTE has done nothing
+    # irreversible yet, and one more read is cheaper than a register.
+    u(comment='is it the long frame?',
+      bus=BUS['READ'], asel=ASEL['EA_PLUS6'], fc=FC['DATA'],
+      aeasel=AEASEL['SP'], size=SIZE['WORD'],
+      cond=COND['FMT8'], seq=SEQ['COND'], goto='rte_long_arms')
+    label('rte_long_arms', align_even=True)
+    u(comment='a format code we do not know', goto='rte_format_error')
+    u(comment='the twenty-nine word frame', goto='rte_long')
+
+    # ------------------------------------------------------------------
+    # The long frame -- UM 6.4's three steps, in order
+    # ------------------------------------------------------------------
+    label('rte_long')
+    # Step 3, done first because it is the cheap one: "the MC68010 performs a
+    # read from the last word (SP + 56) of the long stack to determine data
+    # accessibility. If this read is terminated normally, the processor assumes
+    # that the remaining words on the stack frame are also accessible."
+    u(comment='point past the frame',
+      asrc=SRC['FRAMESZ'], bsrc=SRC['REG'], rsel=RSEL['A7'], alu=ALU['ADD'],
+      dst=DST['T0'], size=SIZE['LONG'])
+    u(comment='the accessibility probe, at the last word of the frame',
+      bus=BUS['READ'], asel=ASEL['T0_DEC2'], fc=FC['DATA'], size=SIZE['WORD'])
+
+    # Step 2: the version number, checked before anything is loaded, and while
+    # the stack pointer is still where the handler left it.
+    u(comment='point at the version word',
+      asrc=SRC['FRAMEVER'], bsrc=SRC['REG'], rsel=RSEL['A7'], alu=ALU['ADD'],
+      dst=DST['T0'], size=SIZE['LONG'])
+    u(comment='is the frame ours?',
+      bus=BUS['READ'], asel=ASEL['T0'], fc=FC['DATA'], size=SIZE['WORD'],
+      cond=COND['VERSION'], seq=SEQ['COND'], goto='rte_ver_arms')
+    label('rte_ver_arms', align_even=True)
+    u(comment='another implementation wrote it', goto='rte_format_error')
+    u(comment='ours: reload it', goto='rte_reload')
+
+    # Now the frame is committed to, and the stack pointer walks it: twenty-nine
+    # post-increments leave it exactly fifty-eight bytes higher, which is what
+    # RTE owes the caller.
+    # UM 6.4: "After this read, the processor must be able to load the
+    # remaining data without receiving a bus error; therefore, if a bus error
+    # occurs on any of the remaining stack reads, the error becomes a double
+    # bus fault, and the MC68010 enters the halted state."
+    label('rte_reload')
+    reload = [
+        ('the status register, held back until the walk is over',
+         DST['SRSAVE'], None),
+        ('the program counter, high word', DST['T1'], None),
+        ('... and low', DST['PC'], SRC['T1']),
+        ('the format word again, and discarded', DST['NONE'], None),
+        ('the special status word: only its rerun flag is kept', DST['SSW'], None),
+        ('the fault address, which the rerun recomputes', DST['NONE'], None),
+        ('... low', DST['NONE'], None),
+        (None, None, None),                     # SP+14, reserved
+        ('the data output buffer, staged in the buffer itself', DST['DBUF'], None),
+        (None, None, None),                     # SP+18, reserved
+        ('the data input buffer', DST['DIB'], None),
+        (None, None, None),                     # SP+22, reserved
+        ('the instruction input buffer', DST['IRC'], None),
+        ('the version word, already checked', DST['NONE'], None),
+        ('the micro-address to resume at', DST['UPCSAVE'], None),
+        ('the opcode being executed', DST['IR'], None),
+        ('the extension-word latch', DST['XW'], None),
+        # The one join whose staged half is the *low* one: the data output
+        # buffer's low half is at SP+16, where the architecture puts it, and
+        # its high half is ours and comes later. So the halves go on the buses
+        # the other way round.
+        ('the high half of the data output buffer', DST['DBUF'], 'lowstage'),
+        ('the address output buffer, high', DST['T1'], None),
+        ('... and low', DST['EAL'], SRC['T1']),
+        ('ir_pc, high', DST['T1'], None),
+        ('... and low', DST['IR_PC'], SRC['T1']),
+        ('irc_pc, high', DST['T1'], None),
+        ('... and low', DST['IRC_PC'], SRC['T1']),
+        ('t0, high', DST['T0'], None),
+        ('... and low', DST['T0_SHW'], None),
+        ('t1, high', DST['T1'], None),
+        ('... and low', DST['T1_SHW'], None),
+        ('the last word, and the stack pointer lands where it belongs',
+         DST['NONE'], None),
+    ]
+    for n, (what, dst, joinsrc) in enumerate(reload):
+        g0 = 1 if n == 0 else 0
+        if what is None:
+            u(comment='reserved: stepped over, not read',
+              rsel=RSEL['A7'], aeasel=AEASEL['SP'], aupd=AUPD['POST'],
+              size=SIZE['WORD'], g0=g0)
+        elif joinsrc is None:
+            u(comment=what,
+              asrc=SRC['RDATA'], alu=ALU['A'], dst=dst, g0=g0,
+              bus=BUS['READ'], asel=ASEL['EA'], fc=FC['DATA'],
+              rsel=RSEL['A7'], aeasel=AEASEL['SP'], aupd=AUPD['POST'],
+              size=SIZE['WORD'])
+        elif joinsrc == 'lowstage':
+            u(comment=what,
+              asrc=SRC['RDATA'], bsrc=SRC['DBUF'], alu=ALU['CAT'], dst=dst,
+              bus=BUS['READ'], asel=ASEL['EA'], fc=FC['DATA'],
+              rsel=RSEL['A7'], aeasel=AEASEL['SP'], aupd=AUPD['POST'],
+              size=SIZE['WORD'], g0=g0)
+        else:
+            # A thirty-two bit register arrives as two words, high first: the
+            # half already staged goes on the A bus, because CAT puts the A bus
+            # in the top half.
+            u(comment=what,
+              asrc=joinsrc, bsrc=SRC['RDATA'], alu=ALU['CAT'], dst=dst,
+              bus=BUS['READ'], asel=ASEL['EA'], fc=FC['DATA'],
+              rsel=RSEL['A7'], aeasel=AEASEL['SP'], aupd=AUPD['POST'],
+              size=SIZE['WORD'], g0=g0)
+
+    # The status register last, because it decides which register A7 is: doing
+    # it any earlier would move the walk onto the other stack. RESUME then puts
+    # the micro-address back and the faulted instruction carries on.
+    u(comment='restore the status register and resume the instruction',
+      asrc=SRC['SRSAVE'], alu=ALU['A'], dst=DST['SR_ALL'],
+      seq=SEQ['RESUME'])
 
     label('rte_format_error')
     # UM 6.4: the stack pointer is not updated, so the handler still has the
@@ -3115,3 +3233,161 @@ def moves():
 
             opcode(pattern('00001110' + SIZE_BITS[sz], mode, reg), lbl,
                    'MOVES.%s %s' % (sz[0], name))
+
+
+# ==========================================================================
+# Bus error, address error, and the format $8 frame -- UM 5.4 and 6.3
+#
+# A fault aborts the microword it hits: nothing that microword would have
+# written is written, so the machine is left in exactly the state it was in
+# when the access began. That is what makes continuation work -- resuming at
+# the saved micro-address re-executes the microword, which reissues the same
+# request with the same address and the same data.
+#
+# The frame is UM figure 6-8's twenty-nine words, of which twenty-six are
+# written. Its first fifteen fields are the architecture's; the sixteen
+# internal words are this implementation's own, stamped with our version
+# number, which is exactly the arrangement UM 6.4 describes and requires. The
+# layout, from the bottom up:
+#
+#   SP+0   status register, as it was when the fault happened
+#   SP+2   program counter, high      -- the *prefetch* pointer, which UM 6.3.9.2
+#   SP+4   program counter, low          says may be up to five words ahead
+#   SP+6   1000 and the vector offset
+#   SP+8   special status word, UM figure 6-9
+#   SP+10  fault address, high
+#   SP+12  fault address, low
+#   SP+14  reserved, not written
+#   SP+16  data output buffer         -- the low half of dbuf
+#   SP+18  reserved, not written
+#   SP+20  data input buffer
+#   SP+22  reserved, not written
+#   SP+24  instruction input buffer   -- irc
+#   SP+26  version word               -- internal 0, the one RTE validates
+#   SP+28  the micro-address to resume at
+#   SP+30  ir, the opcode being executed
+#   SP+32  the extension-word latch
+#   SP+34  dbuf, high half
+#   SP+36  the address output buffer, high
+#   SP+38  ... low
+#   SP+40  ir_pc, high                -- the address ir came from
+#   SP+42  ... low
+#   SP+44  irc_pc, high
+#   SP+46  ... low
+#   SP+48  t0, high
+#   SP+50  ... low
+#   SP+52  t1, high
+#   SP+54  ... low
+#   SP+56  zero                       -- internal 15, the word RTE probes first
+#
+# Written from the top down, the stack pointer pre-decrementing by two each
+# time, so that it ends fifty-eight bytes lower with every word in place.
+# ==========================================================================
+
+# (source, dhi) for each word, top of the frame first. None means a word that
+# is reserved and not written -- the stack pointer still steps over it.
+FRAME8 = [
+    (SRC['ZERO'],    0),   # SP+56
+    (SRC['T1'],      0),   # SP+54
+    (SRC['T1'],      1),   # SP+52
+    (SRC['T0'],      0),   # SP+50
+    (SRC['T0'],      1),   # SP+48
+    (SRC['IRC_PC'],  0),   # SP+46
+    (SRC['IRC_PC'],  1),   # SP+44
+    (SRC['IR_PC'],   0),   # SP+42
+    (SRC['IR_PC'],   1),   # SP+40
+    (SRC['EAL'],     0),   # SP+38
+    (SRC['EAL'],     1),   # SP+36
+    (SRC['DBUF'],    1),   # SP+34
+    (SRC['XW'],      0),   # SP+32
+    (SRC['IR'],      0),   # SP+30
+    (SRC['UPC'],     0),   # SP+28
+    (SRC['VERWORD'], 0),   # SP+26
+    (SRC['IRC'],     0),   # SP+24
+    (None,           0),   # SP+22
+    (SRC['DIB'],     0),   # SP+20
+    (None,           0),   # SP+18
+    (SRC['DBUF'],    0),   # SP+16
+    (None,           0),   # SP+14
+    (SRC['FAULT'],   0),   # SP+12
+    (SRC['FAULT'],   1),   # SP+10
+    (SRC['SSW'],     0),   # SP+8
+    (SRC['FMTVEC8'], 0),   # SP+6
+    (SRC['PC'],      0),   # SP+4
+    (SRC['PC'],      1),   # SP+2
+    (SRC['SRSAVE'],  0),   # SP+0
+]
+
+FRAME8_NAMES = [
+    'internal 15, the word RTE probes first', 't1, low', 't1, high',
+    't0, low', 't0, high', 'irc_pc, low', 'irc_pc, high',
+    'ir_pc, low', 'ir_pc, high', 'the address output buffer, low',
+    '... high', 'the data output buffer, high half',
+    'the extension-word latch', 'the opcode being executed',
+    'the micro-address to resume at', 'our version number',
+    'the instruction input buffer', 'reserved',
+    'the data input buffer', 'reserved',
+    'the data output buffer', 'reserved',
+    'the fault address, low', '... high', 'the special status word',
+    'the format and vector offset', 'the program counter, low', '... high',
+    'the status register, as it was',
+]
+
+
+def fault_exception(name, vector):
+    """Build a format $8 frame and vector through it."""
+    label(name)
+    u(comment='supervisor mode on, trace off, the old status register kept',
+      dst=DST['SR_EXC'])
+
+    for (src, dhi), what in zip(FRAME8, FRAME8_NAMES):
+        if src is None:
+            u(comment='%s: stepped over, not written' % what,
+              rsel=RSEL['A7'], aeasel=AEASEL['SP'], aupd=AUPD['PRE'],
+              size=SIZE['WORD'])
+        else:
+            u(comment=what,
+              asrc=src, dhi=dhi, alu=ALU['A'], dst=DST['WDATA'],
+              vec=vector,
+              bus=BUS['WRITE'], asel=ASEL['EA'], fc=FC['DATA'],
+              rsel=RSEL['A7'], aeasel=AEASEL['SP'], aupd=AUPD['PRE'],
+              size=SIZE['WORD'])
+
+    # Only now: the working registers are safely in the frame, so they can be
+    # used for the vector fetch.
+    u(comment='the vector table address',
+      asrc=SRC['VBR'], bsrc=SRC['VECOFF'], alu=ALU['ADD'], dst=DST['T0'],
+      vec=vector)
+    u(comment='the vector, high word',
+      asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T1'],
+      bus=BUS['READ'], asel=ASEL['T0'], fc=FC['DATA'], size=SIZE['LONG'])
+    u(comment='and its low word',
+      asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T1_SHW'],
+      bus=BUS['READ'], asel=ASEL['T0_PLUS2'], fc=FC['DATA'], size=SIZE['LONG'])
+    refill_from(SRC['T1'])
+
+
+def faults():
+    fault_exception('buserr', 2)
+    fault_exception('addrerr', 3)
+
+    # UM 6.3.4: a bus error on an interrupt acknowledge is not a bus error.
+    # "The processor separates the processing of this error from bus error by
+    # forming a short format exception stack and fetching the spurious
+    # interrupt vector instead of the bus error vector."
+    label('spurious')
+    u(comment='the spurious interrupt vector table address',
+      asrc=SRC['VBR'], bsrc=SRC['VECOFF'], alu=ALU['ADD'], dst=DST['T0'],
+      vec=24)
+    u(comment='the program counter to stack is the instruction not run',
+      asrc=SRC['IRQPC'], alu=ALU['A'], dst=DST['T1'])
+    # The shared tail's first step is skipped, as the interrupt path skips it:
+    # the saved status register is already the one from before the mask went up.
+    u(comment='the format and vector word', goto='except_frame',
+      asrc=SRC['FMTVEC'], alu=ALU['A'], dst=DST['DBUF'], vec=24)
+
+    # UM 6.3.9.1: "the processor halts and all processing ceases. [...] Only an
+    # external reset operation can restart a halted processor." The hardware
+    # holds the micro-address here and drives HALT out; this is where it sits.
+    label('halted')
+    u(comment='double bus fault: nothing more happens', goto='halted')

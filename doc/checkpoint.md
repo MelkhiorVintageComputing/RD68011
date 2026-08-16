@@ -15,6 +15,15 @@ freezes that set. It is written in P2, before the instructions exist, because
 retrofitting it after the datapath is built is the single largest risk in the
 plan.
 
+**Built in P6, and it works.** `sim/tb/core_fault_tb.sv` is the test this
+document predicted: a `MOVEM.L (A0),D0-D3` faulting on its fifth word, handled,
+and continued with every remaining register moved and only the faulted word
+reread. Alongside it: a faulting read-modify-write rerun whole, a `MOVE.L` to
+`-(An)` whose second write faults and whose data output buffer comes back out
+of two different places in the frame, an address error, a format error on a
+frame this implementation did not write, a handler that completes the access
+itself and sets the rerun flag, and three ways of reaching the halted state.
+
 ## The frame — UM figure 6-8
 
 29 words, of which only 26 are written; three are reserved.
@@ -111,12 +120,22 @@ here or it does not exist.
 | the divider's `q`, `rem`, `den`, `count`, `neg_q`, `neg_r`, `signed_r` | A division does no bus cycle, so it cannot fault. The microcode waits on `busy` and only then goes near memory. |
 | `vbr`, `usp`, `ssp`, `regs` | Architectural. |
 
-### Reserved for the phases that need them
+### The fault machinery, added in P6
+
+| Register | Width | What it holds | Where it lands |
+|---|--:|---|---|
+| `fault_addr` | 32 | the address the faulted access used | **SP+10** |
+| `ssw` | 16 | the special status word, UM figure 6-9 | **SP+8** |
+| `dib` | 16 | the data input buffer | **SP+20** |
+| `upc_save` | 13 | the micro-address the fault interrupted | internal |
+| `cur_addr`, `cur_ssw` | 32+16 | the description of the cycle now running, so a fault has something to copy | neither: they are the source of the two above |
+| `rr_flag`, `rerun_skip` | 1+1 | the rerun flag out of a frame, and the one microword it applies to | neither |
+| `group0`, `halted` | 1+1 | inside group 0 processing; and stopped for good | neither |
+
+### Reserved for the phase that needs it
 
 | Register | Width | Arrives in | For |
 |---|--:|---|---|
-| `fault_addr` | 32 | P6 | SP+10 — the address of the faulted cycle |
-| `ssw` | 16 | P6 | SP+8 — assembled from the in-flight cycle descriptor |
 | `loop_state` | small | P7 | loop mode (UM appendix A) |
 
 ### The budget
@@ -140,8 +159,15 @@ are load-bearing:
 
 P5 spent 96 bits of the margin the P2 estimate left (`ea_latch`, the high half
 of `dbuf`, and five more bits of `upc` than were budgeted, against a 32-bit
-saving from not storing `pc`). It still fits, which is what this document
-exists to keep true; P6 is where it is spent.
+saving from not storing `pc`).
+
+**P6 spent nothing more.** Everything it added is either an architecturally
+placed field of the frame — the special status word, the fault address, the
+data input buffer — or state that does not have to survive a fault at all: the
+rerun flag lives only between RTE reading it and the microword it applies to,
+and `group0` and `halted` describe the processor rather than the instruction.
+So the internal words still hold 189 bits of the 256, with two of the sixteen
+words spare. Only loop mode is left to fit, and P7 has room.
 
 ## Rules this imposes on the microcode
 
@@ -176,3 +202,12 @@ P5 built that instruction, and built it in the shape the test needs: MOVEM's
 remaining work is exactly the contents of `xw` and `t0`, and its loop resumes
 from a single micro-address. Nothing about continuing it needs a counter that
 would have to be reconstructed.
+
+P6 ran the test. It passes, and so does everything around it, because of one
+rule the whole design turns on: **a faulted microword ends but does not
+commit**. The sequencer moves to the fault handler, and every write the
+microword would have made -- to a register, to the prefetch pipe, to an address
+register through the address unit, to the condition codes -- is suppressed. So
+the state the frame records is the state at the *start* of the access, and
+resuming at the saved micro-address re-executes the microword, which reissues
+exactly the same request. There is no separate "restart" path to get wrong.

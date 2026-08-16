@@ -61,6 +61,11 @@ module rd68011_biu #(
                                       // back must drop req_valid on this.
     output logic [15:0] req_rdata,
     output logic  [2:0] req_end,      // rd68011_pkg::cycle_end_e, valid with req_ack
+    // Valid *with* req_last rather than after it, because the sequencer has to
+    // decide on the same edge whether the microword retires normally or
+    // becomes a bus error. `req_end` is a clock later, which is too late.
+    output logic        req_fault,    // this cycle is ending in a bus error
+    output logic        req_fault_wr, // ... and it was writing when it did
 
     // -- RESET instruction ----------------------------------------------------
     input  logic        reset_req,    // pulse to start a 124-clock RESET output
@@ -357,6 +362,16 @@ module rd68011_biu #(
                      ((st_n == rd68011_pkg::ST_S19) && !term_berr) ||
                       (st_n == rd68011_pkg::ST_BE9) ||
                       (st_n == rd68011_pkg::ST_BE21)) && !term_retry;
+
+  // The bus error, reported early. `term_berr` is set at the falling-edge
+  // sampling point, well before the rising edge `req_last` names, so the
+  // sequencer can see both at once.
+  //
+  // A read-modify-write runs its read in S0-S7 and its write in S8-S19, so
+  // which half faulted is which of the two bus-error exits it takes (UM 5.4.1).
+  assign req_fault    = term_berr;
+  assign req_fault_wr = cyc_is_write ||
+                        (cyc_is_rmw && (st_n == rd68011_pkg::ST_BE21));
 
   // ---------------------------------------------------------------------------
   // State registers and the posedge-domain bookkeeping.

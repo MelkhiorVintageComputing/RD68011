@@ -65,6 +65,9 @@ SEQ = {
     'COND':   2,   # `next`, with bit 0 set if the selected condition holds
     'EACALL': 3,   # call the addressing-mode subroutine; `next` is the return
     'RET':    4,   # return to the saved address
+    # Resume a faulted instruction: the micro-address comes from the frame RTE
+    # has just reloaded, not from this microword (UM 6.4).
+    'RESUME': 5,
 }
 
 # Conditions selectable when seq is COND. Targets must be an even/odd pair.
@@ -91,6 +94,10 @@ COND = {
     # MOVES's direction bit, which is in its extension word rather than in the
     # opcode, so the microcode has to branch on it (PRM section 6).
     'XWDR': 13,
+    # RTE's two checks on a long frame (UM 6.4): the format code, and the
+    # version number stamped in the first of the sixteen internal words.
+    'FMT8': 14,
+    'VERSION': 15,
 }
 
 # Sources onto the A and B buses. Everything is 32 bits wide by the time it
@@ -153,6 +160,18 @@ SRC = {
     # (PRM section 6). The four-way decode is hardware, so the microcode does
     # not need a branch per register.
     'CREG':     36,
+    # The fault machinery. These are what the format $8 frame is built out of,
+    # and what RTE reads back to continue a faulted instruction.
+    'IR':       37,   # the opcode word, which the frame keeps internally
+    'XW':       38,   # the extension-word latch
+    'UPC':      39,   # the micro-address the fault interrupted
+    'SSW':      40,   # the special status word, UM figure 6-9
+    'FAULT':    41,   # the address the faulted access used
+    'DIB':      42,   # the data input buffer
+    'VERWORD':  43,   # our version number, in bits 10-13, and nothing else
+    'FMTVEC8':  44,   # 1000 and the vector offset: the long frame's header
+    'FRAMESZ':  45,   # 58, the long frame's size in bytes
+    'FRAMEVER': 46,   # 26, the offset of the version word within it
 }
 
 ALU = {
@@ -227,6 +246,23 @@ DST = {
     # sign-extended to all 32 bits if it is an address register -- which is
     # what PRM section 6 specifies for MOVES, in those words.
     'REG_AD':  22,
+    # The fault machinery's write side: everything the format $8 frame puts
+    # back. Each is a register the checkpoint set names -- doc/checkpoint.md.
+    'EAL':     23,
+    'IR':      24,
+    'IRC':     25,
+    'IR_PC':   26,
+    'IRC_PC':  27,
+    'XW':      28,
+    'UPCSAVE': 29,   # where RESUME will go
+    'DIB':     30,
+    'SSW':     31,   # only the rerun flag is kept; the rest is for software
+    'SRSAVE':  32,   # RTE's staging for the status register it will restore
+    # Drive the bus from this microword's ALU result without writing anything.
+    # The frame build needs it: every word it writes comes from a different
+    # register, and going through the data output buffer would destroy the one
+    # word of it the frame itself has to record.
+    'WDATA':   33,
 }
 
 # The extension-word latch.
@@ -428,11 +464,11 @@ UADDR_BITS = 13
 FIELDS = [
     ('next',  UADDR_BITS, None),
     ('seq',   3,  SEQ),
-    ('cond',  4,  COND),
+    ('cond',  5,  COND),
     ('asrc',  6,  SRC),
     ('bsrc',  6,  SRC),
     ('alu',   5,  ALU),
-    ('dst',   5,  DST),
+    ('dst',   6,  DST),
     ('bus',   3,  BUS),
     ('asel',  5,  ASEL),
     ('aupd',  3,  AUPD),
@@ -459,6 +495,12 @@ FIELDS = [
     ('mop',   2,  MOP),
     ('mdown', 1,  None),   # MOVEM to -(An) takes the mask the other way round:
                            # bit 0 is A7 rather than D0 (PRM section 4)
+    ('hb',    1,  None),   # the special status word's high-byte flag: this
+                           # transfer is the high byte of its half of the
+                           # register, which only MOVEP ever produces
+    ('g0',    1,  None),   # enter group 0 processing: a fault from here on is
+                           # a double bus fault. RTE sets it once it has
+                           # committed to reloading a long frame (UM 6.4).
 ]
 
 # Defaults for a microword that does nothing but move to the next address.
@@ -493,6 +535,8 @@ DEFAULTS = {
     'shone': 0,
     'mop':   MOP['NONE'],
     'mdown': 0,
+    'hb':    0,
+    'g0':    0,
 }
 
 # The addressing-mode dispatch index: the mode field, except that mode 7 uses

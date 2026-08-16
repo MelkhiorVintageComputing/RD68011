@@ -76,6 +76,8 @@ module rd68011_top (
   logic        req_last;
   logic [15:0] req_rdata;
   logic  [2:0] req_end;
+  logic        req_fault;
+  logic        req_fault_wr;
   logic        reset_req;
   logic        reset_busy;
   logic  [2:0] ipl_sync_n;
@@ -98,6 +100,8 @@ module rd68011_top (
       .req_last     (req_last),
       .req_rdata    (req_rdata),
       .req_end      (req_end),
+      .req_fault    (req_fault),
+      .req_fault_wr (req_fault_wr),
       .ipl_sync_n   (ipl_sync_n),
       .reset_sync_n (reset_sync_n),
       .halt_sync_n  (halt_sync_n),
@@ -122,6 +126,8 @@ module rd68011_top (
       .req_last   (req_last),
       .req_rdata  (req_rdata),
       .req_end    (req_end),
+      .req_fault  (req_fault),
+      .req_fault_wr (req_fault_wr),
 
       .reset_req  (reset_req),
       .reset_busy (reset_busy),

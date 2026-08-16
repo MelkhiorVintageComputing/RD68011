@@ -127,6 +127,27 @@ package rd68011_pkg;
   localparam logic [15:0] SR_IMPLEMENTED = 16'b1010_0111_0001_1111;
 
   // ---------------------------------------------------------------------------
+  // The format $8 frame's processor version number -- UM 6.4
+  //
+  // "This word contains a processor version number (in bits 10-13) and
+  // proprietary internal information that must match the version number of the
+  // MC68010 attempting to read the data. [...] If the version number is
+  // incorrect for this processor, the RTE instruction is aborted and exception
+  // processing begins for a format error exception."
+  //
+  // So the sixteen internal words are private to an implementation, and the
+  // architecture's own mechanism for saying so is this number. RD68011 uses
+  // its own, and refuses any frame that does not carry it -- which is exactly
+  // what the manual prescribes, and what makes doc/checkpoint.md's encoding
+  // legitimate rather than a divergence.
+  localparam logic [3:0] FRAME_VERSION = 4'hB;   // "RD68011"
+
+  // The long frame: 29 words of stack, of which 26 are written (UM figure 6-8).
+  localparam int FRAME_LONG_BYTES = 58;
+  // Where the version word sits within it.
+  localparam int FRAME_VERSION_OFF = 26;
+
+  // ---------------------------------------------------------------------------
   // Exception vector numbers -- UM Table 6-2 / PRM Appendix B
   // ---------------------------------------------------------------------------
   localparam logic [7:0] VEC_RESET_SP    = 8'd0;

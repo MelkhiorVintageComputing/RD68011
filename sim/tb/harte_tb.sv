@@ -129,6 +129,63 @@ module harte_tb;
     cap_arm <= boundary && !cap_done;
   end
 
+  // -- The address error the core takes ---------------------------------------
+  //
+  // The reference records an aborted access as its own transaction kind and
+  // notes that the real part never puts it on the bus. That is exactly what
+  // this design does, so the two can be compared: the cycles that happened
+  // before the fault, and the address the fault names.
+  logic        ae_seen;
+  logic [31:0] ae_got;
+
+  // The bus cycles, in order. Used both by an ordinary comparison and by an
+  // address-error one, where the reference's list has been cut short at the
+  // access that never reached the bus.
+  task automatic compare_cycles();
+    int i;
+    begin
+      if (ntr !== nvtr) begin
+        if (firstfail == 0) begin
+          $display("    %0d bus cycles, reference says %0d", ntr, nvtr);
+          for (i = 0; i < ntr; i = i + 1) begin
+            $display("      ours %0d: %s fc=%0d %06h", i,
+                     tr_rw[i] ? "read " : "write", tr_fc[i],
+                     {tr_addr[i], 1'b0});
+          end
+          for (i = 0; i < nvtr; i = i + 1) begin
+            $display("      ref  %0d: %s fc=%0d %06h", i,
+                     (vtr_k[i] == 2) ? "read " : "write", vtr_fc[i],
+                     {vtr_a[i], 1'b0});
+          end
+        end
+        ok = 1'b0;
+      end else begin
+        for (i = 0; i < ntr; i = i + 1) begin
+          if (tr_addr[i] !== vtr_a[i] || tr_fc[i] !== vtr_fc[i][2:0] ||
+              tr_rw[i] !== (vtr_k[i] == 2)) begin
+            if (firstfail == 0) begin
+              $display("    cycle %0d: %s fc=%0d %06h, ref %s fc=%0d %06h",
+                       i, tr_rw[i] ? "read " : "write", tr_fc[i],
+                       {tr_addr[i], 1'b0},
+                       (vtr_k[i] == 2) ? "read " : "write", vtr_fc[i],
+                       {vtr_a[i], 1'b0});
+            end
+            ok = 1'b0;
+          end
+        end
+      end
+    end
+  endtask
+
+  always @(posedge clk) begin
+    if (!rst_n) begin
+      ae_seen <= 1'b0;
+    end else if (dut.u_seq.fault && dut.u_seq.addr_err_q && !ae_seen) begin
+      ae_seen <= 1'b1;
+      ae_got  <= dut.u_seq.cur_addr;
+    end
+  end
+
   // -- Transaction recorder ---------------------------------------------------
   int          ntr;
   logic [23:1] tr_addr [0:MAXTR-1];
@@ -149,7 +206,7 @@ module harte_tb;
     ntr = 0;
     forever begin
       @(posedge ds_active);
-      if (ntr < MAXTR && !cap_arm && !cap_done) begin
+      if (ntr < MAXTR && !cap_arm && !cap_done && !ae_seen) begin
         tr_addr[ntr] = a_o;
         tr_fc[ntr]   = fc_o;
         tr_rw[ntr]   = rw_o;
@@ -171,6 +228,10 @@ module harte_tb;
   logic [31:0] freg [0:18];
   logic [15:0] ipf0, ipf1, fpf0, fpf1;
   int          nram, nfram, nvtr;
+  logic        addrerr;
+  logic        clr_adj;
+  logic [31:0] ae_want;
+  int          nae;
   logic [22:0] ram_a  [0:MAXRAM-1];
   logic [15:0] ram_d  [0:MAXRAM-1];
   logic [22:0] fram_a [0:MAXRAM-1];
@@ -300,7 +361,7 @@ module harte_tb;
     if (limit != 0 && limit < ntests) ntests = limit;
 
     nfail = 0; npass = 0; nskip = 0; firstfail = 0;
-    ndiverge = 0; nunimpl = 0;
+    ndiverge = 0; nunimpl = 0; nae = 0;
 
     for (t = 0; t < ntests; t = t + 1) begin
       read_test();
@@ -315,6 +376,7 @@ module harte_tb;
       // the reference's operand read -- the only data-space read a CLR does --
       // is removed, and the write, the flags and the final state are compared
       // as usual. See doc/divergences.md.
+      clr_adj = 1'b0;
       if (((ipf0 & 16'hFF00) == 16'h4200) && (ipf0[5:3] != 3'b000) &&
           (ipf0[7:6] != 2'b11)) begin
         j = 0;
@@ -329,6 +391,29 @@ module harte_tb;
         if (j != nvtr) begin
           nvtr     = j;
           ndiverge = ndiverge + 1;
+          clr_adj  = 1'b1;
+        end
+      end
+
+      // An address error. The reference marks the aborted access with its own
+      // transaction kind and stops there as far as the bus is concerned -- the
+      // frame it then pushes is an MC68000's seven-word one and cannot be
+      // compared with our twenty-nine. What can be compared, and is, is
+      // everything up to the fault: the cycles that ran before it and the
+      // address it names. That is the whole of the question an address error
+      // asks -- was it detected at the same point of the same instruction --
+      // and it is checked here across every mode of every instruction rather
+      // than in a handful of directed cases.
+      addrerr = 1'b0;
+      ae_want = 32'd0;
+      for (i = 0; i < nvtr; i = i + 1) begin
+        if ((vtr_k[i] >= 4) && !addrerr) begin
+          addrerr = 1'b1;
+          // The exported address has lost its low bit, so the comparison
+          // below is on the word address -- which is what says whether the
+          // fault was detected on the same access.
+          ae_want = {8'd0, vtr_a[i], 1'b0};
+          nvtr    = i;              // the aborted access is not a bus cycle
         end
       end
 
@@ -336,12 +421,6 @@ module harte_tb;
       // exercises something not built yet. Skipped, and counted.
       skipped = 1'b0;
       why     = "";
-      for (i = 0; i < nvtr; i = i + 1) begin
-        if (vtr_k[i] >= 4) begin
-          skipped = 1'b1;
-          why     = "address error: exception processing is P4";
-        end
-      end
       if (tb_skip(ipf0, ireg[17][15:0])) begin
         skipped = 1'b1;
         why     = "documented MC68000/MC68010 divergence";
@@ -392,9 +471,10 @@ module harte_tb;
         load_state();
         ntr = 0;
 
-        // Run until the instruction is complete, or give up.
+        // Run until the instruction is complete -- or, for a test the
+        // reference address-errored, until this core does too.
         r = 0;
-        while (r < 400 && !cap_done) begin
+        while (r < 400 && !cap_done && !(addrerr && ae_seen)) begin
           @(posedge clk);
           #1;
           r = r + 1;
@@ -406,7 +486,30 @@ module harte_tb;
         rst_n = 1'b0;
 
         ok = 1'b1;
-        if (!cap_done) begin
+        if (addrerr) begin
+          nae = nae + 1;
+          if (!ae_seen) begin
+            if (firstfail == 0) begin
+              $display("  test %0d: no address error; reference faulted at %08h",
+                       idx, ae_want);
+            end
+            ok = 1'b0;
+          end else if (!clr_adj && ({8'd0, ae_got[23:1], 1'b0} !== ae_want)) begin
+            if (firstfail == 0) begin
+              $display("    address error at %08h, reference says %08h",
+                       {8'd0, ae_got[23:1], 1'b0}, ae_want);
+            end
+            ok = 1'b0;
+          end
+          // Not for CLR, where neither the list nor the address can be
+          // compared. The MC68000 address-errors on the operand read that an
+          // MC68010 does not make: it faults one prefetch earlier, and on a
+          // long it faults at the base address where this faults at base+2,
+          // because the write it makes instead goes low word first. What is
+          // left to check is that the fault happened at all, which is checked
+          // above; doc/divergences.md records the rest.
+          if (!clr_adj) compare_cycles();
+        end else if (!cap_done) begin
           if (firstfail == 0) $display("  test %0d: did not finish", idx);
           ok = 1'b0;
         end else begin
@@ -457,37 +560,7 @@ module harte_tb;
               ok = 1'b0;
             end
           end
-          // The bus cycles, in order.
-          if (ntr !== nvtr) begin
-            if (firstfail == 0) begin
-              $display("    %0d bus cycles, reference says %0d", ntr, nvtr);
-              for (i = 0; i < ntr; i = i + 1) begin
-                $display("      ours %0d: %s fc=%0d %06h", i,
-                         tr_rw[i] ? "read " : "write", tr_fc[i],
-                         {tr_addr[i], 1'b0});
-              end
-              for (i = 0; i < nvtr; i = i + 1) begin
-                $display("      ref  %0d: %s fc=%0d %06h", i,
-                         (vtr_k[i] == 2) ? "read " : "write", vtr_fc[i],
-                         {vtr_a[i], 1'b0});
-              end
-            end
-            ok = 1'b0;
-          end else begin
-            for (i = 0; i < ntr; i = i + 1) begin
-              if (tr_addr[i] !== vtr_a[i] || tr_fc[i] !== vtr_fc[i][2:0] ||
-                  tr_rw[i] !== (vtr_k[i] == 2)) begin
-                if (firstfail == 0) begin
-                  $display("    cycle %0d: %s fc=%0d %06h, ref %s fc=%0d %06h",
-                           i, tr_rw[i] ? "read " : "write", tr_fc[i],
-                           {tr_addr[i], 1'b0},
-                           (vtr_k[i] == 2) ? "read " : "write", vtr_fc[i],
-                           {vtr_a[i], 1'b0});
-                end
-                ok = 1'b0;
-              end
-            end
-          end
+          compare_cycles();
         end
 
         if (ok) begin
@@ -514,6 +587,10 @@ module harte_tb;
     $fclose(fh);
     $display("%s: %0d passed, %0d failed, %0d skipped (of %0d)",
              vecfile, npass, nfail, nskip, ntests);
+    if (nae > 0) begin
+      $display("  of those, %0d are address errors: compared up to the fault",
+               nae);
+    end
     if (nskip > 0) begin
       $display("  skipped: %0d not implemented, %0d needing exceptions",
                nunimpl, nskip - nunimpl);

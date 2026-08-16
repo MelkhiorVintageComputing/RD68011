@@ -27,8 +27,10 @@
   logic        as_n_o, as_oe, rw_o, rw_oe, uds_n_o, lds_n_o, ds_oe;
   logic        dtack_n_i, br_n_i, bg_n_o, bgack_n_i;
   logic  [2:0] ipl_n_i;
-  logic        berr_n_i, reset_n_i, reset_n_o, reset_n_oe;
-  logic        halt_n_i, halt_n_o, halt_n_oe;
+  logic        reset_n_i, reset_n_o, reset_n_oe;
+  logic        halt_n_o, halt_n_oe;
+  wire         berr_n_i;
+  wire         halt_n_i;
   logic        e_o, vpa_n_i, vma_n_o, vma_oe;
   logic  [2:0] fc_o;
   logic        fc_oe;
@@ -58,7 +60,7 @@
   assign dbus = d_oe     ? d_o       : 16'bz;
   assign dbus = mem_d_oe ? mem_d_out : 16'bz;
   // The interrupting device puts its vector number on the low byte.
-  assign dbus = (is_iack && !iack_auto) ? {8'h00, iack_vector} : 16'bz;
+  assign dbus = (is_iack && !iack_auto && !iack_berr) ? {8'h00, iack_vector} : 16'bz;
   assign d_i  = dbus;
 
   wire [23:1] abus;
@@ -74,8 +76,12 @@
   wire        is_iack;
   assign is_iack = !as_n_o && (fc_o == 3'b111);
 
-  assign dtack_n_i = mem_dtack_n & ~(is_iack && !iack_auto);
-  assign vpa_n_i   = mem_vpa_n   & ~(is_iack &&  iack_auto);
+  // With `iack_berr` set, nothing answers the acknowledge cycle and BERR
+  // terminates it -- which UM 6.3.4 makes a spurious interrupt, not a bus
+  // error.
+  logic iack_berr;
+  assign dtack_n_i = mem_dtack_n & ~(is_iack && !iack_auto && !iack_berr);
+  assign vpa_n_i   = mem_vpa_n   & ~(is_iack &&  iack_auto && !iack_berr);
 
   rd68011_slave #(.ADDR_BITS (14), .BASE (23'h000000), .MASK (23'h400000)) mem (
       .clk (clk), .rst_n (rst_n),
@@ -85,6 +91,28 @@
       .d_in (dbus), .d_out (mem_d_out), .d_oe (mem_d_oe),
       .dtack_n (mem_dtack_n), .vpa_n (mem_vpa_n)
   );
+
+  // -- Fault injection --------------------------------------------------------
+  //
+  // One address that answers with BERR instead of, or as well as, the memory's
+  // DTACK -- which is how a bus error is provoked without a second memory
+  // model. With `berr_retry` set it answers BERR and HALT together, which UM
+  // 5.4.2 makes a rerun request rather than an error.
+  //
+  // `berr_count` counts the cycles that hit it, so a test can arrange for the
+  // fault to happen once and the handler's own accesses to go through.
+  logic        berr_en;
+  logic [23:1] berr_addr;
+  logic        berr_retry;
+  logic        tb_halt_n;
+  int          berr_count;
+  wire         berr_hit;
+
+  assign berr_hit = berr_en && !as_n_o && (a_o == berr_addr);
+  assign berr_n_i = !(berr_hit || (iack_berr && is_iack));
+  assign halt_n_i = tb_halt_n && !(berr_hit && berr_retry);
+
+  always @(negedge as_n_o) if (berr_hit) berr_count = berr_count + 1;
 
   // -- Clock and watchdog -----------------------------------------------------
   initial begin
@@ -227,11 +255,15 @@
       mem_m6800  = 1'b0;
       br_n_i      = 1'b1;
       iack_auto   = 1'b1;
+      iack_berr   = 1'b0;
       iack_vector = 8'd64;
       bgack_n_i  = 1'b1;
       ipl_n_i    = 3'b111;
-      berr_n_i   = 1'b1;
-      halt_n_i   = 1'b1;
+      berr_en    = 1'b0;
+      berr_addr  = 23'd0;
+      berr_retry = 1'b0;
+      berr_count = 0;
+      tb_halt_n  = 1'b1;
       // RESET and HALT asserted together is what resets the processor
       // (UM 5.5); the sequencer sits at its reset entry point until they go.
       reset_n_i  = 1'b0;

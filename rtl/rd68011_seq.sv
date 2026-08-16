@@ -23,9 +23,14 @@
 // and a taken branch is two internal microwords and two prefetches and costs
 // ten. Both match the reference vectors.
 //
-// NOT YET HERE: condition codes, exceptions, interrupts, address error
-// detection, and the register selection that reads the opcode's register
-// fields. Those arrive with the instructions that need them.
+// FAULTS
+//
+// A bus error or an address error ends the microword it hits without
+// committing any of it: no register write, no prefetch, no address-register
+// update, no condition code. That one rule is what makes continuation work --
+// the state the format $8 frame records is the state at the *start* of the
+// faulted access, so resuming at the saved micro-address re-executes the
+// microword and reissues exactly the same request. See doc/checkpoint.md.
 
 module rd68011_seq (
     input  logic        clk,
@@ -43,6 +48,8 @@ module rd68011_seq (
     input  logic        req_last,
     input  logic [15:0] req_rdata,
     input  logic  [2:0] req_end,
+    input  logic        req_fault,
+    input  logic        req_fault_wr,
 
     input  logic  [2:0] ipl_sync_n,
     input  logic        reset_sync_n,
@@ -114,6 +121,34 @@ module rd68011_seq (
   logic [15:0] mlow_bit;
   logic  [3:0] mreg;
 
+  // ---------------------------------------------------------------------------
+  // The fault machinery -- UM 5.4 and 6.3
+  //
+  // A bus error is reported by the bus unit; an address error is this design's
+  // own, raised when a word transfer would go to an odd address. Either aborts
+  // the microword -- nothing it would have written is written -- and redirects
+  // the sequencer, so the state the format $8 frame records is the state at
+  // the *start* of the faulted microword. That is what makes RTE able to rerun
+  // the cycle and carry on: resuming at the saved micro-address re-executes
+  // the microword, which reissues exactly the same request.
+  // ---------------------------------------------------------------------------
+  logic [15:0] ssw;          // the special status word, UM figure 6-9
+  logic [31:0] fault_addr;   // the address the faulted access used
+  logic [15:0] dib;          // the data input buffer
+  logic [rd68011_ucode_pkg::UADDR-1:0] upc_save;
+  logic        rr_flag;      // the rerun flag RTE read out of a frame
+  logic        rerun_skip;   // ... applied to the one microword it resumes
+  logic        group0;       // inside reset or fault exception processing
+  logic        halted;       // a double bus fault happened; nothing continues
+  logic        addr_err_q;   // the microword now current is an address error
+
+  // The address and the description of the cycle now running, kept so that a
+  // fault has something to record. Both are latched as a bus microword becomes
+  // current and hold until the next one does, which is the frame build -- by
+  // which time they have been copied into `fault_addr` and `ssw`.
+  logic [31:0] cur_addr;
+  logic [15:0] cur_ssw;
+
   // The MC68010's function code registers, which MOVES uses to reach an
   // address space of the program's choosing. Three bits each; MOVEC reads
   // them back zero-extended to 32, "unimplemented bits are read as zeros"
@@ -180,9 +215,30 @@ module rd68011_seq (
   // ===========================================================================
   logic retire;
   logic bus_busy;
+  logic fault;        // this microword is ending in a fault, not normally
+  logic bus_err;
 
   assign bus_busy = (f_bus != rd68011_ucode_pkg::U_BUS_NONE);
-  assign retire   = !bus_busy || req_last;
+  assign bus_err  = bus_busy && req_last && req_fault;
+  assign fault    = bus_err || addr_err_q;
+
+  // An address error's cycle never starts, so there is no req_last to wait
+  // for; a microword resumed with the rerun flag set has had its access done
+  // in software, so there is none either. Both end the microword here.
+  assign retire   = !bus_busy || req_last || addr_err_q || rerun_skip;
+
+  // Retiring and committing are not the same thing once faults exist. A
+  // faulted microword ends -- the sequencer moves on to the fault handler --
+  // but nothing it would have written is written, which is what leaves the
+  // machine in the state the format $8 frame records and RTE can resume from.
+  logic commit;
+  assign commit = retire && !fault;
+
+  // What the datapath reads as this cycle's data. Normally the bus unit's; on
+  // a resumed microword whose access software already completed, the data
+  // input buffer RTE restored (UM 6.3.9.2).
+  logic [15:0] rdata;
+  assign rdata = rerun_skip ? dib : req_rdata;
 
   // ===========================================================================
   // Prefetch pipe
@@ -198,10 +254,24 @@ module rd68011_seq (
 
   // ir takes the *old* irc, so an advance and a fetch in the same microword
   // shift the pipe along by one rather than colliding.
-  assign ir_nxt     = (retire && pf_adv)   ? irc       : ir;
-  assign ir_pc_nxt  = (retire && pf_adv)   ? irc_pc    : ir_pc;
-  assign irc_nxt    = (retire && pf_fetch) ? req_rdata : irc;
-  assign irc_pc_nxt = (retire && pf_fetch) ? pc        : irc_pc;
+  //
+  // RTE reloading a long frame writes all four directly, which is the only
+  // thing here that is not the pipe moving along by itself.
+  always_comb begin
+    ir_nxt     = (commit && pf_adv)   ? irc       : ir;
+    ir_pc_nxt  = (commit && pf_adv)   ? irc_pc    : ir_pc;
+    irc_nxt    = (commit && pf_fetch) ? rdata     : irc;
+    irc_pc_nxt = (commit && pf_fetch) ? pc        : irc_pc;
+    if (commit) begin
+      unique case (f_dst)
+        rd68011_ucode_pkg::U_DST_IR:     ir_nxt     = y[15:0];
+        rd68011_ucode_pkg::U_DST_IRC:    irc_nxt    = y[15:0];
+        rd68011_ucode_pkg::U_DST_IR_PC:  ir_pc_nxt  = y;
+        rd68011_ucode_pkg::U_DST_IRC_PC: irc_pc_nxt = y;
+        default: ;
+      endcase
+    end
+  end
 
   // ===========================================================================
   // Decode
@@ -229,7 +299,7 @@ module rd68011_seq (
   // UM table 3-1: a byte at an even address arrives on D15-D8 and one at an
   // odd address on D7-D0. The address's low bit is the only thing that decides
   // it, so the microcode never has to know how an address turned out.
-  assign rdata_byte = addr_lsb ? req_rdata[7:0] : req_rdata[15:8];
+  assign rdata_byte = addr_lsb ? rdata[7:0] : rdata[15:8];
 
   // The index register of a brief extension word (PRM section 2). Bit 15 picks
   // data or address, bits 14-12 the number, and bit 11 selects the whole
@@ -382,10 +452,25 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_ASRC_IR_SXB:   a_bus = {{24{ir[7]}}, ir[7:0]};
       rd68011_ucode_pkg::U_ASRC_T0:       a_bus = t0;
       rd68011_ucode_pkg::U_ASRC_T1:       a_bus = t1;
-      rd68011_ucode_pkg::U_ASRC_RDATA:    a_bus = {16'd0, req_rdata};
-      rd68011_ucode_pkg::U_ASRC_RDATA_SX: a_bus = {{16{req_rdata[15]}}, req_rdata};
+      rd68011_ucode_pkg::U_ASRC_RDATA:    a_bus = {16'd0, rdata};
+      rd68011_ucode_pkg::U_ASRC_RDATA_SX: a_bus = {{16{rdata[15]}}, rdata};
       rd68011_ucode_pkg::U_ASRC_REG:      a_bus = `RDREG(reg_index);
       rd68011_ucode_pkg::U_ASRC_CREG:     a_bus = creg_val;
+      rd68011_ucode_pkg::U_ASRC_IR:       a_bus = {16'd0, ir};
+      rd68011_ucode_pkg::U_ASRC_XW:       a_bus = {16'd0, xw};
+      rd68011_ucode_pkg::U_ASRC_UPC:      a_bus = {{(32 - rd68011_ucode_pkg::UADDR){1'b0}},
+                                                   upc_save};
+      rd68011_ucode_pkg::U_ASRC_SSW:      a_bus = {16'd0, ssw};
+      rd68011_ucode_pkg::U_ASRC_FAULT:    a_bus = fault_addr;
+      rd68011_ucode_pkg::U_ASRC_DIB:      a_bus = {16'd0, dib};
+      rd68011_ucode_pkg::U_ASRC_VERWORD:  a_bus = {18'd0, rd68011_pkg::FRAME_VERSION,
+                                                   10'd0};
+      // Format in bits 15-12, the vector offset -- the vector number times
+      // four -- in the twelve below it (UM figure 6-8).
+      rd68011_ucode_pkg::U_ASRC_FMTVEC8:  a_bus = {16'd0, 4'h8, 2'd0, vec_num,
+                                                   2'd0};
+      rd68011_ucode_pkg::U_ASRC_FRAMESZ:  a_bus = 32'd58;
+      rd68011_ucode_pkg::U_ASRC_FRAMEVER: a_bus = 32'd26;
       rd68011_ucode_pkg::U_ASRC_RDATA_B:  a_bus = {24'd0, rdata_byte};
       rd68011_ucode_pkg::U_ASRC_INDEX:    a_bus = index_val;
       rd68011_ucode_pkg::U_ASRC_IRC_SXB:  a_bus = {{24{irc[7]}}, irc[7:0]};
@@ -424,8 +509,8 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_BSRC_IR_SXB:   b_bus = {{24{ir[7]}}, ir[7:0]};
       rd68011_ucode_pkg::U_BSRC_T0:       b_bus = t0;
       rd68011_ucode_pkg::U_BSRC_T1:       b_bus = t1;
-      rd68011_ucode_pkg::U_BSRC_RDATA:    b_bus = {16'd0, req_rdata};
-      rd68011_ucode_pkg::U_BSRC_RDATA_SX: b_bus = {{16{req_rdata[15]}}, req_rdata};
+      rd68011_ucode_pkg::U_BSRC_RDATA:    b_bus = {16'd0, rdata};
+      rd68011_ucode_pkg::U_BSRC_RDATA_SX: b_bus = {{16{rdata[15]}}, rdata};
       rd68011_ucode_pkg::U_BSRC_REG:      b_bus = `RDREG(reg_index);
       rd68011_ucode_pkg::U_BSRC_RDATA_B:  b_bus = {24'd0, rdata_byte};
       rd68011_ucode_pkg::U_BSRC_INDEX:    b_bus = index_val;
@@ -557,7 +642,7 @@ module rd68011_seq (
   rd68011_divider u_divider (
       .clk       (clk),
       .rst_n     (rst_n),
-      .start     (retire && `UF(uw, DIVST)),
+      .start     (commit && `UF(uw, DIVST)),
       .is_signed (`UF(uw, DIVSG)),
       .dividend  (b_bus),
       .divisor   (a_bus[15:0]),
@@ -712,7 +797,7 @@ module rd68011_seq (
     //
     // Only the base form latches, not EA_PLUS2, so the second word of a long
     // transfer leaves the base intact for the write that follows.
-    ea_latch_nxt = (retire &&
+    ea_latch_nxt = (commit &&
                     ((f_aupd != rd68011_ucode_pkg::U_AUPD_NONE) ||
                      (bus_busy && (f_asel == rd68011_ucode_pkg::U_ASEL_EA))))
                      ? ea_used : ea_latch;
@@ -720,7 +805,7 @@ module rd68011_seq (
     reg_wdata = y;
     reg_we    = 1'b0;
 
-    if (retire) begin
+    if (commit) begin
       // A prefetch advances pc by one word.
       if (pf_fetch) pc_nxt = pc + 32'd2;
 
@@ -744,6 +829,11 @@ module rd68011_seq (
         rd68011_ucode_pkg::U_DST_T0_HIW:  t0_nxt   = {y[15:0], t0[15:0]};
         rd68011_ucode_pkg::U_DST_T1_HIW:  t1_nxt   = {y[15:0], t1[15:0]};
         rd68011_ucode_pkg::U_DST_DBUF_SHW: dbuf_nxt = {dbuf[15:0], y[15:0]};
+        // The fault machinery's write side: the rest of what RTE puts back
+        // out of a format $8 frame. ir, irc and their addresses are written
+        // with the prefetch pipe above; the registers below the case are
+        // written in the register block.
+        rd68011_ucode_pkg::U_DST_EAL:    ea_latch_nxt = y;
         // UM table 3-1's footnote: a byte write drives the byte on both
         // halves of the bus and lets the strobe decide which lands. Doing the
         // duplication here means it holds however the buffer is read back.
@@ -814,7 +904,7 @@ module rd68011_seq (
   // ===========================================================================
   always_comb begin
     sr_nxt = sr;
-    if (retire) begin
+    if (commit) begin
       unique case (f_ccr)
         rd68011_ucode_pkg::U_CCR_LOGIC: begin
           sr_nxt[rd68011_pkg::SR_N] = n_flag;
@@ -915,7 +1005,7 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_COND_V:     cond_true = sr[rd68011_pkg::SR_V];
       // UM 6.4: RTE checks the frame's format code before it commits to
       // anything, and raises a format error on one it does not know.
-      rd68011_ucode_pkg::U_COND_FMT0:  cond_true = (req_rdata[15:12] == 4'h0);
+      rd68011_ucode_pkg::U_COND_FMT0:  cond_true = (rdata[15:12] == 4'h0);
       rd68011_ucode_pkg::U_COND_N:     cond_true = n_flag;
       rd68011_ucode_pkg::U_COND_RSTB:  cond_true = reset_busy;
       rd68011_ucode_pkg::U_COND_ZERO:  cond_true = z_flag;
@@ -924,6 +1014,12 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_COND_CRVALID: cond_true = creg_valid;
       rd68011_ucode_pkg::U_COND_XWDR:  cond_true = xw_after[11];
       rd68011_ucode_pkg::U_COND_DIVV:  cond_true = div_ovf;
+      rd68011_ucode_pkg::U_COND_FMT8:  cond_true = (rdata[15:12] == 4'h8);
+      // UM 6.4's second check: the version number stamped into the first of
+      // the sixteen internal words has to be ours, or the frame was written by
+      // a different implementation and cannot be interpreted.
+      rd68011_ucode_pkg::U_COND_VERSION:
+        cond_true = (rdata[13:10] == rd68011_pkg::FRAME_VERSION);
       default:                         cond_true = 1'b0;
     endcase
   end
@@ -966,8 +1062,34 @@ module rd68011_seq (
   assign take_trace = trace_armed &&
                       (f_seq == rd68011_ucode_pkg::U_SEQ_DECODE);
 
+  // Where a fault goes. UM 6.3.9.1: a fault during the exception processing
+  // of a reset, a bus error or an address error is a double bus fault and the
+  // processor halts -- "this halt simplifies the detection of a catastrophic
+  // system failure, since the processor removes itself from the system to
+  // protect memory contents from erroneous accesses".
+  //
+  // UM 6.3.4 carves out one case: a bus error on an interrupt acknowledge is
+  // not a bus error at all but a spurious interrupt, with a short frame and
+  // vector 24.
+  logic [rd68011_ucode_pkg::UADDR-1:0] fault_entry;
+  logic dbl_fault;
+
+  logic spurious_int;
+  assign spurious_int = bus_err && (f_bus == rd68011_ucode_pkg::U_BUS_IACK);
+  assign dbl_fault    = fault && group0 && !spurious_int;
+
+  always_comb begin
+    if      (dbl_fault)    fault_entry = rd68011_ucode_pkg::ENTRY_HALTED;
+    else if (spurious_int) fault_entry = rd68011_ucode_pkg::ENTRY_SPURIOUS;
+    else if (addr_err_q)   fault_entry = rd68011_ucode_pkg::ENTRY_ADDRERR;
+    else                   fault_entry = rd68011_ucode_pkg::ENTRY_BUSERR;
+  end
+
   assign upc_nxt = !reset_sync_n ? rd68011_ucode_pkg::ENTRY_RESET
+                 : halted        ? rd68011_ucode_pkg::ENTRY_HALTED
+                 : fault         ? fault_entry
                  : !retire       ? upc
+                 : (f_seq == rd68011_ucode_pkg::U_SEQ_RESUME) ? upc_save
                  : take_trace    ? rd68011_ucode_pkg::ENTRY_TRACE
                  : take_irq      ? rd68011_ucode_pkg::ENTRY_INTERRUPT
                  : `UF(uw, STOP) ? upc
@@ -1011,7 +1133,7 @@ module rd68011_seq (
   // this same microword, and letting the bypass through would hand (An)+ its
   // own incremented value as the address -- addressing An+2 instead of An.
   assign n_ea_base = (reg_we && (wreg_index == n_ea_areg))          ? reg_wdata
-                   : (retire && aupd_we && (ea_areg == n_ea_areg))  ? ea_updated
+                   : (commit && aupd_we && (ea_areg == n_ea_areg))  ? ea_updated
                    : `RDREG(n_ea_areg);
 
   always_comb begin
@@ -1089,7 +1211,32 @@ module rd68011_seq (
     end
   end
 
-  assign req_valid = (n_bus != rd68011_ucode_pkg::U_BUS_NONE) && reset_sync_n;
+  // The address error -- UM 6.3.10: "an address error exception occurs when
+  // the processor attempts to access a word or long-word operand or an
+  // instruction at an odd address". Caught here rather than in the bus unit,
+  // on the request as it is presented, so the cycle is aborted before it
+  // starts and no strobe ever reaches the pins.
+  //
+  // A byte transfer picks its strobe from the low bit and is never an error,
+  // and CPU space is exempt: an interrupt acknowledge drives ones on every
+  // address line by definition (UM 5.1.4).
+  logic n_addr_err;
+  assign n_addr_err = (n_bus != rd68011_ucode_pkg::U_BUS_NONE) &&
+                      (n_size != rd68011_ucode_pkg::U_SIZE_BYTE) &&
+                      (n_fc   != rd68011_ucode_pkg::U_FC_CPU) &&
+                      n_addr[0] && !halted;
+
+  // A microword whose access software already completed asks for nothing. The
+  // decision has to be made on the edge the request is presented, which for
+  // the first such microword is the edge RESUME retires on -- one before
+  // `rerun_skip` itself is set, so the flag it will take is what counts here.
+  logic skip_next;
+  assign skip_next = rerun_skip ||
+                     (retire && (f_seq == rd68011_ucode_pkg::U_SEQ_RESUME) &&
+                      rr_flag);
+
+  assign req_valid = (n_bus != rd68011_ucode_pkg::U_BUS_NONE) && reset_sync_n &&
+                     !n_addr_err && !skip_next && !halted;
   assign req_kind  = n_bus;
   assign req_addr  = n_addr[23:1];
   // The write data comes from the microword that is issuing the write, not
@@ -1108,15 +1255,72 @@ module rd68011_seq (
       req_wdata = (f_size == rd68011_ucode_pkg::U_SIZE_BYTE)
                     ? {y[7:0], y[7:0]}
                     : (`UF(uw, DHI) ? y[31:16] : y[15:0]);
+    end else if (f_dst == rd68011_ucode_pkg::U_DST_WDATA) begin
+      // Straight from the ALU, writing nothing. The format $8 frame is built
+      // with this: twenty-six words from twenty-six different registers, one
+      // of which is the data output buffer itself, so routing them through it
+      // would destroy the very word the frame has to record.
+      req_wdata = `UF(uw, DHI) ? y[31:16] : y[15:0];
     end else begin
       req_wdata = `UF(uw, DHI) ? dbuf[31:16] : dbuf[15:0];
     end
   end
 
+  // ---------------------------------------------------------------------------
+  // What a fault would have to record -- UM figure 6-9
+  //
+  // Built from the microword that is about to become current, alongside the
+  // request itself, and latched with it: by the time the frame is being
+  // written the bus is busy with the frame's own cycles, so the description
+  // has to have been kept.
+  //
+  //   IF  the access loads the instruction input buffer -- a prefetch
+  //   DF  the access loads the data input buffer -- anything the datapath reads
+  //   RM  the access is part of a read-modify-write
+  //   HB  the byte moved is the high byte of its half of the register, which
+  //       only MOVEP ever produces
+  //   BY  a byte transfer
+  //   RW  1 read, 0 write
+  // ---------------------------------------------------------------------------
+  logic n_reads_data, n_ssw_if, n_ssw_df, n_is_read;
+  logic [rd68011_ucode_pkg::U_ASRC_W-1:0] n_asrc;
+  logic [rd68011_ucode_pkg::U_BSRC_W-1:0] n_bsrc;
+  logic [rd68011_ucode_pkg::U_PF_W-1:0]   n_pf;
+
+  assign n_asrc = `UF(uw_nxt, ASRC);
+  assign n_bsrc = `UF(uw_nxt, BSRC);
+  assign n_pf   = `UF(uw_nxt, PF);
+
+  function automatic logic is_rdata_src(input logic [5:0] sel);
+    is_rdata_src = (sel == rd68011_ucode_pkg::U_ASRC_RDATA) ||
+                   (sel == rd68011_ucode_pkg::U_ASRC_RDATA_SX) ||
+                   (sel == rd68011_ucode_pkg::U_ASRC_RDATA_B);
+  endfunction
+
+  assign n_reads_data = is_rdata_src(n_asrc) || is_rdata_src(n_bsrc);
+  assign n_is_read    = (n_bus == rd68011_ucode_pkg::U_BUS_READ) ||
+                        (n_bus == rd68011_ucode_pkg::U_BUS_RMW)  ||
+                        (n_bus == rd68011_ucode_pkg::U_BUS_IACK) ||
+                        (n_bus == rd68011_ucode_pkg::U_BUS_BKPT);
+  assign n_ssw_if = n_is_read &&
+                    ((n_pf == rd68011_ucode_pkg::U_PF_FETCH) ||
+                     (n_pf == rd68011_ucode_pkg::U_PF_ADVFETCH));
+  assign n_ssw_df = n_is_read && n_reads_data;
+
+  logic [15:0] n_ssw;
+  assign n_ssw = {1'b0,                                       // RR, set by software
+                  1'b0,
+                  n_ssw_if, n_ssw_df,
+                  (n_bus == rd68011_ucode_pkg::U_BUS_RMW),    // RM
+                  `UF(uw_nxt, HB),                            // HB
+                  (n_size == rd68011_ucode_pkg::U_SIZE_BYTE), // BY
+                  n_is_read,                                  // RW
+                  5'd0, req_fc};
+
   // The RESET instruction's output pulse, started by the microcode and timed
-  // by the bus unit (UM 5.5). Double bus fault detection is P6.
-  assign reset_req = retire && `UF(uw, RSTREQ);
-  assign dbf       = 1'b0;
+  // by the bus unit (UM 5.5), and the double bus fault's HALT output.
+  assign reset_req = commit && `UF(uw, RSTREQ);
+  assign dbf       = halted;
 
   // ===========================================================================
   // Registers
@@ -1139,6 +1343,17 @@ module rd68011_seq (
       sfc      <= 3'd0;
       dfc      <= 3'd0;
       sr_save  <= 16'd0;
+      ssw        <= 16'd0;
+      fault_addr <= 32'd0;
+      dib        <= 16'd0;
+      upc_save   <= '0;
+      rr_flag    <= 1'b0;
+      rerun_skip <= 1'b0;
+      group0     <= 1'b0;
+      halted     <= 1'b0;
+      addr_err_q <= 1'b0;
+      cur_addr   <= 32'd0;
+      cur_ssw    <= 16'd0;
       irq_taken   <= 3'd0;
       trace_armed <= 1'b0;
       irq_from_stop <= 1'b0;
@@ -1166,32 +1381,105 @@ module rd68011_seq (
       t1       <= t1_nxt;
       ea_latch <= ea_latch_nxt;
       dbuf   <= dbuf_nxt;
-      if (retire) xw <= xw_after;
+      if (commit) xw <= xw_after;
       // Both ways into exception processing keep the old status register for
       // the frame: the interrupt path raises the mask as well, but it still
       // has to stack what was there before.
-      if (retire && ((f_dst == rd68011_ucode_pkg::U_DST_SR_EXC) ||
+      if (commit && ((f_dst == rd68011_ucode_pkg::U_DST_SR_EXC) ||
                      (f_dst == rd68011_ucode_pkg::U_DST_SR_IRQ))) begin
         sr_save <= sr;
       end
       // The level is latched as the interrupt is taken: it has to survive the
       // acknowledge cycle, which is what decides the vector.
-      if (retire && take_irq) begin
+      if (commit && take_irq) begin
         irq_taken     <= irq_level;
         irq_from_stop <= `UF(uw, STOP);
       end
-      if (retire && (f_seq == rd68011_ucode_pkg::U_SEQ_DECODE)) begin
+      if (commit && (f_seq == rd68011_ucode_pkg::U_SEQ_DECODE)) begin
         trace_armed <= take_trace ? 1'b0 : sr_nxt[rd68011_pkg::SR_T];
       end
       // MOVE An,USP reaches the user stack pointer from supervisor mode, so
       // it cannot go through the ordinary A7 path.
-      if (retire && (f_dst == rd68011_ucode_pkg::U_DST_USP)) begin
+      if (commit && (f_dst == rd68011_ucode_pkg::U_DST_USP)) begin
         usp <= y;
+      end
+
+      // -- The fault machinery ------------------------------------------------
+      //
+      // The description of the cycle about to run, kept alongside the request
+      // itself. It holds until the next bus microword, which for a fault is
+      // the frame build -- so the fault copies it out first.
+      if (n_bus != rd68011_ucode_pkg::U_BUS_NONE) begin
+        cur_addr <= n_addr;
+        cur_ssw  <= n_ssw;
+      end
+
+      // An address error is decided on the request as it is presented, which
+      // is the same edge the microword becomes current on. While that
+      // microword stays current the answer does not change, and the redirect
+      // replaces it with one that asks for nothing.
+      addr_err_q <= n_addr_err;
+
+      if (fault) begin
+        fault_addr <= cur_addr;
+        dib        <= req_rdata;
+        upc_save   <= upc;
+        // The read/write bit is the bus unit's, not the microword's: a
+        // read-modify-write that faults reports the half it was in.
+        ssw        <= {cur_ssw[15:9], bus_err ? !req_fault_wr : cur_ssw[8],
+                       cur_ssw[7:0]};
+        if (dbl_fault)     halted <= 1'b1;
+        if (!spurious_int) group0 <= 1'b1;
+      end else if (!reset_sync_n) begin
+        // Reset processing is group 0 too: a fault while the vector is being
+        // read is a double bus fault (UM 6.3.9.1). And an external reset is
+        // the one thing that brings a halted processor back -- UM 6.3.9.1
+        // again: "Only an external reset operation can restart a halted
+        // processor."
+        group0 <= 1'b1;
+        halted <= 1'b0;
+      end else if (commit && `UF(uw, G0)) begin
+        // RTE, past the point where it can turn back: UM 6.4 makes a bus error
+        // on the rest of a long frame's reads a double bus fault rather than
+        // an ordinary one.
+        group0 <= 1'b1;
+      end else if (commit &&
+                   ((f_seq == rd68011_ucode_pkg::U_SEQ_DECODE) ||
+                    (f_seq == rd68011_ucode_pkg::U_SEQ_RESUME))) begin
+        // Exception processing is over once the handler's first instruction
+        // boundary is reached -- or, for a resumed instruction, at the point
+        // it picks up where it left off.
+        group0 <= 1'b0;
+      end
+
+      // RTE's rerun flag, read out of a frame's special status word and held
+      // until the microword it resumes -- which is the one that faulted, and
+      // the only one it applies to (UM 6.3.9.2).
+      if (commit && (f_dst == rd68011_ucode_pkg::U_DST_SSW)) begin
+        rr_flag <= y[15];
+      end
+      if (commit && (f_dst == rd68011_ucode_pkg::U_DST_DIB)) begin
+        dib <= y[15:0];
+      end
+      if (commit && (f_dst == rd68011_ucode_pkg::U_DST_UPCSAVE)) begin
+        upc_save <= y[rd68011_ucode_pkg::UADDR-1:0];
+      end
+      if (commit && (f_dst == rd68011_ucode_pkg::U_DST_XW)) begin
+        xw <= y[15:0];
+      end
+      if (commit && (f_dst == rd68011_ucode_pkg::U_DST_SRSAVE)) begin
+        sr_save <= y[15:0];
+      end
+      if (retire && (f_seq == rd68011_ucode_pkg::U_SEQ_RESUME)) begin
+        rerun_skip <= rr_flag;
+        rr_flag    <= 1'b0;
+      end else if (rerun_skip && retire) begin
+        rerun_skip <= 1'b0;
       end
       // MOVEC to a control register. SFC and DFC keep three bits of what is
       // written and read back zero-extended; the other two are whole
       // registers (PRM section 6).
-      if (retire && (f_dst == rd68011_ucode_pkg::U_DST_CREG)) begin
+      if (commit && (f_dst == rd68011_ucode_pkg::U_DST_CREG)) begin
         unique case (irc[11:0])
           12'h000: sfc <= y[2:0];
           12'h001: dfc <= y[2:0];
@@ -1211,7 +1499,7 @@ module rd68011_seq (
       // The address register update is a separate port. A microword that both
       // writes a register through the ALU and modifies the same one through
       // the address unit is a microcode error; the assembler checks for it.
-      if (retire && aupd_we) begin
+      if (commit && aupd_we) begin
         if (ea_areg == 4'd15) begin
           if (sr[rd68011_pkg::SR_S]) ssp <= ea_updated;
           else                       usp <= ea_updated;

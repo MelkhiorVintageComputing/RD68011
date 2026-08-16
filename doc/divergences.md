@@ -23,11 +23,26 @@ A sweep therefore reports three numbers: passed, failed, and skipped — with th
 skips broken down into "not implemented" and "needing exception processing", so
 a partial implementation says what is missing rather than quietly passing.
 
-As of P5 the sweep runs **124 opcode files and 19050 tests with zero
-failures**, and **nothing is skipped as not implemented**: all 89 MC68010
-instructions are built. What is still skipped is the 5750 tests whose reference
-took an MC68000 exception, which is the frame-format difference below and waits
-on P6's address error handling for the other half.
+As of P6 the sweep runs **124 opcode files and 23492 tests with zero
+failures**, 4442 of them address errors. Nothing is skipped as not implemented:
+all 89 MC68010 instructions are built. 1308 tests remain skipped, all of them
+because the reference took a group 1 or 2 exception and pushed a three-word
+frame where an MC68010 pushes four.
+
+**Address errors are compared, not skipped.** The reference records an aborted
+access as a transaction kind of its own and notes that the real part never puts
+it on the bus — which is exactly what this design does. So for those tests the
+runner compares everything up to the fault: the bus cycles that ran before it,
+and the address the fault names. That is the whole of the question an address
+error asks — was it detected at the same point of the same instruction — and it
+is now asked of every addressing mode of every instruction rather than of a
+handful of directed cases. It is what took the skipped count from 5750 to 1308.
+
+The exception is CLR, where neither the cycle list nor the fault address can be
+compared, because the MC68010 does not make the operand read the MC68000
+address-errors on: it faults one prefetch later, and on a long at base+2 rather
+than at base, because the write it makes instead goes low word first. What is
+still checked there is that a fault happened at all.
 
 ## MC68000 to MC68010 differences the vectors expose
 
@@ -40,7 +55,9 @@ manual and against the vectors before being relied on.
 | **CLR does not read its operand.** UM section 9's execution times give the MC68010 two cycles fewer than the MC68000 for every memory destination. The shape is `P w`, not `r P w`. | The runner removes the reference's operand read and compares the rest. 250-odd tests per size are compared this way. |
 | **MOVE from SR is privileged.** PRM section 6: on the MC68010 it traps in user mode, where the MC68000 allowed it. | Implemented. User-mode vectors for it are skipped, since the reference simply ran where this traps. |
 | **Exception stack frames carry a format and vector word.** A privilege violation on the MC68000 pushes SR and PC as three words; the MC68010 pushes four. Confirmed empirically from the user-mode RESET vectors, where all 1267 of them take the trap. | Implemented, and the reason every vector whose reference took an exception is skipped -- see below. |
-| **Bus and address error frames are the 29-word format $8**, not the MC68000's seven-word one. | P6. |
+| **Bus and address error frames are the 29-word format $8**, not the MC68000's seven-word one. | Implemented. `doc/checkpoint.md` has the layout and the argument for the sixteen internal words; `sim/tb/core_fault_tb.sv` checks it. |
+| **RTE continues a faulted instruction.** UM 5.4.1: the internal register information "is reloaded by the RTE instruction so that the MC68010 can continue execution of the instruction after the error handler routine completes". The MC68000 cannot do this at all. | Implemented, including the rerun flag: a handler that completed the access itself sets it and the access is not repeated. |
+| **A bus error on an interrupt acknowledge is a spurious interrupt** (UM 6.3.4), with a short frame and vector 24 rather than the bus error vector. | Implemented. |
 | **`MOVEC` traps on an unknown control register.** Only $000 SFC, $001 DFC, $800 USP and $801 VBR exist on this part; PRM section 6's note 1 makes any other code an illegal instruction. | Implemented: the decode is hardware, so the microcode tests one condition rather than branching four ways. |
 | **New instructions**: `BKPT`, `MOVEC`, `MOVES`, `RTD`, and the `SFC` and `DFC` registers. | Implemented. The MC68000 vectors have nothing to compare them against, so they are covered by `sim/tb/core_m68010_tb.sv` instead. |
 | **`BKPT` runs a breakpoint acknowledge cycle** -- CPU space, function codes all ones, zeros on every address line -- and then takes an illegal instruction exception however that cycle ended (PRM section 4). The MC68000 runs no cycle at all. | Implemented and checked by function code, not by cycle index. |
@@ -78,10 +95,16 @@ would have thrown away with the rest.
 
 Listed so a sweep's "not implemented" count can be read against something.
 
-**P6** — bus error, address error, the format $8 frame and instruction
-continuation.
-
 **P7** — loop mode.
+
+## Deliberate divergences added in P6
+
+| | Why |
+|---|--- |
+| **The order the twenty-nine words of a format $8 frame are written in.** From the top of the frame down, the stack pointer pre-decrementing by two, which is the same direction the four-word frame is written in. | No reference records the order for an MC68010, and the resulting memory is exactly what UM figure 6-8 specifies. Only a bus analyser could tell, and the same argument already covers the short frame. |
+| **The three reserved words of the frame are stepped over, not written.** | UM figure 6-8's own note: "The stack pointer is decremented by 29 words, although only 26 words of information are actually written to memory." |
+| **The sixteen internal words carry our own encoding**, listed in `doc/checkpoint.md`. | This is what UM 6.4 asks for, and the version number in bits 10-13 of the first of them is the architecture's own mechanism for saying so. A frame stamped with another implementation's number is refused with a format error, exactly as the manual prescribes. |
+| **The program counter a fault stacks is the prefetch pointer.** UM 6.3.9.2 says only that it "may be advanced by as many as five words" beyond the instruction. | It is the value RTE has to put back for the instruction to carry on, so it is the one that is saved. Any value within the range the manual allows is conformant, and this one is the useful one. |
 
 ## Deliberate divergences added in P5
 
@@ -112,3 +135,10 @@ priority against the mask, trace, and waking from STOP are covered by
 `sim/tb/core_exception_tb.sv` instead of by the sweep, for the reason above.
 RTD, BKPT, MOVEC and MOVES are covered by `sim/tb/core_m68010_tb.sv`, because
 an MC68000 reference has no vectors for instructions it does not have.
+
+The format $8 frame, RTE reloading one, and everything that continues a faulted
+instruction are covered by `sim/tb/core_fault_tb.sv`, for the same reason: an
+MC68000's fault frame is seven words with no internal state in it at all. What
+the sweep does check about faults is the half that does compare -- where an
+address error is detected, on which cycle of which instruction, across 4442
+tests.

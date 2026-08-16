@@ -130,7 +130,8 @@ HARTE_OPS ?= NOP MOVE.q MOVE.b MOVE.w MOVE.l MOVEA.w MOVEA.l Bcc \
 
 harte-all: dirs
 	@fail=0; for op in $(HARTE_OPS); do \
-	  out=$$($(MAKE) --no-print-directory harte OP=$$op N=$(N) 2>&1 | grep -E 'passed|skipped:'); \
+	  out=$$($(MAKE) --no-print-directory harte OP=$$op N=$(N) 2>&1 | \
+	         grep -E 'passed|skipped:|address errors'); \
 	  printf '%-10s %s\n' "$$op" "$$out"; \
 	  case "$$out" in *" 0 failed"*) ;; *) fail=1;; esac; \
 	done; exit $$fail
