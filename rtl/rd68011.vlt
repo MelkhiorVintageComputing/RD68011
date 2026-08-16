@@ -1,0 +1,23 @@
+`verilator_config
+
+// Lint configuration for the RD68011 RTL.
+//
+// Two gotchas, both hit while writing this file: the `verilator_config
+// directive must be the first token, and no comment may begin with the word
+// "verilator" -- such comments are parsed as directives, not comments.
+//
+// Only two waivers, both narrow:
+//
+//  * UNUSEDPARAM on the package. It is a catalogue of the architecture's
+//    constants -- vector numbers, function codes, frame formats -- and most of
+//    them are legitimately unused by any single module. Waiving it here does
+//    not hide unused parameters in the modules themselves.
+//
+//  * UNUSEDSIGNAL on the deliberate unused-input sink in the top level, which
+//    exists precisely to name inputs the design does not consume yet.
+//
+// Everything else runs at -Wall. If a new waiver is needed, it goes here with
+// a reason, never as an inline lint_off in the RTL.
+
+lint_off -rule UNUSEDPARAM -file "*rtl/rd68011_pkg.sv"
+lint_off -rule UNUSEDSIGNAL -file "*rtl/rd68011_top.sv" -match "*unused_inputs*"

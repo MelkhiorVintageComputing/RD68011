@@ -1,0 +1,12 @@
+[submodule "Inputs/doc/MC68030_Doc_More_Readable"]
+	path = Inputs/doc/MC68030_Doc_More_Readable
+	url = git@github.com:MelkhiorVintageComputing/MC68030_Doc_More_Readable.git
+[submodule "Inputs/Suska_Configware"]
+	path = Inputs/Suska_Configware
+	url = git@github.com:MelkhiorVintageComputing/Suska_Configware.git
+[submodule "Inputs/ref/Musashi"]
+	path = Inputs/ref/Musashi
+	url = https://github.com/kstenerud/Musashi.git
+[submodule "Inputs/tests/SingleStepTests_m68000"]
+	path = Inputs/tests/SingleStepTests_m68000
+	url = https://github.com/SingleStepTests/m68000.git

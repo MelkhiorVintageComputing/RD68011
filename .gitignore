@@ -1,0 +1,20 @@
+# Build and simulation output
+/build/
+*.vvp
+*.vcd
+*.fst
+*.dcp
+*.rpt
+*.jou
+*.log
+.Xil/
+
+# Verilator
+obj_dir/
+
+# Decoded test vectors: regenerated from Inputs/tests/, never committed
+/sim/vectors/
+
+# Python
+__pycache__/
+*.pyc
