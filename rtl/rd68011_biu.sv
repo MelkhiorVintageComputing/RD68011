@@ -200,13 +200,19 @@ module rd68011_biu #(
   // 5-3 draws S7 followed straight by the next S0, with no idle state, so
   // back-to-back cycles are four clocks apart and not five.
   // ---------------------------------------------------------------------------
-  function automatic rd68011_pkg::bus_state_e after_cycle();
+  // A plain signal rather than a function: a function that reads module state
+  // instead of its arguments is re-evaluated differently by different tools --
+  // iverilog keys a continuous assignment's sensitivity off the arguments
+  // alone. See doc/coding-standard.md.
+  rd68011_pkg::bus_state_e after_cycle;
+
+  always_comb begin
     if (term_retry)                   after_cycle = rd68011_pkg::ST_RETRY;
     else if (term_halt)               after_cycle = rd68011_pkg::ST_HALT;
     else if (arb_bus_released)        after_cycle = rd68011_pkg::ST_ARB;
     else if (req_valid && !arb_hold)  after_cycle = rd68011_pkg::ST_S0;
     else                              after_cycle = rd68011_pkg::ST_IDLE;
-  endfunction
+  end
 
   // ---------------------------------------------------------------------------
   // Rising-edge next state: from the odd state we are in, the even state we
@@ -233,9 +239,9 @@ module rd68011_biu #(
         if (cyc_is_rmw && !term_berr && !term_retry)
                                              st_p_nxt = rd68011_pkg::ST_M8;
         else if (term_berr)                  st_p_nxt = rd68011_pkg::ST_BE8;
-        else                                 st_p_nxt = after_cycle();
+        else                                 st_p_nxt = after_cycle;
 
-      rd68011_pkg::ST_BE9:  st_p_nxt = after_cycle();
+      rd68011_pkg::ST_BE9:  st_p_nxt = after_cycle;
 
       rd68011_pkg::ST_M9:   st_p_nxt = rd68011_pkg::ST_M10;
       rd68011_pkg::ST_M11:  st_p_nxt = rd68011_pkg::ST_S12;
@@ -246,9 +252,9 @@ module rd68011_biu #(
 
       rd68011_pkg::ST_S19:
         if (term_berr)                       st_p_nxt = rd68011_pkg::ST_BE20;
-        else                                 st_p_nxt = after_cycle();
+        else                                 st_p_nxt = after_cycle;
 
-      rd68011_pkg::ST_BE21: st_p_nxt = after_cycle();
+      rd68011_pkg::ST_BE21: st_p_nxt = after_cycle;
 
       // Halted: UM 5.4.3, resume when HALT is negated. Arbitration still runs.
       rd68011_pkg::ST_HALT:
@@ -335,11 +341,22 @@ module rd68011_biu #(
   // The cycle's last state: the rising edge that ends it either acknowledges
   // the request or, with req_valid still asserted, starts the next cycle
   // straight away (figure 5-3).
-  assign req_last = ((st_n == rd68011_pkg::ST_S7)  && !`ENTER_P(ST_M8) &&
-                                                      !`ENTER_P(ST_BE8)) ||
-                    ((st_n == rd68011_pkg::ST_S19) && !`ENTER_P(ST_BE20)) ||
-                     (st_n == rd68011_pkg::ST_BE9) ||
-                     (st_n == rd68011_pkg::ST_BE21);
+  //
+  // Not for a retry. UM 5.4.2 has the bus unit rerunning the cycle itself, so
+  // the attempt that failed must not look finished to the sequencer -- it holds
+  // its request and never learns the rerun happened.
+  //
+  // Written out of registers rather than out of st_p_nxt, which would be the
+  // shorter way to say the same thing: the sequencer builds its next request
+  // from req_last, and the state machine consults req_valid, so routing this
+  // through the next state closes a combinational loop between the two units.
+  // Everything below is a register, so there is no loop to close.
+  assign req_last = (((st_n == rd68011_pkg::ST_S7) &&
+                      !(cyc_is_rmw && !term_berr && !term_retry) &&
+                      !term_berr) ||
+                     ((st_n == rd68011_pkg::ST_S19) && !term_berr) ||
+                      (st_n == rd68011_pkg::ST_BE9) ||
+                      (st_n == rd68011_pkg::ST_BE21)) && !term_retry;
 
   // ---------------------------------------------------------------------------
   // State registers and the posedge-domain bookkeeping.

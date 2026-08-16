@@ -1,0 +1,237 @@
+// Shared harness for the RD68011 core testbenches.
+//
+// Instantiates the whole processor against a memory, loads a program, and
+// records every bus cycle so a test can check the sequence of addresses the
+// core asked for -- which, for a design whose prefetch behaviour is part of
+// the specification, is most of what there is to check.
+//
+// The recorded transaction list is the same thing the SingleStepTests vectors
+// record, so a check written here says the same thing as a check written
+// against the reference.
+
+`ifndef RD68011_CORE_HARNESS_SVH
+`define RD68011_CORE_HARNESS_SVH
+
+  localparam realtime CLK_PERIOD = 125.0;   // 8 MHz
+  localparam int      MAXTR      = 512;
+
+  logic clk;
+  logic rst_n;
+  int   errors;
+
+  // Pins.
+  logic [23:1] a_o;
+  logic        a_oe;
+  logic [15:0] d_i, d_o;
+  logic        d_oe;
+  logic        as_n_o, as_oe, rw_o, rw_oe, uds_n_o, lds_n_o, ds_oe;
+  logic        dtack_n_i, br_n_i, bg_n_o, bgack_n_i;
+  logic  [2:0] ipl_n_i;
+  logic        berr_n_i, reset_n_i, reset_n_o, reset_n_oe;
+  logic        halt_n_i, halt_n_o, halt_n_oe;
+  logic        e_o, vpa_n_i, vma_n_o, vma_oe;
+  logic  [2:0] fc_o;
+  logic        fc_oe;
+
+  rd68011_top dut (
+      .clk (clk), .rst_n (rst_n),
+      .a_o (a_o), .a_oe (a_oe),
+      .d_i (d_i), .d_o (d_o), .d_oe (d_oe),
+      .as_n_o (as_n_o), .as_oe (as_oe), .rw_o (rw_o), .rw_oe (rw_oe),
+      .uds_n_o (uds_n_o), .lds_n_o (lds_n_o), .ds_oe (ds_oe),
+      .dtack_n_i (dtack_n_i),
+      .br_n_i (br_n_i), .bg_n_o (bg_n_o), .bgack_n_i (bgack_n_i),
+      .ipl_n_i (ipl_n_i), .berr_n_i (berr_n_i),
+      .reset_n_i (reset_n_i), .reset_n_o (reset_n_o), .reset_n_oe (reset_n_oe),
+      .halt_n_i (halt_n_i), .halt_n_o (halt_n_o), .halt_n_oe (halt_n_oe),
+      .e_o (e_o), .vpa_n_i (vpa_n_i), .vma_n_o (vma_n_o), .vma_oe (vma_oe),
+      .fc_o (fc_o), .fc_oe (fc_oe)
+  );
+
+  // -- Memory, on a real three-state data bus --------------------------------
+  wire  [15:0] dbus;
+  logic [15:0] mem_d_out;
+  logic        mem_d_oe;
+  logic  [7:0] mem_waits;
+  logic        mem_m6800;
+
+  assign dbus = d_oe     ? d_o       : 16'bz;
+  assign dbus = mem_d_oe ? mem_d_out : 16'bz;
+  assign d_i  = dbus;
+
+  wire [23:1] abus;
+  assign abus = a_oe ? a_o : 23'bx;
+
+  logic mem_dtack_n, mem_vpa_n;
+  assign dtack_n_i = mem_dtack_n;
+  assign vpa_n_i   = mem_vpa_n;
+
+  rd68011_slave #(.ADDR_BITS (14), .BASE (23'h000000), .MASK (23'h400000)) mem (
+      .clk (clk), .rst_n (rst_n),
+      .waits (mem_waits), .m6800 (mem_m6800),
+      .a (abus), .as_n (as_n_o), .uds_n (uds_n_o), .lds_n (lds_n_o),
+      .rw (rw_o), .fc (fc_o),
+      .d_in (dbus), .d_out (mem_d_out), .d_oe (mem_d_oe),
+      .dtack_n (mem_dtack_n), .vpa_n (mem_vpa_n)
+  );
+
+  // -- Clock and watchdog -----------------------------------------------------
+  initial begin
+    clk = 1'b0;
+    forever #(CLK_PERIOD / 2.0) clk = ~clk;
+  end
+
+  initial begin
+    #(CLK_PERIOD * 20000);
+    $display("FAIL: timeout");
+    $finish;
+  end
+
+  // -- Bus cycle recorder -----------------------------------------------------
+  // One entry per cycle, captured as AS asserts: what the core asked for, in
+  // what space, and at what clock.
+  int          ntr;
+  int          clkcount;
+  logic [23:1] tr_addr [0:MAXTR-1];
+  logic  [2:0] tr_fc   [0:MAXTR-1];
+  logic        tr_rw   [0:MAXTR-1];
+  int          tr_clk  [0:MAXTR-1];
+
+  always_ff @(posedge clk) begin
+    if (!rst_n) clkcount <= 0;
+    else        clkcount <= clkcount + 1;
+  end
+
+  initial begin
+    ntr = 0;
+    forever begin
+      @(negedge as_n_o);
+      if (ntr < MAXTR) begin
+        tr_addr[ntr] = a_o;
+        tr_fc[ntr]   = fc_o;
+        tr_rw[ntr]   = rw_o;
+        tr_clk[ntr]  = clkcount;
+        ntr          = ntr + 1;
+      end
+    end
+  end
+
+  // -- Instruction boundary recorder ------------------------------------------
+  // An instruction ends when the microcode takes its DECODE exit, so that edge
+  // is the boundary, and the gap between two of them is an instruction's cycle
+  // count. Measuring from the first bus cycle instead would charge the *next*
+  // instruction's leading internal cycles to this one -- a branch begins with
+  // two microwords that touch nothing.
+  int          nins;
+  logic [15:0] ins_op  [0:MAXTR-1];
+  int          ins_clk [0:MAXTR-1];
+
+  initial begin
+    nins = 0;
+    forever begin
+      @(posedge clk);
+      #1;
+      if (rst_n && dut.u_seq.retire && nins < MAXTR &&
+          (dut.u_seq.f_seq == rd68011_ucode_pkg::U_SEQ_DECODE)) begin
+        ins_op[nins]  = dut.u_seq.ir;   // the instruction that just finished
+        ins_clk[nins] = clkcount;
+        nins          = nins + 1;
+      end
+    end
+  end
+
+  // -- Checking ---------------------------------------------------------------
+  task automatic expect_tr(input int i, input logic [31:0] addr,
+                           input logic [2:0] fc, input logic rw,
+                           input string what);
+    begin
+      if (i >= ntr) begin
+        $display("FAIL: %s: only %0d bus cycles, wanted at least %0d",
+                 what, ntr, i + 1);
+        errors = errors + 1;
+      end else begin
+        if ({9'd0, tr_addr[i]} !== {8'd0, addr[23:1]}) begin
+          $display("FAIL: %s: cycle %0d at %06h, expected %06h",
+                   what, i, {tr_addr[i], 1'b0}, addr);
+          errors = errors + 1;
+        end
+        if (tr_fc[i] !== fc) begin
+          $display("FAIL: %s: cycle %0d function code %0d, expected %0d",
+                   what, i, tr_fc[i], fc);
+          errors = errors + 1;
+        end
+        if (tr_rw[i] !== rw) begin
+          $display("FAIL: %s: cycle %0d is a %s, expected a %s",
+                   what, i, tr_rw[i] ? "read" : "write",
+                   rw ? "read" : "write");
+          errors = errors + 1;
+        end
+      end
+    end
+  endtask
+
+  task automatic expect_u32(input string what, input logic [31:0] got,
+                            input logic [31:0] want);
+    if (got !== want) begin
+      $display("FAIL: %s is %08h, expected %08h", what, got, want);
+      errors = errors + 1;
+    end
+  endtask
+
+  task automatic expect_int(input string what, input int got, input int want);
+    if (got != want) begin
+      $display("FAIL: %s is %0d, expected %0d", what, got, want);
+      errors = errors + 1;
+    end
+  endtask
+
+  // -- Loading ----------------------------------------------------------------
+  task automatic poke_w(input logic [23:1] addr, input logic [15:0] val);
+    mem.poke(addr, val);
+  endtask
+
+  task automatic poke_l(input logic [23:1] addr, input logic [31:0] val);
+    begin
+      mem.poke(addr,          val[31:16]);
+      mem.poke(addr + 23'd1,  val[15:0]);
+    end
+  endtask
+
+  task automatic core_reset();
+    begin
+      errors     = 0;
+      rst_n      = 1'b0;
+      mem_waits  = 8'd0;
+      mem_m6800  = 1'b0;
+      br_n_i     = 1'b1;
+      bgack_n_i  = 1'b1;
+      ipl_n_i    = 3'b111;
+      berr_n_i   = 1'b1;
+      halt_n_i   = 1'b1;
+      // RESET and HALT asserted together is what resets the processor
+      // (UM 5.5); the sequencer sits at its reset entry point until they go.
+      reset_n_i  = 1'b0;
+      repeat (4) @(posedge clk);
+      @(negedge clk);
+      rst_n = 1'b1;
+      repeat (4) @(posedge clk);
+    end
+  endtask
+
+  task automatic core_start();
+    begin
+      ntr = 0;
+      @(negedge clk);
+      reset_n_i = 1'b1;
+    end
+  endtask
+
+  task automatic core_done(input string name);
+    begin
+      if (errors == 0) $display("PASS: %s", name);
+      else             $display("FAIL: %s, %0d error(s)", name, errors);
+      $finish;
+    end
+  endtask
+
+`endif

@@ -4,10 +4,9 @@
 // of the original is split into _i / _o / _oe, with _oe active high meaning the
 // core drives.
 //
-// P1: the bus interface unit is in place and the sequencer that will drive it
-// is not. The request interface is held idle, so the core sits in ST_IDLE with
-// the buses driven and every strobe negated. Unit tests exercise rd68011_biu
-// directly; this level exists to fix the pinout and the wiring.
+// P2: the bus interface unit and the micro-sequencer are both here and wired
+// together. The core runs its reset sequence out of the vector table and then
+// executes whatever the microcode covers -- which is not yet much.
 //
 // Note the fully-scoped rd68011_pkg:: references and the plain-vector ports:
 // yosys 0.52 supports neither `import pkg::*` nor user types on ports.
@@ -65,41 +64,72 @@ module rd68011_top (
     output logic        fc_oe
 );
 
-  // Sequencer interface, idle until P2.
+  // Bus unit to sequencer.
+  logic        req_valid;
+  logic  [2:0] req_kind;
+  logic  [2:0] req_fc;
+  logic [23:1] req_addr;
+  logic        req_uds;
+  logic        req_lds;
+  logic [15:0] req_wdata;
   logic        req_ack;
   logic        req_last;
   logic [15:0] req_rdata;
   logic  [2:0] req_end;
+  logic        reset_req;
   logic        reset_busy;
   logic  [2:0] ipl_sync_n;
   logic        reset_sync_n;
   logic        halt_sync_n;
   logic        bus_idle;
+  logic        dbf;
+
+  rd68011_seq u_seq (
+      .clk          (clk),
+      .rst_n        (rst_n),
+      .req_valid    (req_valid),
+      .req_kind     (req_kind),
+      .req_fc       (req_fc),
+      .req_addr     (req_addr),
+      .req_uds      (req_uds),
+      .req_lds      (req_lds),
+      .req_wdata    (req_wdata),
+      .req_ack      (req_ack),
+      .req_last     (req_last),
+      .req_rdata    (req_rdata),
+      .req_end      (req_end),
+      .ipl_sync_n   (ipl_sync_n),
+      .reset_sync_n (reset_sync_n),
+      .halt_sync_n  (halt_sync_n),
+      .bus_idle     (bus_idle),
+      .reset_req    (reset_req),
+      .dbf          (dbf)
+  );
 
   rd68011_biu u_biu (
       .clk        (clk),
       .rst_n      (rst_n),
 
-      .req_valid  (1'b0),
-      .req_kind   (rd68011_pkg::CT_READ),
-      .req_fc     (rd68011_pkg::FC_SUPER_P),
-      .req_addr   (23'd0),
-      .req_uds    (1'b0),
-      .req_lds    (1'b0),
-      .req_wdata  (16'd0),
+      .req_valid  (req_valid),
+      .req_kind   (req_kind),
+      .req_fc     (req_fc),
+      .req_addr   (req_addr),
+      .req_uds    (req_uds),
+      .req_lds    (req_lds),
+      .req_wdata  (req_wdata),
       .req_ack    (req_ack),
       .req_last   (req_last),
       .req_rdata  (req_rdata),
       .req_end    (req_end),
 
-      .reset_req  (1'b0),
+      .reset_req  (reset_req),
       .reset_busy (reset_busy),
 
       .ipl_sync_n   (ipl_sync_n),
       .reset_sync_n (reset_sync_n),
       .halt_sync_n  (halt_sync_n),
       .bus_idle     (bus_idle),
-      .dbf          (1'b0),
+      .dbf          (dbf),
 
       .a_o        (a_o),        .a_oe       (a_oe),
       .d_i        (d_i),        .d_o        (d_o),        .d_oe (d_oe),
@@ -117,10 +147,9 @@ module rd68011_top (
       .fc_o       (fc_o),       .fc_oe      (fc_oe)
   );
 
-  // Bus unit outputs the sequencer will consume in P2. Named here so the list
-  // shrinks visibly as the design fills in, rather than being silenced.
+  // reset_busy tells the sequencer when the RESET instruction's output pulse
+  // has finished; nothing issues one until that instruction exists.
   logic unused_biu;
-  assign unused_biu = &{1'b1, req_ack, req_last, req_rdata, req_end, reset_busy,
-                        ipl_sync_n, reset_sync_n, halt_sync_n, bus_idle};
+  assign unused_biu = &{1'b1, reset_busy};
 
 endmodule

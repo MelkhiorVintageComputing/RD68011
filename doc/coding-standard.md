@@ -51,6 +51,7 @@ manual is worth something.
 | No non-constant loop bounds | not synthesisable |
 | No user types on module **ports** | keeps yosys and cross-tool elaboration happy; use plain `logic [N:0]` and convert inside |
 | No inline `lint_off` pragmas | waivers go in `rtl/rd68011.vlt` with a reason |
+| **No function that reads module state, called from a continuous assignment** | see below -- the tools disagree about when it is re-evaluated |
 
 Testbenches under `sim/` are not bound by these: they only ever run under iverilog or
 Verilator, and may use `initial`, `$display`, tasks, `realtime` and the rest.
@@ -118,6 +119,37 @@ the first token in a `.vlt` file, and **no comment in it may start with the word
 globs are matched against the path as given on the command line, so `*rtl/foo.sv` matches
 and `*/rtl/foo.sv` does not.
 
+## The function-in-a-continuous-assignment trap *(measured)*
+
+This one cost real debugging time and no lint run catches it.
+
+```systemverilog
+function automatic logic [31:0] src_mux(input logic [3:0] sel);
+  case (sel) ... SRC_RDATA: src_mux = read_data; ... endcase   // reads module state
+endfunction
+
+assign a_bus = src_mux(f_asrc);      // WRONG
+```
+
+**iverilog re-evaluates the function only when its explicit arguments change.**
+`read_data` is not an argument, so `a_bus` keeps a stale value when the read data
+arrives -- silently, with no warning. Verilator and yosys infer the real
+dependency and behave as intended, so lint is clean under all three tools and
+only simulation shows the difference.
+
+Write it as `always_comb` instead, whose sensitivity is inferred from everything
+the statements read:
+
+```systemverilog
+always_comb begin
+  case (f_asrc) ... SRC_RDATA: a_bus = read_data; ... endcase
+end
+```
+
+Two places in this design hit it: the source multiplexers in `rd68011_seq.sv`
+and `after_cycle` in `rd68011_biu.sv`. Both are now plain `always_comb`. A
+function whose result depends only on its arguments is still fine anywhere.
+
 ## Known tool quirks *(measured)*
 
 | Tool | Quirk | Workaround |
@@ -129,5 +161,6 @@ and `*/rtl/foo.sv` does not.
 | Vivado | needs the package file read before its users | `synth.tcl` sorts `rd68011_pkg.sv` first |
 | iverilog | assigning a ternary of two enum values to an enum variable is "This assignment requires an explicit cast" | use `if`/`else` inside the case item |
 | iverilog | `unique`/`unique0` on a case are parsed but ignored, with a "sorry" note per occurrence | harmless; keep them for the other three tools |
+| iverilog | adjacent string literals do not concatenate (`"a" "b"` is a syntax error) | write one string |
 
 Add to this table whenever a tool surprises you. It is cheaper than rediscovering it.

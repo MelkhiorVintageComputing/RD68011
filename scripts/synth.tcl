@@ -11,10 +11,11 @@ set root [lindex $argv 2]
 
 puts "RD68011: synthesising $top for $part"
 
-set rtl [lsort [glob $root/rtl/*.sv]]
-# The package has to be read before anything that references it.
-set pkg $root/rtl/rd68011_pkg.sv
-set rtl [linsert [lsearch -inline -all -not -exact $rtl $pkg] 0 $pkg]
+# The file list, in dependency order, comes from the Makefile: packages have to
+# be read before their users and there is no reason for two places to know that.
+set f [open $root/build/rtl.f r]
+set rtl [split [string trim [read $f]] "\n"]
+close $f
 
 read_verilog -sv $rtl
 read_xdc $root/scripts/rd68011.xdc
