@@ -86,27 +86,35 @@ this; the choice of number is in `rtl/rd68011_pkg.sv`.
 Frozen as of P2. Anything an instruction needs to carry across a bus cycle goes
 here or it does not exist.
 
-### Already implemented (`rtl/rd68011_seq.sv`)
+### Implemented (`rtl/rd68011_seq.sv`), as of P5
 
 | Register | Width | What it holds | Where it lands in the frame |
 |---|--:|---|---|
-| `upc` | 8 | the micro-address to resume at | internal |
-| `pc` | 32 | next prefetch address | internal (the frame's own PC is the *instruction* PC) |
+| `upc` | 13 | the micro-address to resume at | internal |
+| `pc` | 32 | next prefetch address | derived, see the budget |
 | `ir` | 16 | the opcode being executed | internal |
 | `irc` | 16 | the next word, already fetched | **instruction input buffer**, SP+24 |
-| `ir_pc` | 32 | the address `ir` came from | internal |
+| `ir_pc` | 32 | the address `ir` came from | **SP+2**, the frame's own PC |
 | `irc_pc` | 32 | the address `irc` came from | internal |
 | `t0` | 32 | working register / effective address | internal |
 | `t1` | 32 | working register / operand | internal |
-| `dbuf` | 16 | data output buffer | **data output buffer**, SP+16 |
+| `ea_latch` | 32 | the address output buffer | internal |
+| `dbuf` | 32 | the data output buffer, both halves | low half is **SP+16**; high half internal |
+| `xw` | 16 | the extension-word latch: MOVEM's remaining register mask, and MOVEC's and MOVES's register-and-direction word | internal |
 | `sr` | 16 | status register | **SP+0** |
+
+### Not checkpointed, and why
+
+| | |
+|---|---|
+| `sfc`, `dfc` | Architectural registers, not per-instruction state. A fault does not change them and RTE does not have to put them back; MOVEC is what writes them. |
+| the divider's `q`, `rem`, `den`, `count`, `neg_q`, `neg_r`, `signed_r` | A division does no bus cycle, so it cannot fault. The microcode waits on `busy` and only then goes near memory. |
+| `vbr`, `usp`, `ssp`, `regs` | Architectural. |
 
 ### Reserved for the phases that need them
 
 | Register | Width | Arrives in | For |
 |---|--:|---|---|
-| `dib` | 16 | P3 | the data input buffer, SP+20 — read data has to survive the microword that consumed it |
-| `movem_mask` | 16 | P5 | which registers MOVEM has left to transfer |
 | `fault_addr` | 32 | P6 | SP+10 — the address of the faulted cycle |
 | `ssw` | 16 | P6 | SP+8 — assembled from the in-flight cycle descriptor |
 | `loop_state` | small | P7 | loop mode (UM appendix A) |
@@ -115,14 +123,25 @@ here or it does not exist.
 
 The 16 internal words are 256 bits, and they are all there is.
 
-Currently spoken for: `upc` 8, `pc` 32, `ir` 16, `ir_pc` 32, `irc_pc` 32, `t0`
-32, `t1` 32 — **184 bits**, plus 4 bits of version number, in about 12 words.
-That leaves roughly four words for `movem_mask`, the in-flight cycle descriptor
-and loop-mode state.
+Spoken for after P5: `upc` 13, `ir` 16, `irc_pc` 32, `t0` 32, `t1` 32,
+`ea_latch` 32, `dbuf` high half 16, `xw` 16 — **189 bits**, plus 4 bits of
+version number. That leaves about 63 bits, or four words, for the in-flight
+cycle descriptor and loop-mode state.
 
-It fits, but not with room to spare, and that is the point of writing the number
-down now: a design that adds a wide working register in P5 will find out here
-rather than in P6.
+Two things keep it inside the budget, and both are worth stating because they
+are load-bearing:
+
+- **`pc` is not saved.** The prefetch pipe maintains `pc = irc_pc + 2` at every
+  point — a fetch sets `irc_pc` to `pc` and then advances `pc` by a word, and
+  nothing else moves either — so saving `irc_pc` saves both. `tools/harte/
+  model_check.py` is what makes that an invariant rather than a hope.
+- **`ir_pc` is not in the internal words** because it is the frame's own
+  program counter at SP+2.
+
+P5 spent 96 bits of the margin the P2 estimate left (`ea_latch`, the high half
+of `dbuf`, and five more bits of `upc` than were budgeted, against a 32-bit
+saving from not storing `pc`). It still fits, which is what this document
+exists to keep true; P6 is where it is spent.
 
 ## Rules this imposes on the microcode
 
@@ -143,7 +162,8 @@ rather than in P6.
 
 4. **`irc` is architectural during a fault.** It is the instruction input
    buffer the frame exposes at SP+24, so it may not be used as a scratch
-   register.
+   register. `xw` exists for that reason: an extension word that has to outlive
+   the prefetch replacing `irc` gets copied there rather than left in place.
 
 ## Verification
 
@@ -151,3 +171,8 @@ P6 is where this is tested end to end, but the shape of the test is fixed now:
 a `MOVEM` faulting partway through its transfer list, handled, and continued to
 completion with every remaining register moved and none moved twice. If the
 checkpoint set is wrong, that test cannot be made to pass by patching around it.
+
+P5 built that instruction, and built it in the shape the test needs: MOVEM's
+remaining work is exactly the contents of `xw` and `t0`, and its loop resumes
+from a single micro-address. Nothing about continuing it needs a counter that
+would have to be reconstructed.

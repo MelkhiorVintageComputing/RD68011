@@ -19,6 +19,13 @@ The counts below are against UM section 9's MC68010 execution times and against
 the reference vectors, which are an MC68000. Where the two disagree — CLR is
 the case — section 9 wins, because it is the MC68010's own table.
 
+`sim/tb/core_timing_tb.sv` is where the numbers below come from: it runs one
+instruction at a time from reset and reports the clocks between the
+instruction boundary before it and the one after, which is how the reference
+counts. Three instructions whose section 9 entry is not in doubt -- NOP,
+MOVEQ, ADD.W Dn,Dn -- are measured first, so a disagreement further down is
+the instruction and not the harness.
+
 ## Divergences
 
 ### Shifts and rotates: one cycle instead of one per bit
@@ -58,11 +65,102 @@ cycle, an instruction's cost here is
 
     4 x (number of bus cycles) + (number of internal microwords)
 
-which for everything implemented so far matches the reference exactly except
-where noted above. NOP is 4, a taken branch is 10, MOVE.W (A0)+,D0 is 8,
-MOVE.L (A0),(A1) is 20. Those are not approximations: the microcode was
-structured to produce them, because getting them right is what forced the
-prefetch pipe and the addressing modes into the shape the reference has.
+which for most of what is implemented matches the reference exactly. NOP is 4,
+a taken branch is 10, MOVE.W (A0)+,D0 is 8, MOVE.L (A0),(A1) is 20, and every
+form of MOVEM and MOVEP is on the number. Those are not approximations: the
+microcode was structured to produce them, because getting them right is what
+forced the prefetch pipe and the addressing modes into the shape the reference
+has.
+
+The divergences are the sections that follow, and they are of two kinds. Most
+are places where a whole operation happens in one microword instead of a loop
+the original ran -- shifts, multiplies, the decimal correction -- and are
+deliberate. One, the extra cycle every program-counter reload costs, is an
+artefact and is written up as such.
+
+### Multiply and divide: fixed cost, and much faster
+
+The originals are data-dependent and take up to 40 (MULU), 42 (MULS), 108
+(DIVU) and 122 (DIVS) clocks. Ours do not vary with the data at all.
+
+| | Section 9 | RD68011 |
+|---|--:|--:|
+| MULU.W D1,D0 | 40 max | 4 |
+| MULS.W D1,D0 | 42 max | 4 |
+| DIVU.W D1,D0 | 108 max | 41 |
+| DIVS.W D1,D0 | 122 max | 41 |
+
+**Why.** The multiplier is one ALU operation, for the same reason the shifter
+is: the architectural state and the bus behaviour do not depend on how it is
+done, and a 16x16 multiply is not what limits this design's frequency.
+
+The divider is the one place where a sequential unit was worth building --
+`rtl/rd68011_divider.sv` explains why -- and it takes 33 clocks whatever the
+operands, plus the microcode loop that waits on it. That loop polls every two
+clocks, so the cost is 41 rather than 37; making it one would need a wait state
+in the sequencer of the kind bus cycles already have, which is P8 work if it is
+ever worth doing.
+
+**What it costs.** Nothing a program can observe except elapsed time: no bus
+cycle happens during either, so the transaction list is the reference's, which
+is what the sweep checks.
+
+### The BCD group and long ADDX/SUBX: register speed
+
+| | Section 9 | RD68011 |
+|---|--:|--:|
+| ABCD Dy,Dx | 6 | 4 |
+| SBCD Dy,Dx | 6 | 4 |
+| NBCD Dn | 6 | 4 |
+| ADDX.L Dy,Dx | 8 | 4 |
+
+The same reason again: each is a single ALU operation here, where the original
+takes extra internal cycles -- two for the decimal correction, and two more for
+the second half of a long. The memory forms of all of them, which are where the
+bus behaviour is, match exactly.
+
+### RTS, RTR, RTE and RTD: one cycle more
+
+| | Section 9 | RD68011 |
+|---|--:|--:|
+| RTS | 16 | 17 |
+| RTD #0 | 16 | 18 |
+
+Every instruction that loads the program counter from somewhere and then
+refills the pipe spends a microword doing the load, because the prefetch that
+follows takes its address from the program counter and so cannot be the
+microword that writes it. RTD spends a second one adding its displacement to
+the stack pointer.
+
+This is the only divergence in the list that is an artefact rather than a
+decision, and it would go away with a destination that wrote the program
+counter from the two halves of a popped long directly. It is left as it is
+because the bus cycles are unaffected and the sweep compares those.
+
+### MOVEC and MOVES
+
+| | Section 9 | RD68011 |
+|---|--:|--:|
+| MOVEC Rc,Rn | 10 | 12 |
+| MOVEC Rn,Rc | 12 | 12 |
+| MOVES.B (An),Rn | 18 | 15 |
+| MOVES.L (An),Rn | 22 | 19 |
+
+MOVEC pays for two microcode branches -- the supervisor check and the test
+that the control register code names a register this part has -- where the
+original folds at least one of them into work it was doing anyway. MOVES pays
+for one and saves three, because its addressing-mode work is the same as every
+other instruction's here.
+
+### What matches exactly
+
+Worth recording because it is most of P5: MOVEM at every size, direction and
+mode; MOVEP at both sizes and both directions; CMPM; EXG; and the byte and word
+forms of ADDX and SUBX all measure exactly what section 9 gives them. MOVEM is
+the one that took design work to achieve -- 8+4n and 12+4n leave no room for
+per-register overhead at all, which is why its register number comes from a
+priority encoder over the mask and its loop branch rides the transfer
+microword.
 
 ## Divergences that are not timing
 
@@ -78,6 +176,7 @@ Recorded here only because they are easy to mistake for timing:
 
 ## Still to come
 
-Multiply and divide (P5) are the next place a real divergence is likely: the
-original's DIVU takes up to 140 cycles and is data-dependent. Whatever is built
-there will be listed here with its measurement.
+P6 adds bus and address error processing, whose section 9 entries
+(112(27/10) and the rest) describe a stack frame that does not exist yet. P7
+adds loop mode, which is a timing feature and nothing else, and the measurement
+harness that produces this list is where it will be judged.

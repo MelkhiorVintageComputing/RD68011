@@ -9,7 +9,7 @@ is two internal microwords and two prefetches.
 """
 
 from isa import SEQ, COND, SRC, ALU, DST, BUS, ASEL, FC, PF, RSEL, SIZE, \
-                EASEL, CCR, WSEL, AUPD, AEASEL
+                EASEL, CCR, WSEL, AUPD, AEASEL, MOP
 
 # --------------------------------------------------------------------------
 # Assembler state
@@ -36,7 +36,7 @@ def u(comment='', **kw):
                      'bus', 'asel', 'fc', 'pf', 'rsel', 'wsel', 'size', 'easel',
                      'ccr', 'aupd', 'aeasel', 'dhi', 'sh', 'shone',
                      'bitimm', 'vec', 'vsel', 'rstreq', 'stop',
-                     'goto'):
+                     'divst', 'divsg', 'mop', 'mdown', 'goto'):
             raise KeyError('no microword field %r' % k)
     goto = kw.pop('goto', None)
     if goto is not None:
@@ -48,6 +48,20 @@ def u(comment='', **kw):
         fallthrough.add(len(words))
     words.append((dict(kw), comment))
     return len(words) - 1
+
+
+def patch_last(goto=None, **kw):
+    """Add fields to the microword just emitted.
+
+    MOVEM needs it: the test that decides whether its loop runs at all belongs
+    on whichever microword finished the address, and that is one of the shared
+    addressing-mode helpers rather than something written here.
+    """
+    fields = words[-1][0]
+    if goto is not None:
+        fallthrough.discard(len(words) - 1)
+        fixups.append((len(words) - 1, 'next', goto))
+    fields.update(kw)
 
 
 def opcode(pattern, target, mnemonic):
@@ -713,6 +727,18 @@ def build():
     chk()
     interrupt()
     trace()
+    exg()
+    addx_subx()
+    cmpm()
+    bcd()
+    multiply()
+    divide()
+    movep()
+    movem()
+    rtd()
+    bkpt()
+    movec()
+    moves()
     return words, labels, fixups, patterns, fallthrough
 
 
@@ -1475,8 +1501,10 @@ def shifts():
 # otherwise, and the bit number is reduced modulo that width. Only Z is
 # touched, and it reflects the bit as it was *before* any change.
 #
-# BTST does not write, so it reaches the read-only addressing modes; the other
-# three are read-modify-write and need a destination they can alter.
+# BTST does not write, so it reaches the read-only addressing modes -- and
+# immediate data, which PRM section 4 lists for BTST and for nothing else in
+# the group; the other three are read-modify-write and need a destination they
+# can alter.
 # ==========================================================================
 BIT_OPS = [
     ('btst', '00', None,          False),
@@ -1489,9 +1517,11 @@ BIT_OPS = [
 def bit_ops():
     for iname, ttbits, aluop, writes in BIT_OPS:
         for form, imm in (('dyn', 0), ('imm', 1)):
-            modes = DATA_ALT if writes else DATA_ALT + [M_PCDISP, M_PCIDX]
-            if not writes and form == 'dyn':
-                modes = DATA_ALT + [M_PCDISP, M_PCIDX]
+            # BTST reaches every data addressing mode there is, immediate
+            # included: it is the one bit instruction that does not write, so
+            # PRM section 4 lists "#<data>" for it alone.
+            modes = (DATA_ALT if writes
+                     else DATA_ALT + [M_PCDISP, M_PCIDX, M_IMM])
             for name, mode, reg in modes:
                 lbl = '%s_%s_%s' % (iname, form, name)
                 label(lbl)
@@ -2357,3 +2387,731 @@ def trace():
     """The trace exception, taken after an instruction that ran with T set."""
     label('trace')
     raise_exception('trace', 9, False)
+
+
+# ==========================================================================
+# EXG, ADDX, SUBX and CMPM -- PRM section 4
+#
+#   1100 xxx 101000 yyy   EXG Dx,Dy      1100 xxx 101001 yyy   EXG Ax,Ay
+#   1100 xxx 110001 yyy   EXG Dx,Ay
+#   1101 xxx 1 ss 000 yyy ADDX Dy,Dx     1101 xxx 1 ss 001 yyy ADDX -(Ay),-(Ax)
+#   1001 ...              SUBX           1011 xxx 1 ss 001 yyy CMPM (Ay)+,(Ax)+
+#
+# These live in the encodings that would otherwise be an ALU operation with a
+# register destination, which is why the Dn,<ea> patterns of P3 named memory
+# destinations only.
+#
+# The extended operations only ever clear Z, never set it, so that a
+# multi-precision result reads as zero exactly when every part of it did.
+# ==========================================================================
+def exg():
+    for name, ttbits, xa, ya in (('dd', '101000', False, False),
+                                 ('aa', '101001', True,  True),
+                                 ('da', '110001', False, True)):
+        lbl = 'exg_%s' % name
+        label(lbl)
+        # Three microwords, because the register file has one write port for
+        # the ALU and an exchange needs two writes.
+        u(comment='keep the first register',
+          asrc=SRC['REG'], rsel=RSEL['IR9_A'] if xa else RSEL['IR9_D'],
+          alu=ALU['A'], dst=DST['T1'], size=SIZE['LONG'])
+        u(comment='the first takes the second',
+          asrc=SRC['REG'], rsel=RSEL['EA_A'] if ya else RSEL['EA_D'],
+          easel=EASEL['SRC'], alu=ALU['A'], dst=DST['REG_L'],
+          wsel=WSEL['IR9_A'] if xa else WSEL['IR9_D'], size=SIZE['LONG'])
+        u(comment='and the second takes what the first was',
+          asrc=SRC['T1'], alu=ALU['A'], dst=DST['REG_L'],
+          wsel=WSEL['EA_A'] if ya else WSEL['EA_D'], easel=EASEL['SRC'],
+          size=SIZE['LONG'],
+          bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['ADVFETCH'],
+          seq=SEQ['DECODE'])
+        opcode('1100---' + ttbits + '---', lbl, 'EXG %s' % name)
+
+
+def addx_subx():
+    for iname, opbits, aluop in (('addx', '1101', ALU['ADDX']),
+                                 ('subx', '1001', ALU['SUBX'])):
+        for sz in ('BYTE', 'WORD', 'LONG'):
+            # Register form: one microword.
+            lbl = '%s_%s_reg' % (iname, sz.lower())
+            label(lbl)
+            u(comment='%s.%s Dy,Dx' % (iname.upper(), sz[0]),
+              asrc=SRC['REG'], rsel=RSEL['EA_D'], easel=EASEL['SRC'],
+              bsrc=SRC['REG2'], alu=aluop, dst=DST['REG'],
+              wsel=WSEL['IR9_D'], size=SIZE[sz], ccr=CCR['ARITHX'],
+              bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+              pf=PF['ADVFETCH'], seq=SEQ['DECODE'])
+            opcode('%s---1%s000---' % (opbits, SIZE_BITS[sz]), lbl,
+                   '%s.%s Dy,Dx' % (iname.upper(), sz[0]))
+
+            # Memory form: both operands pre-decremented, and the write goes
+            # back where the destination came from.
+            lbl = '%s_%s_mem' % (iname, sz.lower())
+            label(lbl)
+            xmem_read(sz, EASEL['SRC'], AEASEL['SRC'],
+                      DST['T1_HIW'], DST['T1'])
+            xmem_read(sz, EASEL['DST'], AEASEL['DST'],
+                      DST['T0_HIW'], DST['T0'])
+            if sz == 'LONG':
+                u(comment='combine, and the low word out first',
+                  asrc=SRC['T1'], bsrc=SRC['T0'], alu=aluop, dst=DST['DBUF'],
+                  size=SIZE['LONG'], ccr=CCR['ARITHX'], dhi=0,
+                  bus=BUS['WRITE'], asel=ASEL['EAL_PLUS2'], fc=FC['DATA'])
+                u(comment='the prefetch sits between the two writes',
+                  bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+                  pf=PF['ADVFETCH'])
+                u(comment='and the high word',
+                  bus=BUS['WRITE'], asel=ASEL['EAL'], fc=FC['DATA'],
+                  size=SIZE['LONG'], dhi=1, seq=SEQ['DECODE'])
+            else:
+                u(comment='combine, prefetch, then write back',
+                  asrc=SRC['T1'], bsrc=SRC['T0'], alu=aluop, dst=DST['DBUF'],
+                  size=SIZE[sz], ccr=CCR['ARITHX'],
+                  bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+                  pf=PF['ADVFETCH'])
+                u(comment='the result, where the destination came from',
+                  bus=BUS['WRITE'], asel=ASEL['EAL'], fc=FC['DATA'],
+                  size=SIZE[sz], seq=SEQ['DECODE'])
+            opcode('%s---1%s001---' % (opbits, SIZE_BITS[sz]), lbl,
+                   '%s.%s -(Ay),-(Ax)' % (iname.upper(), sz[0]))
+
+
+def xmem_read(sz, easel_v, aeasel_v, dst_hi, dst_lo):
+    """Read a pre-decremented operand, one or two words.
+
+    A long arrives LOW word first, at An-2 before An-4 -- the same order
+    MOVE.L to -(An) writes in, and the reference's.
+    """
+    if sz == 'LONG':
+        u(comment='operand, low word first, two bytes above the new address',
+          asrc=SRC['RDATA'], alu=ALU['A'], dst=dst_lo,
+          bus=BUS['READ'], asel=ASEL['EA_PLUS2'], fc=FC['DATA'],
+          rsel=RSEL['EA_A'], easel=easel_v, aeasel=aeasel_v,
+          aupd=AUPD['PRE'], size=SIZE['LONG'])
+        u(comment='and its high word, at the new address',
+          asrc=SRC['RDATA'], alu=ALU['A'], dst=dst_hi,
+          bus=BUS['READ'], asel=ASEL['EAL'], fc=FC['DATA'],
+          size=SIZE['LONG'])
+    else:
+        # One word, so it goes to the plain destination rather than to the
+        # high-half one a long needs.
+        u(comment='the operand',
+          asrc=SRC['RDATA_B'] if sz == 'BYTE' else SRC['RDATA'],
+          alu=ALU['A'], dst=dst_lo,
+          bus=BUS['READ'], asel=ASEL['EA'], fc=FC['DATA'],
+          rsel=RSEL['EA_A'], easel=easel_v, aeasel=aeasel_v,
+          aupd=AUPD['PRE'], size=SIZE[sz])
+
+
+def cmpm():
+    for sz in ('BYTE', 'WORD', 'LONG'):
+        lbl = 'cmpm_%s' % sz.lower()
+        label(lbl)
+        # Both operands post-incremented, and nothing written back.
+        if sz == 'LONG':
+            u(comment='source, high word',
+              asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T1'],
+              bus=BUS['READ'], asel=ASEL['EA'], fc=FC['DATA'],
+              rsel=RSEL['EA_A'], easel=EASEL['SRC'], aeasel=AEASEL['SRC'],
+              size=SIZE['LONG'])
+            u(comment='and its low word; the register moves by four',
+              asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T1_SHW'],
+              bus=BUS['READ'], asel=ASEL['EA_PLUS2'], fc=FC['DATA'],
+              aeasel=AEASEL['SRC'], aupd=AUPD['POST'], size=SIZE['LONG'])
+            u(comment='destination, high word',
+              asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T0'],
+              bus=BUS['READ'], asel=ASEL['EA'], fc=FC['DATA'],
+              aeasel=AEASEL['DST'], size=SIZE['LONG'])
+            u(comment='and its low word',
+              asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T0_SHW'],
+              bus=BUS['READ'], asel=ASEL['EA_PLUS2'], fc=FC['DATA'],
+              aeasel=AEASEL['DST'], aupd=AUPD['POST'], size=SIZE['LONG'])
+        else:
+            u(comment='the source',
+              asrc=SRC['RDATA_B'] if sz == 'BYTE' else SRC['RDATA'],
+              alu=ALU['A'], dst=DST['T1'],
+              bus=BUS['READ'], asel=ASEL['EA'], fc=FC['DATA'],
+              rsel=RSEL['EA_A'], easel=EASEL['SRC'], aeasel=AEASEL['SRC'],
+              aupd=AUPD['POST'], size=SIZE[sz])
+            u(comment='the destination',
+              asrc=SRC['RDATA_B'] if sz == 'BYTE' else SRC['RDATA'],
+              alu=ALU['A'], dst=DST['T0'],
+              bus=BUS['READ'], asel=ASEL['EA'], fc=FC['DATA'],
+              aeasel=AEASEL['DST'], aupd=AUPD['POST'], size=SIZE[sz])
+        u(comment='compare, and nothing written back',
+          asrc=SRC['T1'], bsrc=SRC['T0'], alu=ALU['SUB'],
+          size=SIZE[sz], ccr=CCR['CMP'],
+          bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+          pf=PF['ADVFETCH'], seq=SEQ['DECODE'])
+        opcode('1011---1%s001---' % SIZE_BITS[sz], lbl, 'CMPM.%s' % sz[0])
+
+
+# ==========================================================================
+# The decimal group -- PRM section 4
+#
+#   1100 xxx 10000 y yyy   ABCD Dy,Dx / -(Ay),-(Ax)
+#   1000 xxx 10000 y yyy   SBCD
+#   0100 1000 00 mmmrrr    NBCD, which is zero minus the operand
+#
+# Shapes: P for the register forms, r r P w for the memory ones. Z is only
+# ever cleared, as with ADDX and SUBX, so that a multi-digit result reads as
+# zero exactly when every byte of it did.
+# ==========================================================================
+def bcd():
+    for iname, opbits, aluop in (('abcd', '1100', ALU['ABCD']),
+                                 ('sbcd', '1000', ALU['SBCD'])):
+        lbl = '%s_reg' % iname
+        label(lbl)
+        u(comment='%s Dy,Dx' % iname.upper(),
+          asrc=SRC['REG'], rsel=RSEL['EA_D'], easel=EASEL['SRC'],
+          bsrc=SRC['REG2'], alu=aluop, dst=DST['REG'],
+          wsel=WSEL['IR9_D'], size=SIZE['BYTE'], ccr=CCR['ARITHX'],
+          bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+          pf=PF['ADVFETCH'], seq=SEQ['DECODE'])
+        opcode(opbits + '---100000---', lbl, '%s Dy,Dx' % iname.upper())
+
+        lbl = '%s_mem' % iname
+        label(lbl)
+        xmem_read('BYTE', EASEL['SRC'], AEASEL['SRC'], DST['T1'], DST['T1'])
+        xmem_read('BYTE', EASEL['DST'], AEASEL['DST'], DST['T0'], DST['T0'])
+        u(comment='combine, prefetch, then write back',
+          asrc=SRC['T1'], bsrc=SRC['T0'], alu=aluop, dst=DST['DBUF'],
+          size=SIZE['BYTE'], ccr=CCR['ARITHX'],
+          bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['ADVFETCH'])
+        u(comment='the result, where the destination came from',
+          bus=BUS['WRITE'], asel=ASEL['EAL'], fc=FC['DATA'],
+          size=SIZE['BYTE'], seq=SEQ['DECODE'])
+        opcode(opbits + '---100001---', lbl, '%s -(Ay),-(Ax)' % iname.upper())
+
+    # NBCD: zero minus the operand, minus X.
+    for name, mode, reg in DATA_ALT:
+        lbl = 'nbcd_%s' % name
+        label(lbl)
+        if name == 'dn':
+            u(comment='NBCD Dn',
+              asrc=SRC['REG'], rsel=RSEL['EA_D'], easel=EASEL['SRC'],
+              bsrc=SRC['ZERO'], alu=ALU['SBCD'], dst=DST['REG'],
+              size=SIZE['BYTE'], ccr=CCR['ARITHX'],
+              bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+              pf=PF['ADVFETCH'], seq=SEQ['DECODE'])
+        else:
+            move_src_fetch(name, 'BYTE', EASEL['SRC'])
+            u(comment='negate decimally, prefetch, then write back',
+              asrc=SRC['T1'], bsrc=SRC['ZERO'], alu=ALU['SBCD'],
+              dst=DST['DBUF'], size=SIZE['BYTE'], ccr=CCR['ARITHX'],
+              bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+              pf=PF['ADVFETCH'])
+            rmw_store(name, 'BYTE')
+        opcode(pattern('0100100000', mode, reg), lbl, 'NBCD %s' % name)
+
+
+# ==========================================================================
+# MULU and MULS -- PRM section 4
+#
+#   1100 rrr 011 mmmrrr   MULU <ea>,Dn      1100 rrr 111 mmmrrr   MULS
+#
+# Sixteen bits by sixteen into the whole of Dn, and the condition codes come
+# from the thirty-two bit result. The original takes upwards of fifty cycles
+# and this takes one; doc/timing-divergences.md records that.
+# ==========================================================================
+def multiply():
+    for iname, opbits, oobits, aluop in (('mulu', '1100', '011', ALU['MULU']),
+                                         ('muls', '1100', '111', ALU['MULS']),):
+        for name, mode, reg in DATA_ALL:
+            lbl = '%s_%s' % (iname, name)
+            label(lbl)
+            if name == 'dn':
+                u(comment='%s Dm,Dn' % iname.upper(),
+                  asrc=SRC['REG'], rsel=RSEL['EA_D'], easel=EASEL['SRC'],
+                  bsrc=SRC['REG2'], alu=aluop, dst=DST['REG_L'],
+                  wsel=WSEL['IR9_D'], size=SIZE['LONG'], ccr=CCR['LOGIC'],
+                  bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+                  pf=PF['ADVFETCH'], seq=SEQ['DECODE'])
+            else:
+                move_src_fetch(name, 'WORD', EASEL['SRC'])
+                u(comment='%s <ea>,Dn' % iname.upper(),
+                  asrc=SRC['T1'], bsrc=SRC['REG'], rsel=RSEL['IR9_D'],
+                  alu=aluop, dst=DST['REG_L'], wsel=WSEL['IR9_D'],
+                  size=SIZE['LONG'], ccr=CCR['LOGIC'],
+                  bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+                  pf=PF['ADVFETCH'], seq=SEQ['DECODE'])
+            opcode(pattern(opbits + '---' + oobits, mode, reg), lbl,
+                   '%s %s' % (iname.upper(), name))
+
+
+# ==========================================================================
+# DIVU and DIVS -- PRM section 4
+#
+#   1000 rrr 011 mmmrrr   DIVU <ea>,Dn      1000 rrr 111 mmmrrr   DIVS
+#
+# Three outcomes: a divisor of zero traps to vector 5, a quotient that will not
+# fit sixteen bits sets V and leaves the register alone, and anything else
+# writes the remainder and quotient into the two halves of Dn.
+#
+# The divider is sequential, so the microcode waits on it the same way the
+# RESET instruction waits on its output pulse.
+# ==========================================================================
+def divide():
+    for iname, oobits, sg in (('divu', '011', 0), ('divs', '111', 1)):
+        for name, mode, reg in DATA_ALL:
+            lbl = '%s_%s' % (iname, name)
+            label(lbl)
+            ea_read_operand(name, 'WORD', EASEL['SRC'])
+            u(comment='a divisor of zero traps',
+              asrc=SRC['T1'], alu=ALU['A'], size=SIZE['WORD'],
+              cond=COND['ZERO'], seq=SEQ['COND'], goto='%s_arms' % lbl)
+            label('%s_arms' % lbl, align_even=True)
+            u(comment='divisor is not zero', goto='%s_go' % lbl)
+            u(comment='divisor is zero', goto='div_by_zero')
+
+            label('%s_go' % lbl)
+            u(comment='start the divider',
+              asrc=SRC['T1'], bsrc=SRC['REG'], rsel=RSEL['IR9_D'],
+              divst=1, divsg=sg)
+            label('%s_wait' % lbl, align_even=True)
+            u(comment='wait for it', cond=COND['DIVB'], seq=SEQ['COND'],
+              goto='%s_warms' % lbl)
+            label('%s_warms' % lbl, align_even=True)
+            u(comment='finished', goto='%s_done' % lbl)
+            u(comment='still working', goto='%s_wait' % lbl)
+
+            label('%s_done' % lbl)
+            u(comment='did the quotient fit?', cond=COND['DIVV'],
+              seq=SEQ['COND'], goto='%s_darms' % lbl)
+            label('%s_darms' % lbl, align_even=True)
+            u(comment='it fitted', goto='%s_ok' % lbl)
+            u(comment='it did not', goto='%s_ovf' % lbl)
+
+            label('%s_ok' % lbl)
+            u(comment='the remainder and quotient, into the two halves of Dn',
+              asrc=SRC['DIVRES'], alu=ALU['A'], dst=DST['REG_L'],
+              wsel=WSEL['IR9_D'], size=SIZE['WORD'], ccr=CCR['LOGIC'],
+              bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+              pf=PF['ADVFETCH'], seq=SEQ['DECODE'])
+
+            label('%s_ovf' % lbl)
+            # PRM: on overflow the destination is unchanged and V is set; N and
+            # Z are undefined, and the reference leaves them alone.
+            u(comment='overflow: set V and leave the register alone',
+              dst=DST['SETV'],
+              bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+              pf=PF['ADVFETCH'], seq=SEQ['DECODE'])
+
+            opcode(pattern('1000---' + oobits, mode, reg), lbl,
+                   '%s %s' % (iname.upper(), name))
+
+    label('div_by_zero')
+    raise_exception('divide by zero', 5, True)
+
+
+def movep():
+    """MOVEP: a register through alternate byte addresses.
+
+    PRM section 4: the transfer starts at (d16,Ay) and steps by two, high-order
+    byte first, so that a register reaches or comes from a byte-wide peripheral
+    on one half of a 16-bit bus. Nothing here is size-dependent except how many
+    bytes there are.
+
+    The reference shapes are `P r r P` and `P w w w w P` -- one program read to
+    replace the displacement word, the bytes, then the refill that ends the
+    instruction. No internal microwords at all, which is what the reference's
+    16 and 24 cycles say, so the address for each byte comes from `asel` rather
+    than from an ALU step and the bytes are picked apart by `alu`.
+    """
+    # Bringing the byte wanted down to bit 7:0, in transfer order.
+    SHIFTS = {'WORD': (ALU['SHR8'], ALU['A']),
+              'LONG': (ALU['SHR24'], ALU['SHR16'], ALU['SHR8'], ALU['A'])}
+    STEPS = (ASEL['T0'], ASEL['T0_PLUS2'], ASEL['T0_PLUS4'], ASEL['T0_PLUS6'])
+
+    for sz, szbit in (('WORD', '0'), ('LONG', '1')):
+        n = 2 if sz == 'WORD' else 4
+
+        for to_mem, dirbit in ((False, '0'), (True, '1')):
+            lbl = 'movep_%s_%s' % (sz.lower(), 'out' if to_mem else 'in')
+            label(lbl)
+            u(comment='(d16,Ay), computed as the displacement is consumed',
+              asrc=SRC['REG'], rsel=RSEL['EA_A'], easel=EASEL['SRC'],
+              bsrc=SRC['IRC_SX'], alu=ALU['ADD'], dst=DST['T0'],
+              bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['FETCH'])
+
+            if to_mem:
+                for i in range(n):
+                    u(comment='byte %d of %d, most significant first' % (i + 1, n),
+                      asrc=SRC['REG'], rsel=RSEL['IR9_D'],
+                      alu=SHIFTS[sz][i], dst=DST['DBUF'],
+                      bus=BUS['WRITE'], asel=STEPS[i], fc=FC['DATA'],
+                      size=SIZE['BYTE'])
+                final_prefetch()
+            else:
+                for i in range(n):
+                    u(comment='byte %d of %d, shifted in at the bottom' % (i + 1, n),
+                      asrc=SRC['RDATA_B'],
+                      bsrc=SRC['T1'] if i else SRC['ZERO'],
+                      alu=ALU['CAT8'] if i else ALU['A'], dst=DST['T1'],
+                      bus=BUS['READ'], asel=STEPS[i], fc=FC['DATA'],
+                      size=SIZE['BYTE'])
+                # A word transfer replaces only the low half of the register
+                # (PRM section 4), which is what a sized register write does.
+                u(comment='the assembled operand into Dx',
+                  asrc=SRC['T1'], alu=ALU['A'], dst=DST['REG'],
+                  wsel=WSEL['IR9_D'], size=SIZE[sz],
+                  bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+                  pf=PF['ADVFETCH'], seq=SEQ['DECODE'])
+
+            opcode('0000---1' + dirbit + szbit + '001---', lbl,
+                   'MOVEP.%s %s' % (sz[0], 'Dx to memory' if to_mem
+                                    else 'memory to Dx'))
+
+
+# ==========================================================================
+# MOVEM -- PRM section 4
+#
+#   0100 1d00 1s mmmrrr, followed by a 16-bit register mask
+#
+# The mask names any subset of the sixteen registers, transferred in a fixed
+# order: bit 0 is D0 and bit 15 is A7, except to -(An), where the order runs
+# the other way and bit 0 is A7. A word transfer to registers sign-extends to
+# the full 32 bits, address and data registers alike.
+#
+# THE SHAPE
+#
+# The reference gives an n-register transfer 8+4n cycles to memory and 12+4n
+# from it, which is to say the bus cycles and nothing else: no per-register
+# overhead at all, and one extra read that the memory-to-register form always
+# makes past the end of the list and throws away. So the loop has to cost
+# nothing but its transfers, which is what shapes the microcode here:
+#
+#   - the register number comes from a priority encoder over the mask rather
+#     than from a counter the microcode has to step, so `rsel` names it in the
+#     same microword that transfers it;
+#   - the loop's branch rides the transfer microword itself, and the exit sits
+#     at the even address of the conditional pair with the loop at the odd one,
+#     so going round again costs nothing;
+#   - and the same branch, on the microword that finished the address, is what
+#     skips the loop entirely when the mask is empty.
+# ==========================================================================
+MOVEM_TO_MEM = [
+    ('aind',  '010', '---'),
+    ('apre',  '100', '---'),
+    ('adisp', '101', '---'),
+    ('aidx',  '110', '---'),
+    ('absw',  '111', '000'),
+    ('absl',  '111', '001'),
+]
+
+MOVEM_TO_REG = [
+    ('aind',   '010', '---'),
+    ('apost',  '011', '---'),
+    ('adisp',  '101', '---'),
+    ('aidx',   '110', '---'),
+    ('absw',   '111', '000'),
+    ('absl',   '111', '001'),
+    ('pcdisp', '111', '010'),
+    ('pcidx',  '111', '011'),
+]
+
+
+def movem():
+    for sz, szbit in (('WORD', '0'), ('LONG', '1')):
+        for m2r, dirbit, modes in ((False, '0', MOVEM_TO_MEM),
+                                   (True,  '1', MOVEM_TO_REG)):
+            for name, mode, reg in modes:
+                lbl = 'movem_%s_%s_%s' % ('in' if m2r else 'out',
+                                          sz.lower(), name)
+                down = (name == 'apre')
+                fc = ea_fc(name)
+                label(lbl)
+
+                # The mask always comes out of irc, so loading it needs no
+                # source of its own and leaves the ALU free for the address.
+                if name in ('aind', 'apost', 'apre'):
+                    u(comment='the mask, and the address the walk starts from',
+                      asrc=SRC['REG'], rsel=RSEL['EA_A'], easel=EASEL['SRC'],
+                      alu=ALU['A'], dst=DST['T0'], mop=MOP['LOAD'],
+                      bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+                      pf=PF['FETCH'])
+                else:
+                    u(comment='the mask, and the pipe refilled',
+                      mop=MOP['LOAD'],
+                      bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+                      pf=PF['FETCH'])
+                    ea_setup(name, sz, EASEL['SRC'], is_source=True)
+
+                # An empty mask skips the loop; anything else enters it. The
+                # target is the even half of the pair, so the loop below is the
+                # odd one and both branches read the same `next`.
+                patch_last(seq=SEQ['COND'], cond=COND['MASK'],
+                           goto='%s_end' % lbl)
+
+                # --- the exit, at the even address ------------------------
+                label('%s_end' % lbl, align_even=True)
+                wb = {}
+                if name in ('apost', 'apre'):
+                    # (An)+ and -(An) leave the register at the address the
+                    # walk finished on. It rides the last microword, so it
+                    # costs nothing.
+                    wb = dict(asrc=SRC['T0'], alu=ALU['A'], dst=DST['REG_L'],
+                              wsel=WSEL['EA_A'], easel=EASEL['SRC'],
+                              size=SIZE['LONG'])
+                if m2r:
+                    # The read past the end of the list that the part always
+                    # makes and discards -- which is where the memory-to-
+                    # register form's extra four cycles go.
+                    u(comment='the overrun read, discarded',
+                      bus=BUS['READ'], asel=ASEL['T0'], fc=fc,
+                      goto='%s_tail' % lbl)
+                else:
+                    u(comment='end of instruction', **dict(
+                        wb, bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+                        pf=PF['ADVFETCH'], seq=SEQ['DECODE']))
+
+                # --- the loop, at the odd address -------------------------
+                label('%s_loop' % lbl)
+                step = ASEL['T0_DEC2'] if down else ASEL['T0_INC2']
+                last = dict(mop=MOP['STEP'], seq=SEQ['COND'],
+                            cond=COND['MASK'], goto='%s_end' % lbl)
+
+                if m2r:
+                    if sz == 'WORD':
+                        # A word is sign-extended into the whole register,
+                        # address and data alike (PRM section 4).
+                        u(comment='a register, sign-extended from a word',
+                          asrc=SRC['RDATA'], alu=ALU['SXW'], dst=DST['REG_L'],
+                          wsel=WSEL['MNEXT'], mdown=int(down),
+                          bus=BUS['READ'], asel=step, fc=fc, **last)
+                    else:
+                        u(comment="a register's high word",
+                          asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['REG_HIW'],
+                          wsel=WSEL['MNEXT'], mdown=int(down),
+                          bus=BUS['READ'], asel=step, fc=fc)
+                        u(comment='and its low word',
+                          asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['REG'],
+                          wsel=WSEL['MNEXT'], mdown=int(down),
+                          size=SIZE['WORD'],
+                          bus=BUS['READ'], asel=step, fc=fc, **last)
+                    label('%s_tail' % lbl)
+                    u(comment='end of instruction', **dict(
+                        wb, bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+                        pf=PF['ADVFETCH'], seq=SEQ['DECODE']))
+                else:
+                    if sz == 'WORD':
+                        u(comment='a register',
+                          asrc=SRC['REG'], rsel=RSEL['MNEXT'], mdown=int(down),
+                          alu=ALU['A'], dst=DST['DBUF'], size=SIZE['WORD'],
+                          bus=BUS['WRITE'], asel=step, fc=fc, **last)
+                    elif down:
+                        # Downward, so the low word goes to the higher address
+                        # first -- the order MOVE.L to -(An) writes in.
+                        u(comment="a register's low word",
+                          asrc=SRC['REG'], rsel=RSEL['MNEXT'], mdown=1,
+                          alu=ALU['A'], dst=DST['DBUF'], size=SIZE['LONG'],
+                          bus=BUS['WRITE'], asel=step, fc=fc)
+                        u(comment='and its high word, below it',
+                          asrc=SRC['REG'], rsel=RSEL['MNEXT'], mdown=1,
+                          alu=ALU['A'], dst=DST['DBUF'], size=SIZE['LONG'],
+                          dhi=1, bus=BUS['WRITE'], asel=step, fc=fc, **last)
+                    else:
+                        u(comment="a register's high word",
+                          asrc=SRC['REG'], rsel=RSEL['MNEXT'],
+                          alu=ALU['A'], dst=DST['DBUF'], size=SIZE['LONG'],
+                          dhi=1, bus=BUS['WRITE'], asel=step, fc=fc)
+                        u(comment='and its low word',
+                          asrc=SRC['REG'], rsel=RSEL['MNEXT'],
+                          alu=ALU['A'], dst=DST['DBUF'], size=SIZE['LONG'],
+                          bus=BUS['WRITE'], asel=step, fc=fc, **last)
+
+                opcode(pattern('01001' + dirbit + '001' + szbit, mode, reg),
+                       lbl, 'MOVEM.%s %s %s' % (sz[0],
+                                                'to' if m2r else 'from', name))
+
+
+# ==========================================================================
+# RTD -- PRM section 4
+#
+#   0100 1110 0111 0100, followed by a 16-bit displacement
+#
+#   (SP) -> PC; SP + 4 + d -> SP
+#
+# RTS with a stack adjustment, and unprivileged. The displacement is in irc
+# and is still there when the pops are done, because neither of them
+# prefetches: the instruction stream is about to change anyway.
+# ==========================================================================
+def rtd():
+    label('rtd')
+    u(comment='return address, high word',
+      asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T1'],
+      bus=BUS['READ'], asel=ASEL['EA'], fc=FC['DATA'],
+      aeasel=AEASEL['SP'], size=SIZE['LONG'])
+    u(comment='and its low word; the stack pointer moves by four',
+      asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T1_SHW'],
+      bus=BUS['READ'], asel=ASEL['EA_PLUS2'], fc=FC['DATA'],
+      aeasel=AEASEL['SP'], aupd=AUPD['POST'], size=SIZE['LONG'])
+    # The displacement is still in irc: neither pop prefetched, because the
+    # instruction stream is about to change anyway.
+    u(comment='and the displacement on top of that',
+      asrc=SRC['IRC_SX'], bsrc=SRC['REG'], rsel=RSEL['A7'], alu=ALU['ADD'],
+      dst=DST['REG_L'], size=SIZE['LONG'])
+    refill_from(SRC['T1'])
+    opcode('0100111001110100', 'rtd', 'RTD')
+
+
+# ==========================================================================
+# BKPT -- PRM section 4
+#
+#   0100 1000 0100 1vvv
+#
+# "For the MC68010, a breakpoint acknowledge bus cycle is run with function
+# codes driven high and zeros on all address lines. Whether the breakpoint
+# acknowledge bus cycle is terminated with DTACK, BERR, or VPA, the processor
+# always takes an illegal instruction exception."
+#
+# So the vector number goes nowhere: it is there for a debug monitor to read
+# out of the opcode once the exception has been taken. Nothing prefetches, so
+# the frame the exception builds points at the BKPT itself.
+# ==========================================================================
+def bkpt():
+    label('bkpt')
+    u(comment='zeros on all address lines',
+      asrc=SRC['ZERO'], alu=ALU['A'], dst=DST['T0'])
+    u(comment='the breakpoint acknowledge cycle',
+      bus=BUS['BKPT'], asel=ASEL['T0'], fc=FC['CPU'], size=SIZE['WORD'])
+    u(comment='and an illegal instruction exception, however it ended',
+      goto='illegal_exc')
+    opcode('0100100001001---', 'bkpt', 'BKPT')
+
+
+# ==========================================================================
+# MOVEC -- PRM section 6
+#
+#   0100 1110 0111 101 dr, followed by A/D rrr cccccccccccc
+#
+# Privileged, always 32 bits, and only four control register codes exist on
+# this part: $000 SFC, $001 DFC, $800 USP, $801 VBR. "Any other code causes an
+# illegal instruction exception."
+#
+# The extension word stays in irc throughout -- the transfer rides the first
+# of the two prefetches that end the instruction -- so the control register
+# decode and the general register number can both be read straight from it.
+# ==========================================================================
+def movec():
+    for to_creg, dirbit in ((False, '0'), (True, '1')):
+        lbl = 'movec_%s' % ('in' if to_creg else 'out')
+        label(lbl)
+        privileged(lbl)
+        u(comment='does the code name a register this part has?',
+          cond=COND['CRVALID'], seq=SEQ['COND'], goto='%s_crarms' % lbl)
+        label('%s_crarms' % lbl, align_even=True)
+        u(comment='no: an illegal instruction', goto='illegal_exc')
+        u(comment='yes: make the transfer', goto='%s_go' % lbl)
+
+        label('%s_go' % lbl)
+        if to_creg:
+            u(comment='the control register takes the general one',
+              asrc=SRC['REG'], rsel=RSEL['IRC_X'], alu=ALU['A'],
+              dst=DST['CREG'],
+              size=SIZE['LONG'],
+              bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['FETCH'])
+        else:
+            u(comment='the general register takes the control one',
+              asrc=SRC['CREG'], alu=ALU['A'], dst=DST['REG_L'],
+              wsel=WSEL['IRC_X'], size=SIZE['LONG'],
+              bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['FETCH'])
+        u(comment='end of instruction',
+          bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['ADVFETCH'],
+          seq=SEQ['DECODE'])
+        opcode('010011100111101' + dirbit, lbl,
+               'MOVEC %s' % ('Rn,Rc' if to_creg else 'Rc,Rn'))
+
+
+# ==========================================================================
+# MOVES -- PRM section 6
+#
+#   0000 1110 ss mmmrrr, followed by A/D rrr dr 00000000000
+#
+# Privileged. One operand is a general register and the other is a memory
+# alterable effective address reached through SFC (reading) or DFC (writing),
+# so the access goes to whatever address space those registers name rather
+# than to the one the processor is in.
+#
+# The direction is in the extension word, not the opcode, so it is a microcode
+# branch -- taken on the microword that latches the word, which costs nothing
+# extra. The latch is also what lets the register number survive the prefetch
+# the addressing mode makes.
+# ==========================================================================
+def moves():
+    for sz in ('BYTE', 'WORD', 'LONG'):
+        for name, mode, reg in MEM_ALT:
+            lbl = 'moves_%s_%s' % (sz.lower(), name)
+            label(lbl)
+            privileged(lbl)
+            # The prefetch here is what keeps the pipe accounting right: the
+            # extension word is consumed into the latch, so a word has to be
+            # read to replace it, exactly as an addressing mode's own would.
+            u(comment='latch the extension word and branch on its direction',
+              mop=MOP['LOAD'], cond=COND['XWDR'], seq=SEQ['COND'],
+              bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'], pf=PF['FETCH'],
+              goto='%s_drarms' % lbl)
+            label('%s_drarms' % lbl, align_even=True)
+            u(comment='dr = 0: <ea> to the register', goto='%s_in' % lbl)
+            u(comment='dr = 1: the register to <ea>', goto='%s_out' % lbl)
+
+            # --- <ea> to the register, through SFC --------------------
+            label('%s_in' % lbl)
+            ea_setup(name, sz, EASEL['SRC'], is_source=True)
+            if sz == 'LONG':
+                u(comment='operand, high word',
+                  asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T1'],
+                  bus=BUS['READ'], asel=ea_asel(name), fc=FC['SFC'],
+                  aupd=ea_aupd(name, sz, False), size=SIZE['LONG'],
+                  rsel=RSEL['EA_A'], easel=EASEL['SRC'])
+                u(comment='operand, low word',
+                  asrc=SRC['RDATA'], alu=ALU['A'], dst=DST['T1_SHW'],
+                  bus=BUS['READ'], asel=ea_asel(name, True), fc=FC['SFC'],
+                  aupd=ea_aupd(name, sz, True), size=SIZE['LONG'],
+                  rsel=RSEL['EA_A'], easel=EASEL['SRC'])
+            else:
+                u(comment='the operand',
+                  asrc=SRC['RDATA_B'] if sz == 'BYTE' else SRC['RDATA'],
+                  alu=ALU['A'], dst=DST['T1'],
+                  bus=BUS['READ'], asel=ea_asel(name), fc=FC['SFC'],
+                  aupd=ea_aupd(name, sz, False), size=SIZE[sz],
+                  rsel=RSEL['EA_A'], easel=EASEL['SRC'])
+            # "If the destination is a data register, the source operand
+            # replaces the corresponding low-order bits of that data register
+            # ... if the destination is an address register, the source
+            # operand is sign-extended to 32 bits" -- which is exactly what a
+            # sized write does for one and a full-width one for the other, so
+            # the choice is made here rather than by a branch.
+            u(comment='into the register the extension word names',
+              asrc=SRC['T1'], alu=ALU['A'], dst=DST['REG_AD'],
+              wsel=WSEL['XW'], size=SIZE[sz],
+              bus=BUS['READ'], asel=ASEL['PC'], fc=FC['PROG'],
+              pf=PF['ADVFETCH'], seq=SEQ['DECODE'])
+
+            # --- the register to <ea>, through DFC --------------------
+            label('%s_out' % lbl)
+            ea_setup(name, sz, EASEL['SRC'], is_source=True)
+            base = ea_asel(name)
+            plus = ea_asel(name, True)
+            if sz == 'LONG':
+                u(comment='the register, high word',
+                  asrc=SRC['REG'], rsel=RSEL['XW'], alu=ALU['A'],
+                  dst=DST['DBUF'], dhi=1,
+                  bus=BUS['WRITE'], asel=base, fc=FC['DFC'],
+                  aupd=ea_aupd(name, sz, False), size=SIZE['LONG'],
+                  easel=EASEL['SRC'], aeasel=AEASEL['SRC'])
+                u(comment='and its low word',
+                  bus=BUS['WRITE'], asel=plus, fc=FC['DFC'], dhi=0,
+                  aupd=ea_aupd(name, sz, True), size=SIZE['LONG'],
+                  easel=EASEL['SRC'], aeasel=AEASEL['SRC'])
+            else:
+                u(comment='the register to memory',
+                  asrc=SRC['REG'], rsel=RSEL['XW'], alu=ALU['A'],
+                  dst=DST['DBUF'],
+                  bus=BUS['WRITE'], asel=base, fc=FC['DFC'],
+                  aupd=ea_aupd(name, sz, False), size=SIZE[sz],
+                  easel=EASEL['SRC'], aeasel=AEASEL['SRC'])
+            final_prefetch()
+
+            opcode(pattern('00001110' + SIZE_BITS[sz], mode, reg), lbl,
+                   'MOVES.%s %s' % (sz[0], name))

@@ -199,18 +199,37 @@ as authoritative.
 | **`rst_n`.** Not an MC68010 pin. Every register needs a defined value without power-on initialisation, because ASIC is a target. | Additive: architectural reset is still RESET+HALT on the real pins. |
 | **Nanosecond output delays.** None are modelled. | Out of scope for RTL; an STA and pad concern. |
 
+## What clock rate this runs at
+
+Bus *shape* is exact; bus *speed* is a synthesis result, and it is worth being
+explicit about it because the half-clock is a real budget in this design rather
+than a convention. One bus state is half a clock period, so anything that
+starts at a falling-edge flop and ends at a rising-edge one has half a period
+to get there -- which is where every hard path in the design lives.
+
+Measured on the Artix-7 part `make synth` targets, the clock period has moved
+as the design grew: 20 ns with the bus interface alone, 40 ns with MOVE, 44 ns
+with the integer set, 52 ns with control flow and exceptions, and **68 ns after
+P5** -- 14.7 MHz, against 12.5 MHz for the fastest MC68010 Motorola shipped.
+That build closes with 0.95 ns to spare, in 12396 LUTs and 1148 flip-flops.
+
+The critical path and the two known fixes for it are written out in
+`scripts/rd68011.xdc`, at the constraint itself, because that is where anyone
+changing the number will look. Both fixes belong to P8; neither is a
+correctness problem.
+
 ## Not yet implemented
 
 The bus unit is complete; the parts of §5 and §6 that belong to the sequencer
 are not, and arrive in later phases:
 
 - The reset *exception* — reading the initial SSP from $000000 and PC from
-  $000004, setting the interrupt mask to 7 and clearing VBR (UM 5.5). The bus
-  unit reports the RESET and HALT pins; the sequence is P4's.
+  $000004, setting the interrupt mask to 7 and clearing VBR (UM 5.5). Done in
+  P4.
 - Double bus fault detection. The bus unit drives HALT out when told to via
   `dbf`; deciding that a second bus error arrived during exception processing is
   P6's (UM 5.4.4).
-- Interrupt recognition and priority. `ipl_sync_n` is synchronised and exposed;
-  when to run an acknowledge cycle is P4's.
-- Breakpoint acknowledge cycles are wired as a cycle kind (`CT_BKPT`) but no
-  instruction issues one until BKPT arrives in P5.
+- Interrupt recognition and priority. Done in P4.
+- Breakpoint acknowledge cycles are wired as a cycle kind (`CT_BKPT`); BKPT
+  issues one as of P5, with function codes all ones and zeros on every address
+  line, as PRM section 4 specifies for this part.

@@ -94,6 +94,33 @@ module rd68011_seq (
   logic [31:0] usp;
   logic [31:0] ssp;
 
+  // The extension-word latch, for the words that outlive the prefetch that
+  // replaces irc: MOVEM's register mask, and the register-and-direction word
+  // of MOVEC and MOVES.
+  //
+  // MOVEM is what shapes it. Its transfers have to cost nothing but their bus
+  // cycles -- the reference charges 8+4n and 12+4n and no more -- so the
+  // register number cannot come from a counter the microcode steps. It comes
+  // from a priority encoder over the mask instead, which makes `rsel` naming
+  // the register and the transfer happening the same microword. The bit is
+  // dropped as that microword retires, and whether any bit is left is the
+  // loop's branch condition.
+  //
+  // To -(An) the mask runs the other way round -- bit 0 is A7, not D0 -- so
+  // `mdown` reverses the mapping and nothing else (PRM section 4).
+  logic [15:0] xw;
+  logic [15:0] xw_after;
+  logic  [3:0] mlow;
+  logic [15:0] mlow_bit;
+  logic  [3:0] mreg;
+
+  // The MC68010's function code registers, which MOVES uses to reach an
+  // address space of the program's choosing. Three bits each; MOVEC reads
+  // them back zero-extended to 32, "unimplemented bits are read as zeros"
+  // (PRM section 6).
+  logic  [2:0] sfc;
+  logic  [2:0] dfc;
+
   // ===========================================================================
   // The current microword, and the one that follows it
   // ===========================================================================
@@ -124,6 +151,7 @@ module rd68011_seq (
   logic [rd68011_ucode_pkg::U_EASEL_W-1:0] f_easel;
   logic [rd68011_ucode_pkg::U_SIZE_W-1:0]  f_size;
   logic [rd68011_ucode_pkg::U_CCR_W-1:0]   f_ccr;
+  logic [rd68011_ucode_pkg::U_MOP_W-1:0]   f_mop;
 
   assign f_seq  = `UF(uw, SEQ);
   assign f_cond = `UF(uw, COND);
@@ -140,6 +168,7 @@ module rd68011_seq (
   assign f_easel = `UF(uw, EASEL);
   assign f_size  = `UF(uw, SIZE);
   assign f_ccr   = `UF(uw, CCR);
+  assign f_mop   = `UF(uw, MOP);
 
   // ===========================================================================
   // Retirement
@@ -242,23 +271,59 @@ module rd68011_seq (
     end
   end
 
-  function automatic logic [3:0] pick_reg(input logic [2:0] sel);
-    unique case (sel)
-      3'd1:    pick_reg = 4'd15;                            // A7
-      3'd2:    pick_reg = {(ea_mode != 3'b000), ea_reg};    // the mode's own
-      3'd3:    pick_reg = {1'b0, ea_reg};                   // forced data
-      3'd4:    pick_reg = {1'b1, ea_reg};                   // forced address
-      3'd5:    pick_reg = {1'b0, ir[11:9]};
-      3'd6:    pick_reg = {1'b1, ir[11:9]};
-      default: pick_reg = 4'd15;
-    endcase
-  endfunction
+  // The lowest register still named by the mask, and what the mask becomes
+  // when this microword is done with it. `xw_after` is what the branch
+  // condition reads, so a microword can load the mask and test it at once --
+  // which is how an empty mask skips the loop without costing a cycle.
+  always_comb begin
+    mlow = 4'd15;
+    for (int unsigned b = 15; b != 0; b = b - 1) begin
+      if (xw[b - 1]) mlow = 4'(b - 1);
+    end
+  end
+  assign mlow_bit = 16'd1 << mlow;
+  assign mreg     = `UF(uw, MDOWN) ? (4'd15 - mlow) : mlow;
+
+  // The general register MOVEC and MOVES name, out of the latched extension
+  // word: bit 15 picks data or address, bits 14-12 the number.
+  logic [3:0] xw_reg;
+  assign xw_reg = {xw[15], xw[14:12]};
+  logic [3:0] irc_reg;
+  assign irc_reg = {irc[15], irc[14:12]};
 
   // The register written, which is not always the one read: MOVE reads the
   // source the mode names and writes the destination in bits 11:9.
+  //
+  // Written as always_comb rather than as a function called from a continuous
+  // assignment: iverilog re-evaluates such a call only when an argument
+  // changes, so a selection that depended on the opcode would go stale.
+  // doc/coding-standard.md has the measurement.
   logic [3:0] wreg_index;
-  assign wreg_index = (f_wsel == rd68011_ucode_pkg::U_WSEL_SAME)
-                        ? reg_index : pick_reg(f_wsel);
+  always_comb begin
+    unique case (f_wsel)
+      rd68011_ucode_pkg::U_WSEL_SAME:   wreg_index = reg_index;
+      rd68011_ucode_pkg::U_WSEL_A7:     wreg_index = 4'd15;
+      rd68011_ucode_pkg::U_WSEL_EA_ANY: wreg_index = {(ea_mode != 3'b000),
+                                                      ea_reg};
+      rd68011_ucode_pkg::U_WSEL_EA_D:   wreg_index = {1'b0, ea_reg};
+      rd68011_ucode_pkg::U_WSEL_EA_A:   wreg_index = {1'b1, ea_reg};
+      rd68011_ucode_pkg::U_WSEL_IR9_D:  wreg_index = {1'b0, ir[11:9]};
+      rd68011_ucode_pkg::U_WSEL_IR9_A:  wreg_index = {1'b1, ir[11:9]};
+      rd68011_ucode_pkg::U_WSEL_MNEXT:  wreg_index = mreg;
+      rd68011_ucode_pkg::U_WSEL_XW:     wreg_index = xw_reg;
+      rd68011_ucode_pkg::U_WSEL_IRC_X:  wreg_index = irc_reg;
+      default:                          wreg_index = 4'd15;
+    endcase
+  end
+
+  always_comb begin
+    unique case (f_mop)
+      rd68011_ucode_pkg::U_MOP_LOAD: xw_after = irc;
+      rd68011_ucode_pkg::U_MOP_STEP: xw_after = xw & ~mlow_bit;
+      default:                       xw_after = xw;
+    endcase
+  end
+
 
   always_comb begin
     unique case (f_rsel)
@@ -270,7 +335,26 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_RSEL_EA_A:   reg_index = {1'b1, ea_reg};
       rd68011_ucode_pkg::U_RSEL_IR9_D:  reg_index = {1'b0, ir[11:9]};
       rd68011_ucode_pkg::U_RSEL_IR9_A:  reg_index = {1'b1, ir[11:9]};
+      rd68011_ucode_pkg::U_RSEL_MNEXT:  reg_index = mreg;
+      rd68011_ucode_pkg::U_RSEL_XW:     reg_index = xw_reg;
+      rd68011_ucode_pkg::U_RSEL_IRC_X:  reg_index = irc_reg;
       default:                          reg_index = 4'd15;
+    endcase
+  end
+
+  // The control registers MOVEC reaches, and whether the code names one at all
+  // (PRM section 6: "any other code causes an illegal instruction
+  // exception"). The code is in irc, which MOVEC has not prefetched over yet.
+  logic [31:0] creg_val;
+  logic        creg_valid;
+  always_comb begin
+    creg_valid = 1'b1;
+    unique case (irc[11:0])
+      12'h000: creg_val = {29'd0, sfc};
+      12'h001: creg_val = {29'd0, dfc};
+      12'h800: creg_val = usp;
+      12'h801: creg_val = vbr;
+      default: begin creg_val = 32'd0; creg_valid = 1'b0; end
     endcase
   end
 
@@ -301,6 +385,7 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_ASRC_RDATA:    a_bus = {16'd0, req_rdata};
       rd68011_ucode_pkg::U_ASRC_RDATA_SX: a_bus = {{16{req_rdata[15]}}, req_rdata};
       rd68011_ucode_pkg::U_ASRC_REG:      a_bus = `RDREG(reg_index);
+      rd68011_ucode_pkg::U_ASRC_CREG:     a_bus = creg_val;
       rd68011_ucode_pkg::U_ASRC_RDATA_B:  a_bus = {24'd0, rdata_byte};
       rd68011_ucode_pkg::U_ASRC_INDEX:    a_bus = index_val;
       rd68011_ucode_pkg::U_ASRC_IRC_SXB:  a_bus = {{24{irc[7]}}, irc[7:0]};
@@ -320,6 +405,7 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_ASRC_USP:      a_bus = usp;
       rd68011_ucode_pkg::U_ASRC_IRQVEC:   a_bus = {8'd0, 20'hFFFFF, irq_taken, 1'b1};
       rd68011_ucode_pkg::U_ASRC_IRQPC:    a_bus = irq_from_stop ? pc : ir_pc;
+      rd68011_ucode_pkg::U_ASRC_DIVRES:   a_bus = {div_r, div_q};
       default:                            a_bus = 32'd0;
     endcase
   end
@@ -360,6 +446,7 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_BSRC_USP:      b_bus = usp;
       rd68011_ucode_pkg::U_BSRC_IRQVEC:   b_bus = {8'd0, 20'hFFFFF, irq_taken, 1'b1};
       rd68011_ucode_pkg::U_BSRC_IRQPC:    b_bus = irq_from_stop ? pc : ir_pc;
+      rd68011_ucode_pkg::U_BSRC_DIVRES:   b_bus = {div_r, div_q};
       default:                            b_bus = 32'd0;
     endcase
   end
@@ -460,6 +547,25 @@ module rd68011_seq (
   // replaces the extension word it came from, so by the time the test happens
   // it arrives on the A bus out of the data output buffer.
   assign bit_z = ((b_bus & a_bus) == 32'd0);
+
+  // The divider, which is sequential: the sequencer waits on it the way it
+  // waits on a bus cycle. See rd68011_divider for why this one unit is not
+  // combinational like the rest.
+  logic        div_busy, div_ovf;
+  logic [15:0] div_q, div_r;
+
+  rd68011_divider u_divider (
+      .clk       (clk),
+      .rst_n     (rst_n),
+      .start     (retire && `UF(uw, DIVST)),
+      .is_signed (`UF(uw, DIVSG)),
+      .dividend  (b_bus),
+      .divisor   (a_bus[15:0]),
+      .busy      (div_busy),
+      .quotient  (div_q),
+      .remainder (div_r),
+      .ovf       (div_ovf)
+  );
 
   logic [31:0] sh_out;
   logic        sh_c, sh_v, sh_xupd;
@@ -623,6 +729,11 @@ module rd68011_seq (
       if (bus_busy && (f_asel == rd68011_ucode_pkg::U_ASEL_T0_INC2)) begin
         t0_nxt = t0 + 32'd2;
       end
+      // Downward, the address used *is* the new value, so T0 moves first and
+      // the address unit reads it already decremented.
+      if (bus_busy && (f_asel == rd68011_ucode_pkg::U_ASEL_T0_DEC2)) begin
+        t0_nxt = t0 - 32'd2;
+      end
 
       unique case (f_dst)
         rd68011_ucode_pkg::U_DST_PC:      pc_nxt   = y;
@@ -630,6 +741,8 @@ module rd68011_seq (
         rd68011_ucode_pkg::U_DST_T1:      t1_nxt   = y;
         rd68011_ucode_pkg::U_DST_T0_SHW:  t0_nxt   = {t0[15:0], y[15:0]};
         rd68011_ucode_pkg::U_DST_T1_SHW:  t1_nxt   = {t1[15:0], y[15:0]};
+        rd68011_ucode_pkg::U_DST_T0_HIW:  t0_nxt   = {y[15:0], t0[15:0]};
+        rd68011_ucode_pkg::U_DST_T1_HIW:  t1_nxt   = {y[15:0], t1[15:0]};
         rd68011_ucode_pkg::U_DST_DBUF_SHW: dbuf_nxt = {dbuf[15:0], y[15:0]};
         // UM table 3-1's footnote: a byte write drives the byte on both
         // halves of the bus and lets the strobe decide which lands. Doing the
@@ -651,7 +764,38 @@ module rd68011_seq (
           endcase
         end
         rd68011_ucode_pkg::U_DST_REG_L: reg_we = 1'b1;
+        // MOVES: "if the destination is a data register, the source operand
+        // replaces the corresponding low-order bits ... if the destination is
+        // an address register, the source operand is sign-extended to 32 bits
+        // and then loaded" (PRM section 6).
+        rd68011_ucode_pkg::U_DST_REG_AD: begin
+          reg_we = 1'b1;
+          if (wreg_index[3]) begin
+            unique case (f_size)
+              rd68011_ucode_pkg::U_SIZE_BYTE: reg_wdata = {{24{y[7]}}, y[7:0]};
+              rd68011_ucode_pkg::U_SIZE_WORD: reg_wdata = {{16{y[15]}},
+                                                           y[15:0]};
+              default:                        reg_wdata = y;
+            endcase
+          end else begin
+            unique case (f_size)
+              rd68011_ucode_pkg::U_SIZE_BYTE:
+                reg_wdata = {wreg_val[31:8], y[7:0]};
+              rd68011_ucode_pkg::U_SIZE_WORD:
+                reg_wdata = {wreg_val[31:16], y[15:0]};
+              default: reg_wdata = y;
+            endcase
+          end
+        end
+        // The high half alone, for a long that arrives a word at a time:
+        // MOVEM.L to registers reads the high word first.
+        rd68011_ucode_pkg::U_DST_REG_HIW: begin
+          reg_we    = 1'b1;
+          reg_wdata = {y[15:0], wreg_val[15:0]};
+        end
         rd68011_ucode_pkg::U_DST_USP:   ;   // written in the register block
+        rd68011_ucode_pkg::U_DST_CREG:  ;   // ditto: not through the ALU port
+        rd68011_ucode_pkg::U_DST_SETV:  ;   // handled with the flags
         // RTR restores the condition codes and leaves the supervisor half of
         // the status register alone (PRM section 4).
         rd68011_ucode_pkg::U_DST_CCR: ;
@@ -729,6 +873,16 @@ module rd68011_seq (
       if (f_dst == rd68011_ucode_pkg::U_DST_SR_ALL) begin
         sr_nxt = y[15:0] & rd68011_pkg::SR_IMPLEMENTED;
       end
+      // A division that overflowed leaves the destination register alone.
+      // PRM calls N and Z undefined here; what the part does is set N and
+      // clear Z, the same way in every one of the reference's 791 overflow
+      // cases, so that is what this does.
+      if (f_dst == rd68011_ucode_pkg::U_DST_SETV) begin
+        sr_nxt[rd68011_pkg::SR_N] = 1'b1;
+        sr_nxt[rd68011_pkg::SR_Z] = 1'b0;
+        sr_nxt[rd68011_pkg::SR_V] = 1'b1;
+        sr_nxt[rd68011_pkg::SR_C] = 1'b0;
+      end
       if (f_dst == rd68011_ucode_pkg::U_DST_CCR) begin
         sr_nxt[7:0] = y[7:0] & 8'h1F;   // only the five defined bits
       end
@@ -764,6 +918,12 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_COND_FMT0:  cond_true = (req_rdata[15:12] == 4'h0);
       rd68011_ucode_pkg::U_COND_N:     cond_true = n_flag;
       rd68011_ucode_pkg::U_COND_RSTB:  cond_true = reset_busy;
+      rd68011_ucode_pkg::U_COND_ZERO:  cond_true = z_flag;
+      rd68011_ucode_pkg::U_COND_DIVB:  cond_true = div_busy;
+      rd68011_ucode_pkg::U_COND_MASK:  cond_true = (xw_after != 16'd0);
+      rd68011_ucode_pkg::U_COND_CRVALID: cond_true = creg_valid;
+      rd68011_ucode_pkg::U_COND_XWDR:  cond_true = xw_after[11];
+      rd68011_ucode_pkg::U_COND_DIVV:  cond_true = div_ovf;
       default:                         cond_true = 1'b0;
     endcase
   end
@@ -876,6 +1036,9 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_ASEL_T0,
       rd68011_ucode_pkg::U_ASEL_T0_INC2:  n_addr = t0_nxt;
       rd68011_ucode_pkg::U_ASEL_T0_PLUS2: n_addr = t0_nxt + 32'd2;
+      rd68011_ucode_pkg::U_ASEL_T0_PLUS4: n_addr = t0_nxt + 32'd4;
+      rd68011_ucode_pkg::U_ASEL_T0_PLUS6: n_addr = t0_nxt + 32'd6;
+      rd68011_ucode_pkg::U_ASEL_T0_DEC2:  n_addr = t0_nxt - 32'd2;
       rd68011_ucode_pkg::U_ASEL_T1:       n_addr = t1_nxt;
       rd68011_ucode_pkg::U_ASEL_EA:       n_addr = n_ea_addr;
       rd68011_ucode_pkg::U_ASEL_EA_PLUS2: n_addr = n_ea_addr + 32'd2;
@@ -903,6 +1066,10 @@ module rd68011_seq (
                                              rd68011_pkg::FC_SUPER_D :
                                              rd68011_pkg::FC_USER_D;
       rd68011_ucode_pkg::U_FC_CPU:  req_fc = rd68011_pkg::FC_CPU;
+      // MOVES reaches the space its own registers name, whatever mode the
+      // processor is in (PRM section 6).
+      rd68011_ucode_pkg::U_FC_SFC:  req_fc = sfc;
+      rd68011_ucode_pkg::U_FC_DFC:  req_fc = dfc;
       default:                      req_fc = sr_nxt[rd68011_pkg::SR_S] ?
                                              rd68011_pkg::FC_SUPER_P :
                                              rd68011_pkg::FC_USER_P;
@@ -968,6 +1135,9 @@ module rd68011_seq (
       t1       <= 32'd0;
       ea_latch <= 32'd0;
       dbuf     <= 32'd0;
+      xw    <= 16'd0;
+      sfc      <= 3'd0;
+      dfc      <= 3'd0;
       sr_save  <= 16'd0;
       irq_taken   <= 3'd0;
       trace_armed <= 1'b0;
@@ -996,6 +1166,7 @@ module rd68011_seq (
       t1       <= t1_nxt;
       ea_latch <= ea_latch_nxt;
       dbuf   <= dbuf_nxt;
+      if (retire) xw <= xw_after;
       // Both ways into exception processing keep the old status register for
       // the frame: the interrupt path raises the mask as well, but it still
       // has to stack what was there before.
@@ -1016,6 +1187,18 @@ module rd68011_seq (
       // it cannot go through the ordinary A7 path.
       if (retire && (f_dst == rd68011_ucode_pkg::U_DST_USP)) begin
         usp <= y;
+      end
+      // MOVEC to a control register. SFC and DFC keep three bits of what is
+      // written and read back zero-extended; the other two are whole
+      // registers (PRM section 6).
+      if (retire && (f_dst == rd68011_ucode_pkg::U_DST_CREG)) begin
+        unique case (irc[11:0])
+          12'h000: sfc <= y[2:0];
+          12'h001: dfc <= y[2:0];
+          12'h800: usp <= y;
+          12'h801: vbr <= y;
+          default: ;   // never reached: the microcode checks first
+        endcase
       end
       if (reg_we) begin
         if (wreg_index == 4'd15) begin

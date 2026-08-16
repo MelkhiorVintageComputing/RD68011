@@ -23,8 +23,11 @@ A sweep therefore reports three numbers: passed, failed, and skipped — with th
 skips broken down into "not implemented" and "needing exception processing", so
 a partial implementation says what is missing rather than quietly passing.
 
-As of P4 the sweep runs **106 opcode files and 8083 tests with zero failures**,
-and 39 tests remain skipped as not implemented: CMPM, which is P5.
+As of P5 the sweep runs **124 opcode files and 19050 tests with zero
+failures**, and **nothing is skipped as not implemented**: all 89 MC68010
+instructions are built. What is still skipped is the 5750 tests whose reference
+took an MC68000 exception, which is the frame-format difference below and waits
+on P6's address error handling for the other half.
 
 ## MC68000 to MC68010 differences the vectors expose
 
@@ -38,7 +41,9 @@ manual and against the vectors before being relied on.
 | **MOVE from SR is privileged.** PRM section 6: on the MC68010 it traps in user mode, where the MC68000 allowed it. | Implemented. User-mode vectors for it are skipped, since the reference simply ran where this traps. |
 | **Exception stack frames carry a format and vector word.** A privilege violation on the MC68000 pushes SR and PC as three words; the MC68010 pushes four. Confirmed empirically from the user-mode RESET vectors, where all 1267 of them take the trap. | Implemented, and the reason every vector whose reference took an exception is skipped -- see below. |
 | **Bus and address error frames are the 29-word format $8**, not the MC68000's seven-word one. | P6. |
-| **New instructions**: `BKPT`, `MOVEC`, `MOVES`, `RTD`, and the `SFC` and `DFC` registers. | P5. |
+| **`MOVEC` traps on an unknown control register.** Only $000 SFC, $001 DFC, $800 USP and $801 VBR exist on this part; PRM section 6's note 1 makes any other code an illegal instruction. | Implemented: the decode is hardware, so the microcode tests one condition rather than branching four ways. |
+| **New instructions**: `BKPT`, `MOVEC`, `MOVES`, `RTD`, and the `SFC` and `DFC` registers. | Implemented. The MC68000 vectors have nothing to compare them against, so they are covered by `sim/tb/core_m68010_tb.sv` instead. |
+| **`BKPT` runs a breakpoint acknowledge cycle** -- CPU space, function codes all ones, zeros on every address line -- and then takes an illegal instruction exception however that cycle ended (PRM section 4). The MC68000 runs no cycle at all. | Implemented and checked by function code, not by cycle index. |
 | **`MOVE from CCR`** is an MC68010 addition and has no MC68000 vectors at all. | Implemented; the sweep has nothing to compare it against, so it is covered by the directed tests. |
 | **`VBR`** relocates the vector table; the MC68000 always used address zero. | Implemented. Reset clears it, as UM 5.5 requires. |
 | **`RTE` checks the frame format** and traps to vector 14 on a code it does not recognise (UM 6.4). | Implemented for format $0; format $8 arrives in P6. |
@@ -73,26 +78,37 @@ would have thrown away with the rest.
 
 Listed so a sweep's "not implemented" count can be read against something.
 
-**P5** — MULU, MULS, DIVU, DIVS, the BCD group (ABCD, SBCD, NBCD), ADDX, SUBX,
-CMPM, MOVEM, MOVEP, EXG, and the MC68010's own MOVEC, MOVES, RTD and BKPT.
-
 **P6** — bus error, address error, the format $8 frame and instruction
 continuation.
 
 **P7** — loop mode.
 
+## Deliberate divergences added in P5
+
+| | Why |
+|---|--- |
+| **`MOVES.x An,(An)+` and `MOVES.x An,-(An)` store the *unmodified* register.** PRM section 6 calls the value stored undefined for these, and adds that the MC68010, MC68020, MC68030 and MC68040 store the incremented or decremented one. Measured here: `MOVEA.L #$4000,A0; MOVES.L A0,(A0)+` stores $00004000 where a real MC68010 stores $00004004. | The architecture leaves it undefined, and matching it would cost a microword: the write data leaves the register file at the start of the bus cycle, and the address unit's update lands at the end of it. Software that depends on this was already not portable across the family -- the manual's own advice is to run the sequence and find out. Pinned by `sim/tb/core_m68010_tb.sv` so it cannot drift silently. |
+| **MOVEM's transfer order within a register list is the mask's**, lowest bit first, and to `-(An)` the mask is read the other way round. | This is what PRM section 4 specifies and what the reference vectors show; it is recorded here only because it is the part of MOVEM most easily got backwards. |
+
 ## What is implemented and passing
 
-106 opcode files, every one at zero failures: MOVE and MOVEA at all three sizes
+All 89 instructions, across 124 opcode files at zero failures: MOVE and MOVEA
+at all three sizes
 and every addressing mode, MOVEQ, TST, CLR, NEG, NEGX, NOT, the ALU group
 (ADD, SUB, AND, OR, EOR, CMP) in both directions, ADDA/SUBA/CMPA, the immediate
 group, ADDQ and SUBQ, EXT, SWAP, LEA, PEA, Scc, TAS, the four bit operations in
-both their dynamic and static forms, and all twenty-four shift and rotate
-variants; Bcc, BSR, DBcc, JMP, JSR, RTS, RTR, LINK and UNLK; TRAP, TRAPV, CHK,
-ILLEGAL, line A and line F, privilege violations, trace, and interrupts with
-both the autovectored and the vectored acknowledge; MOVE to and from SR and
-CCR, the immediate-to-SR and to-CCR forms, MOVE USP, RESET, STOP and RTE.
+both their dynamic and static forms -- BTST including the immediate
+destination that PRM section 4 gives it and nothing else in the group -- and
+all twenty-four shift and rotate variants; Bcc, BSR, DBcc, JMP, JSR, RTS, RTR,
+LINK and UNLK; TRAP, TRAPV, CHK, ILLEGAL, line A and line F, privilege
+violations, trace, and interrupts with both the autovectored and the vectored
+acknowledge; MOVE to and from SR and CCR, the immediate-to-SR and to-CCR forms,
+MOVE USP, RESET, STOP and RTE; MULU, MULS, DIVU, DIVS, the BCD group, ADDX,
+SUBX, CMPM, EXG, MOVEM and MOVEP; and the MC68010's own MOVEC, MOVES, RTD and
+BKPT.
 
 The exception frame itself, the vector table, RTE's format check, the interrupt
 priority against the mask, trace, and waking from STOP are covered by
 `sim/tb/core_exception_tb.sv` instead of by the sweep, for the reason above.
+RTD, BKPT, MOVEC and MOVES are covered by `sim/tb/core_m68010_tb.sv`, because
+an MC68000 reference has no vectors for instructions it does not have.

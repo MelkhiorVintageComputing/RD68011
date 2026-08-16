@@ -133,18 +133,28 @@
   // count. Measuring from the first bus cycle instead would charge the *next*
   // instruction's leading internal cycles to this one -- a branch begins with
   // two microwords that touch nothing.
+  //
+  // Sampled on the falling edge, not the rising one. `retire` for a bus-cycle
+  // microword only settles once the bus unit has acknowledged, and the bus
+  // unit's output stage is negedge-clocked; read just after the rising edge it
+  // is still the previous half-clock's value, and the boundary that ends an
+  // instruction in a bus cycle is missed. The falling edge is the last moment
+  // before the rising edge that acts on it, so what is read there is what the
+  // sequencer will do.
   int          nins;
   logic [15:0] ins_op  [0:MAXTR-1];
+  logic [31:0] ins_pc  [0:MAXTR-1];
   int          ins_clk [0:MAXTR-1];
 
   initial begin
     nins = 0;
     forever begin
-      @(posedge clk);
+      @(negedge clk);
       #1;
       if (rst_n && dut.u_seq.retire && nins < MAXTR &&
           (dut.u_seq.f_seq == rd68011_ucode_pkg::U_SEQ_DECODE)) begin
         ins_op[nins]  = dut.u_seq.ir;   // the instruction that just finished
+        ins_pc[nins]  = dut.u_seq.ir_pc;
         ins_clk[nins] = clkcount;
         nins          = nins + 1;
       end

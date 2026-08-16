@@ -79,6 +79,18 @@ COND = {
     'FMT0':  5,   # the word just read is a format $0 frame header
     'N':     6,   # the negative flag: CHK's two bounds tests
     'RSTB':  7,   # the RESET instruction's output pulse is still running
+    'ZERO':  8,   # the value on the way out of the ALU is zero at its size
+    'DIVB':  9,   # the divider is still working
+    'DIVV': 10,   # the division overflowed
+    # MOVEM's register mask still names a register after this microword's
+    # `mop`. One condition serves both ends of the loop: entering it at all,
+    # and going round again.
+    'MASK': 11,
+    # MOVEC's extension word names a control register this part has.
+    'CRVALID': 12,
+    # MOVES's direction bit, which is in its extension word rather than in the
+    # opcode, so the microcode has to branch on it (PRM section 6).
+    'XWDR': 13,
 }
 
 # Sources onto the A and B buses. Everything is 32 bits wide by the time it
@@ -136,6 +148,11 @@ SRC = {
     # instruction after the STOP -- which the pipe never advanced to, because
     # STOP does no prefetch at all.
     'IRQPC':    34,
+    'DIVRES':   35,   # {remainder, quotient}, as PRM section 4 places them
+    # The control register MOVEC's extension word names: SFC, DFC, USP or VBR
+    # (PRM section 6). The four-way decode is hardware, so the microcode does
+    # not need a branch per register.
+    'CREG':     36,
 }
 
 ALU = {
@@ -155,10 +172,20 @@ ALU = {
     'SXB': 10,  # sign-extend the low byte to 32 bits: EXT.W
     'SWAP': 11, # exchange the halves of a long: SWAP
     'NOTX': 12, # ones complement, but of the B bus
+    'MULU': 19,  # b[15:0] * a[15:0], unsigned, to 32 bits
+    'MULS': 20,  # the same, signed
+    'ABCD': 17,  # decimal b + a + X
+    'SBCD': 18,  # decimal b - a - X
     'SHIFT': 13, # the shifter's result; `sh` says which of the eight
     'ANDN': 14,  # b & ~a: BCLR
     'ADDX': 15,  # b + a + X
     'SUBX': 16,  # b - a - X
+    # MOVEP assembles a register out of bytes read at alternate addresses,
+    # high-order byte first, and takes one apart the same way (PRM section 4).
+    'CAT8':  21,  # {b[23:0], a[7:0]}: shift a byte in at the bottom
+    'SHR8':  22,  # a >> 8, so the byte wanted lands where a byte write reads
+    'SHR16': 23,
+    'SHR24': 24,
 }
 
 DST = {
@@ -187,6 +214,31 @@ DST = {
     # the level being serviced (UM section 6).
     'SR_IRQ': 15,
     'USP':    16,   # the user stack pointer, written from supervisor mode
+    # Shift a word into the *high* half, for the operands that arrive low word
+    # first: a pre-decremented long is read at An-2 before An-4.
+    'T0_HIW': 17,
+    'T1_HIW': 18,
+    'SETV':   19,   # set the overflow flag and change nothing else: DIVU/DIVS
+    # The high half of a register, for the operands that arrive a word at a
+    # time: MOVEM.L to registers reads the high word first.
+    'REG_HIW': 20,
+    'CREG':    21,   # the control register MOVEC's extension word names
+    # The register at the operation's size if it is a data register, and
+    # sign-extended to all 32 bits if it is an address register -- which is
+    # what PRM section 6 specifies for MOVES, in those words.
+    'REG_AD':  22,
+}
+
+# The extension-word latch.
+#
+# An instruction whose extension word outlives the prefetch that replaces irc
+# needs somewhere to keep it. MOVEM's register mask is the demanding case --
+# it is consumed a register at a time across the whole instruction -- and
+# MOVEC and MOVES need theirs to survive one prefetch each.
+MOP = {
+    'NONE': 0,
+    'LOAD': 1,   # from irc, which is where an extension word always is
+    'STEP': 2,   # MOVEM: drop the register just transferred
 }
 
 # Bus request kinds. These are the values rd68011_pkg::cycle_kind_e uses, so
@@ -219,6 +271,11 @@ ASEL = {
     'EAL_PLUS6': 11,
     'EA_PLUS6':  12,  # the fourth word of an eight-byte pop: RTE
     'PC_MINUS2': 13,  # the word already in irc, re-read: MOVE to SR and CCR
+    'T0_PLUS4':  14,  # MOVEP walks alternate bytes: T0, T0+2, T0+4, T0+6
+    'T0_PLUS6':  15,
+    # MOVEM to -(An) walks downward: the address used is T0-2 and T0 follows
+    # it, so a long is two of these and lands the register four bytes lower.
+    'T0_DEC2':   16,
 }
 
 # What a microword does to the address register the mode names.
@@ -248,10 +305,16 @@ AUPD = {
 }
 
 # Which address space. PROG and DATA pick up the S bit of SR at the pin.
+#
+# SFC and DFC are the MC68010's own function code registers, which MOVES uses
+# to reach an address space of the program's choosing (PRM section 6): a read
+# goes to the space SFC names and a write to the one DFC names.
 FC = {
     'PROG': 0,
     'DATA': 1,
     'CPU':  2,
+    'SFC':  3,
+    'DFC':  4,
 }
 
 # The prefetch pipe operation performed as the microword retires.
@@ -276,6 +339,15 @@ RSEL = {
     'EA_A':   4,   # force an address register
     'IR9_D':  5,
     'IR9_A':  6,
+    'MNEXT':  7,   # the register MOVEM's mask names next
+    # The register named by the extension word held in the latch: bit 15 picks
+    # data or address and bits 14-12 the number. MOVEC and MOVES both put it
+    # there, because both consume the word before they use it.
+    'XW':     8,
+    # The register named by irc itself, for the instructions whose extension
+    # word is still there when it is needed: MOVEC never prefetches before it
+    # makes its transfer.
+    'IRC_X':  9,
 }
 
 # Which register a microword *writes*, when that is not the one it reads.
@@ -291,6 +363,9 @@ WSEL = {
     'EA_A':   4,
     'IR9_D':  5,
     'IR9_A':  6,
+    'MNEXT':  7,
+    'XW':     8,
+    'IRC_X':  9,
 }
 
 # Which half of the opcode carries the mode and register fields.
@@ -353,18 +428,18 @@ UADDR_BITS = 13
 FIELDS = [
     ('next',  UADDR_BITS, None),
     ('seq',   3,  SEQ),
-    ('cond',  3,  COND),
+    ('cond',  4,  COND),
     ('asrc',  6,  SRC),
     ('bsrc',  6,  SRC),
     ('alu',   5,  ALU),
     ('dst',   5,  DST),
     ('bus',   3,  BUS),
-    ('asel',  4,  ASEL),
+    ('asel',  5,  ASEL),
     ('aupd',  3,  AUPD),
-    ('fc',    2,  FC),
+    ('fc',    3,  FC),
     ('pf',    2,  PF),
-    ('rsel',  3,  RSEL),
-    ('wsel',  3,  WSEL),
+    ('rsel',  4,  RSEL),
+    ('wsel',  4,  WSEL),
     ('easel', 1,  EASEL),
     ('aeasel', 2, AEASEL),
     ('dhi',   1,  None),   # drive the high half of the data output buffer
@@ -372,6 +447,8 @@ FIELDS = [
     ('ccr',   3,  CCR),
     ('rstreq', 1, None),   # start the RESET instruction's output pulse
     ('stop',   1, None),   # stop until an interrupt arrives
+    ('divst',  1, None),   # start the divider
+    ('divsg',  1, None),   # ... signed
     ('vec',   8,  None),   # a constant vector number
     ('vsel',  2,  None),   # 0 constant, 1 TRAP's own number, 2 the interrupt
     ('sh',    3,  None),   # {shift kind, left}: see rd68011_shifter
@@ -379,6 +456,9 @@ FIELDS = [
     ('shone', 1,  None),   # shift by one, not by the opcode's count: the
                            # memory forms, whose count bits are the addressing
                            # mode
+    ('mop',   2,  MOP),
+    ('mdown', 1,  None),   # MOVEM to -(An) takes the mask the other way round:
+                           # bit 0 is A7 rather than D0 (PRM section 4)
 ]
 
 # Defaults for a microword that does nothing but move to the next address.
@@ -404,11 +484,15 @@ DEFAULTS = {
     'ccr':   CCR['NONE'],
     'rstreq': 0,
     'stop':  0,
+    'divst': 0,
+    'divsg': 0,
     'vec':   0,
     'vsel':  0,
     'sh':    0,
     'bitimm': 0,
     'shone': 0,
+    'mop':   MOP['NONE'],
+    'mdown': 0,
 }
 
 # The addressing-mode dispatch index: the mode field, except that mode 7 uses

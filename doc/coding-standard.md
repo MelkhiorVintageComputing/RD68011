@@ -146,9 +146,20 @@ always_comb begin
 end
 ```
 
-Two places in this design hit it: the source multiplexers in `rd68011_seq.sv`
-and `after_cycle` in `rd68011_biu.sv`. Both are now plain `always_comb`. A
-function whose result depends only on its arguments is still fine anywhere.
+Three places in this design hit it: the source multiplexers in
+`rd68011_seq.sv`, `after_cycle` in `rd68011_biu.sv`, and `pick_reg` -- the
+register-selection function called from `assign wreg_index = ...`. All are now
+plain `always_comb`. A function whose result depends only on its arguments is
+still fine anywhere.
+
+`pick_reg` is worth a note, because it was latent rather than failing: its
+result depended on `ir` and on the addressing-mode fields as well as on its
+argument, so it went stale only when the opcode changed while `wsel` did not --
+which never happened until MOVEM, whose loop writes a different register on
+every pass without the microword changing. The rule is not "convert functions
+that are currently wrong"; it is "do not call a function that reads module
+state from a continuous assignment at all", because whether the bug is visible
+depends on which combinations the design happens to exercise.
 
 ## Known tool quirks *(measured)*
 
@@ -162,5 +173,6 @@ function whose result depends only on its arguments is still fine anywhere.
 | iverilog | assigning a ternary of two enum values to an enum variable is "This assignment requires an explicit cast" | use `if`/`else` inside the case item |
 | iverilog | `unique`/`unique0` on a case are parsed but ignored, with a "sorry" note per occurrence | harmless; keep them for the other three tools |
 | iverilog | adjacent string literals do not concatenate (`"a" "b"` is a syntax error) | write one string |
+| all four | a testbench that samples `retire` just after the rising edge misses the end of a bus-cycle microword, because the bus unit's output stage is negedge-clocked and the acknowledge only settles in the second half of the clock | sample instruction boundaries on the *falling* edge, as `rd68011_core_harness.svh` does |
 
 Add to this table whenever a tool surprises you. It is cheaper than rediscovering it.

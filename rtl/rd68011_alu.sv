@@ -69,12 +69,83 @@ module rd68011_alu (
       rd68011_ucode_pkg::U_ALU_SXB:  y = {{24{a[7]}},  a[7:0]};
       rd68011_ucode_pkg::U_ALU_SWAP: y = {a[15:0], a[31:16]};
       rd68011_ucode_pkg::U_ALU_NOTX: y = ~b;
+      // MOVEP, which moves a register through alternate byte addresses,
+      // high-order byte first (PRM section 4). Reading, a byte shifts in at
+      // the bottom; writing, the byte wanted is brought down to where a byte
+      // write takes it from.
+      rd68011_ucode_pkg::U_ALU_CAT8:  y = {b[23:0], a[7:0]};
+      rd68011_ucode_pkg::U_ALU_SHR8:  y = {8'd0,  a[31:8]};
+      rd68011_ucode_pkg::U_ALU_SHR16: y = {16'd0, a[31:16]};
+      rd68011_ucode_pkg::U_ALU_SHR24: y = {24'd0, a[31:24]};
       rd68011_ucode_pkg::U_ALU_ANDN: y = b & ~a;
+      rd68011_ucode_pkg::U_ALU_MULU: y = mul_u;
+      rd68011_ucode_pkg::U_ALU_MULS: y = mul_s;
+      rd68011_ucode_pkg::U_ALU_ABCD: y = {b[31:8], bcd_add};
+      rd68011_ucode_pkg::U_ALU_SBCD: y = {b[31:8], bcd_sub};
       rd68011_ucode_pkg::U_ALU_ADDX: y = sumx[31:0];
       rd68011_ucode_pkg::U_ALU_SUBX: y = difx[31:0];
       default:                      y = a;
     endcase
   end
+
+  // -- Multiply ---------------------------------------------------------------
+  //
+  // Sixteen bits by sixteen to thirty-two, in one step rather than in the
+  // thirty-odd the original takes. The condition codes come from the result at
+  // long size, which the flag rule already handles, and V and C are cleared
+  // (PRM section 4).
+  logic [31:0] mul_u;
+  logic [31:0] mul_s;
+
+  assign mul_u = {16'd0, b[15:0]} * {16'd0, a[15:0]};
+  assign mul_s = $signed(b[15:0]) * $signed(a[15:0]);
+
+  // -- Binary-coded decimal --------------------------------------------------
+  //
+  // PRM section 4's ABCD, SBCD and NBCD. The part does not work digit by
+  // digit: it adds or subtracts in binary and then corrects, which is why an
+  // operand whose digits are not valid BCD comes out the way it does rather
+  // than the way a digit-at-a-time model would predict. Both forms below were
+  // settled against the reference vectors, all 1088 of one and 1085 of the
+  // other, before being written here.
+  //
+  // Addition: correct the low digit by six when it carried out of nine, and
+  // the high digit by sixty when the *uncorrected* binary sum passed 0x99 or
+  // overflowed a byte. Testing the uncorrected sum is the part that matters --
+  // 0x1b + 0x7d + 1 comes to 0x99 exactly, which is not a carry, and testing
+  // the corrected 0x9f would have made it one.
+  logic [8:0] bcd_sum;
+  logic [5:0] bcd_lo_sum;
+  logic [8:0] bcd_add_adj;
+  logic [7:0] bcd_add;
+  logic       bcd_add_c;
+
+  assign bcd_sum     = {1'b0, b[7:0]} + {1'b0, a[7:0]} + {8'd0, x_in};
+  assign bcd_lo_sum  = {2'd0, b[3:0]} + {2'd0, a[3:0]} + {5'd0, x_in};
+  assign bcd_add_c   = bcd_sum[8] || (bcd_sum[7:0] > 8'h99);
+  assign bcd_add_adj = {3'd0, (bcd_lo_sum > 6'd9) ? 6'h06 : 6'h00} +
+                       (bcd_add_c ? 9'h060 : 9'h000);
+  assign bcd_add     = bcd_sum[7:0] + bcd_add_adj[7:0];
+
+  // Subtraction: the same shape, with the corrections taken away instead of
+  // added. The carry out is a borrow from either the binary subtraction or
+  // from the correction itself -- 0xb2 minus 0xad borrows only once the six
+  // comes off, and the reference says that still counts.
+  logic [9:0] bcd_dif;
+  logic       bcd_lo_borrow, bcd_hi_borrow;
+  logic [9:0] bcd_sub_t;
+  logic [7:0] bcd_sub;
+  logic       bcd_sub_c;
+
+  assign bcd_dif       = {2'b0, b[7:0]} - {2'b0, a[7:0]} - {9'd0, x_in};
+  assign bcd_hi_borrow = bcd_dif[9] | bcd_dif[8];
+  assign bcd_lo_borrow = ({2'd0, b[3:0]} - {2'd0, a[3:0]} - {5'd0, x_in}) > 6'd15
+                         || (({1'b0, b[3:0]} < ({1'b0, a[3:0]} + {4'd0, x_in})));
+  assign bcd_sub_t     = bcd_dif
+                       - (bcd_lo_borrow ? 10'd6   : 10'd0)
+                       - (bcd_hi_borrow ? 10'h060 : 10'h000);
+  assign bcd_sub       = bcd_sub_t[7:0];
+  assign bcd_sub_c     = bcd_hi_borrow || bcd_sub_t[9] || bcd_sub_t[8];
 
   // Sign bits, and the carry out, at the operation's width. The carry is the
   // bit that falls off the top of the operation, which for a subtraction is
@@ -148,6 +219,21 @@ module rd68011_alu (
         v_out = (!sm && dm && !rm) || (sm && !dm && rm);
         c_out = carry;
       end
+      // The decimal operations set C from the decimal carry and leave V
+      // undefined, which PRM says of all three of them.
+      // PRM leaves V undefined for all three decimal operations. What the
+      // part actually does is report the overflow the decimal correction
+      // introduced: a sum whose top bit the correction turned on, or a
+      // difference whose top bit it turned off. Undefined is undefined, but
+      // matching something real beats matching nothing.
+      rd68011_ucode_pkg::U_ALU_ABCD: begin
+        v_out = ~bcd_sum[7] & bcd_add[7];
+        c_out = bcd_add_c;
+      end
+      rd68011_ucode_pkg::U_ALU_SBCD: begin
+        v_out = bcd_dif[7] & ~bcd_sub[7];
+        c_out = bcd_sub_c;
+      end
       default: begin
         // The logical operations and the plain moves clear both (PRM
         // section 4, under each instruction's condition codes).
@@ -165,6 +251,7 @@ module rd68011_alu (
   // operations those are is the microcode's decision, through the flag rule.
   logic unused;
   assign unused = &{1'b1, sum_b[7:0], dif_b[7:0], sum_w[15:0], dif_w[15:0],
-                    sumx_b[7:0], difx_b[7:0], sumx_w[15:0], difx_w[15:0]};
+                    sumx_b[7:0], difx_b[7:0], sumx_w[15:0], difx_w[15:0],
+                    bcd_add_adj[8]};
 
 endmodule

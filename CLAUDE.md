@@ -89,10 +89,11 @@ The PDFs have reconstructed outlines and are best read with
 ```sh
 make lint     # elaborate every rtl module under all four tools
 make sim      # directed testbenches (iverilog)
-make harte    # SingleStepTests opcode sweep (Verilator)
-make cosim    # lockstep against the Musashi ISS
+make harte    # one SingleStepTests opcode file: make harte OP=MOVE.w N=200
+make harte-all  # the whole sweep, every opcode file the ISA covers
+make ucode    # regenerate the microcode ROMs from tools/ucode/
 make synth    # Vivado synthesis + timing report
-make check    # everything
+make check    # ucode-check, lint and sim
 ```
 
 ## Tooling notes
