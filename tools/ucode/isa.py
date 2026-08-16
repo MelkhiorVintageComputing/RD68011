@@ -39,6 +39,18 @@ irc_pc is the base for every displacement the manual measures "from the
 extension word": a branch displacement and a (d16,PC) address alike, because in
 both cases the word being consumed out of irc is the one the displacement is
 relative to.
+
+EFFECTIVE ADDRESSES
+
+The addressing modes are microcode subroutines, one per (mode, size), reached
+through a dispatch table indexed by the mode and register fields of whichever
+half of the opcode `easel` selects. A subroutine leaves the effective address
+in T0 and returns; the caller then reads or writes through T0.
+
+Register-direct modes have no address, so the *caller* is generated in two
+shapes -- one that goes through memory and one that goes straight to the
+register file. The decoder picks between them by opcode pattern, which keeps
+the choice out of the microcode and off the cycle count.
 """
 
 # --------------------------------------------------------------------------
@@ -51,56 +63,68 @@ SEQ = {
     'NEXT':   0,   # the `next` field
     'DECODE': 1,   # the opcode decoder's entry point: end of instruction
     'COND':   2,   # `next`, with bit 0 set if the selected condition holds
+    'EACALL': 3,   # call the addressing-mode subroutine; `next` is the return
+    'RET':    4,   # return to the saved address
 }
 
 # Conditions selectable when seq is COND. Targets must be an even/odd pair.
 COND = {
     'NEVER': 0,    # makes seq=COND behave as NEXT; useful as a placeholder
-    'CC':    1,    # the Bcc condition in ir[11:8], against the CCR
+    'CC':    1,    # the condition in ir[11:8], against the CCR
     'SUPER': 2,    # the S bit of SR
 }
 
 # Sources onto the A and B buses. Everything is 32 bits wide by the time it
 # gets there; the _SX names sign-extend on the way.
 SRC = {
-    'ZERO':     0,
-    'ONE':      1,
-    'TWO':      2,
-    'FOUR':     3,
-    'PC':       4,
-    'IR_PC':    5,   # address of the opcode word
-    'IRC_PC':   6,   # address of the word in irc -- the displacement base
-    'IRC':      7,   # the extension word, zero-extended
-    'IRC_SX':   8,   # the extension word, sign-extended
-    'IR_SXB':   9,   # the low byte of the opcode, sign-extended: Bcc.B
-    'T0':      10,
-    'T1':      11,
-    'RDATA':   12,   # the word just read, zero-extended
-    'RDATA_SX': 13,  # the word just read, sign-extended
-    'REG':     14,   # the register file, selected by rsel
+    'ZERO':      0,
+    'ONE':       1,
+    'TWO':       2,
+    'FOUR':      3,
+    'PC':        4,
+    'IR_PC':     5,   # address of the opcode word
+    'IRC_PC':    6,   # address of the word in irc -- the displacement base
+    'IRC':       7,   # the extension word, zero-extended
+    'IRC_SX':    8,   # the extension word, sign-extended
+    'IR_SXB':    9,   # the low byte of the opcode, sign-extended: Bcc.B
+    'T0':       10,
+    'T1':       11,
+    'RDATA':    12,   # the word just read, zero-extended
+    'RDATA_SX': 13,   # the word just read, sign-extended
+    'REG':      14,   # the register file, selected by rsel
+    'RDATA_B':  15,   # the byte just read, picked by the address's low bit
 }
 
 ALU = {
     'A':   0,   # pass the A bus
     'B':   1,   # pass the B bus
-    'ADD': 2,
-    'SUB': 3,   # A - B
+    'ADD': 2,   # B + A
+    'SUB': 3,   # B - A
+    'AND': 4,
+    'OR':  5,
+    'EOR': 6,
+    'NOT': 7,
+    # {a[15:0], b[15:0]}: an absolute long address or a long immediate, built
+    # from the extension word already in irc and the one being read in this
+    # same cycle. Doing it in one step is what keeps the bus cycle order right.
+    'CAT': 8,
 }
 
 DST = {
-    'NONE':  0,
-    'PC':    1,
-    'T0':    2,
-    'T1':    3,
-    'T0_SHW': 4,  # T0 <- {T0[15:0], result[15:0]}: assembling a long from words
-    'T1_SHW': 5,
-    'REG':   6,   # the register file, selected by rsel
-    'SR':    7,
+    'NONE':    0,
+    'PC':      1,
+    'T0':      2,
+    'T1':      3,
+    'T0_SHW':  4,  # T0 <- {T0[15:0], result[15:0]}: a long from two words
+    'T1_SHW':  5,
+    'REG':     6,  # the register file, merged at the operation's size
+    'SR':      7,
     # The data output buffer, which is what a write cycle puts on the bus. A
     # write is always preceded by a microword that loads this, because the bus
     # unit latches the write data at the start of the cycle -- one microword
     # too early for that microword's own ALU result to reach it.
-    'DBUF':  8,
+    'DBUF':    8,  # loads all 32 bits; `dhi` picks the half that goes out
+    'REG_L':  10,  # write the register full width whatever the size says
 }
 
 # Bus request kinds. These are the values rd68011_pkg::cycle_kind_e uses, so
@@ -119,10 +143,33 @@ BUS = {
 # transfer two microwords instead of four: the address unit has its own
 # incrementer, so the ALU stays free to move the data.
 ASEL = {
-    'PC':      0,
-    'T0':      1,
-    'T1':      2,
-    'T0_INC2': 3,
+    'PC':        0,
+    'T0':        1,
+    'T1':        2,
+    'T0_INC2':   3,   # T0, then T0 += 2: the reset sequence's walk
+    'T0_PLUS2':  4,   # T0 + 2, unchanged: the second word of a long
+    'EA':        5,   # the address register the mode names, with `aupd`
+    'EA_PLUS2':  6,   # that register + 2: the second word of a long
+    'EAL':       7,   # the latched address of the last `aupd` microword
+    'EAL_PLUS2': 8,
+}
+
+# What a microword does to the address register the mode names.
+#
+# This is a second write port on the register file, separate from the ALU
+# destination, because (An)+ and -(An) have to update the register in the same
+# microword that uses it -- the reference vectors give MOVE.W (A0)+,D0 eight
+# cycles, which is two bus cycles and nothing else, so there is no spare clock
+# to do the update in.
+#
+# PRE also changes the address used: -(An) addresses An-inc, not An.
+#
+# The amount is the microword's size, except that a byte access through A7
+# moves it by two, because the stack pointer stays even (PRM section 2).
+AUPD = {
+    'NONE': 0,
+    'POST': 1,
+    'PRE':  2,
 }
 
 # Which address space. PROG and DATA pick up the S bit of SR at the pin.
@@ -140,57 +187,142 @@ PF = {
     'ADVFETCH': 3,   # both, with ir taking the *old* irc
 }
 
-# Register file selection. Fixed registers only for now; selecting from the
-# opcode's register fields arrives with the addressing modes in P3.
+# Register file selection.
+#
+# EA_* use the mode and register fields of whichever half of the opcode `easel`
+# picks; IR9_* use bits 11:9, the "other" register of a register-and-EA
+# instruction. EA_ANY is the register the mode itself names: a data register
+# for mode 000, an address register for everything else.
 RSEL = {
-    'NONE': 0,
-    'A7':   1,
+    'NONE':   0,
+    'A7':     1,
+    'EA_ANY': 2,
+    'EA_D':   3,   # force a data register
+    'EA_A':   4,   # force an address register
+    'IR9_D':  5,
+    'IR9_A':  6,
 }
 
-# Transfer size for a bus cycle.
+# Which register a microword *writes*, when that is not the one it reads.
+#
+# MOVE needs both at once: the source register named by the mode and register
+# fields, and the destination register in bits 11:9. SAME means the write goes
+# wherever rsel points, which is the common case.
+WSEL = {
+    'SAME':   0,
+    'A7':     1,
+    'EA_ANY': 2,
+    'EA_D':   3,
+    'EA_A':   4,
+    'IR9_D':  5,
+    'IR9_A':  6,
+}
+
+# Which half of the opcode carries the mode and register fields.
+#
+# MOVE is the awkward one: its destination is bits 11:6 with the two fields
+# *swapped*, register in 11:9 and mode in 8:6 (PRM section 4).
+EASEL = {
+    'SRC': 0,   # ir[5:3] mode, ir[2:0] register
+    'DST': 1,   # ir[8:6] mode, ir[11:9] register
+}
+
+# The same choice again, for the *address* side. MOVE Dn,(An) needs both at
+# once: the source register out of the low half and the destination address
+# register out of the high half, in one microword, because the reference gives
+# it two bus cycles and no internal ones.
+AEASEL = {
+    'SRC':  0,
+    'DST':  1,
+}
+
+# Transfer size. BYTE picks its data strobe from the address's low bit rather
+# than being told which (UM table 3-1); the microcode never has to know whether
+# an address turned out even or odd.
 SIZE = {
-    'WORD': 0,
-    'BYTE_U': 1,   # upper byte: UDS only
-    'BYTE_L': 2,   # lower byte: LDS only
+    'BYTE': 0,
+    'WORD': 1,
+    'LONG': 2,
+}
+
+# Which condition codes a microword updates, and by what rule.
+#
+# PRM section 4 gives these per instruction; they collapse to a handful of
+# rules. X is separate from C throughout: most operations leave it alone.
+CCR = {
+    'NONE':  0,
+    'LOGIC': 1,   # N and Z from the result, V and C cleared, X untouched
+    'ARITH': 2,   # N Z V C from the operation, X <- C
+    'CMP':   3,   # N Z V C from the operation, X untouched
 }
 
 # --------------------------------------------------------------------------
 # The microword layout. Order here is the bit order, least significant first.
 # --------------------------------------------------------------------------
-UADDR_BITS = 8
+UADDR_BITS = 10
 
 FIELDS = [
-    ('next', UADDR_BITS, None),
-    ('seq',  2,  SEQ),
-    ('cond', 2,  COND),
-    ('asrc', 4,  SRC),
-    ('bsrc', 4,  SRC),
-    ('alu',  2,  ALU),
-    ('dst',  4,  DST),
-    ('bus',  3,  BUS),
-    ('asel', 2,  ASEL),
-    ('fc',   2,  FC),
-    ('pf',   2,  PF),
-    ('rsel', 2,  RSEL),
-    ('size', 2,  SIZE),
+    ('next',  UADDR_BITS, None),
+    ('seq',   3,  SEQ),
+    ('cond',  2,  COND),
+    ('asrc',  4,  SRC),
+    ('bsrc',  4,  SRC),
+    ('alu',   4,  ALU),
+    ('dst',   4,  DST),
+    ('bus',   3,  BUS),
+    ('asel',  4,  ASEL),
+    ('aupd',  2,  AUPD),
+    ('fc',    2,  FC),
+    ('pf',    2,  PF),
+    ('rsel',  3,  RSEL),
+    ('wsel',  3,  WSEL),
+    ('easel', 1,  EASEL),
+    ('aeasel', 1, AEASEL),
+    ('dhi',   1,  None),   # drive the high half of the data output buffer
+    ('size',  2,  SIZE),
+    ('ccr',   2,  CCR),
 ]
 
 # Defaults for a microword that does nothing but move to the next address.
 DEFAULTS = {
-    'next': 0,
-    'seq':  SEQ['NEXT'],
-    'cond': COND['NEVER'],
-    'asrc': SRC['ZERO'],
-    'bsrc': SRC['ZERO'],
-    'alu':  ALU['A'],
-    'dst':  DST['NONE'],
-    'bus':  BUS['NONE'],
-    'asel': ASEL['PC'],
-    'fc':   FC['PROG'],
-    'pf':   PF['NONE'],
-    'rsel': RSEL['NONE'],
-    'size': SIZE['WORD'],
+    'next':  0,
+    'seq':   SEQ['NEXT'],
+    'cond':  COND['NEVER'],
+    'asrc':  SRC['ZERO'],
+    'bsrc':  SRC['ZERO'],
+    'alu':   ALU['A'],
+    'dst':   DST['NONE'],
+    'bus':   BUS['NONE'],
+    'asel':  ASEL['PC'],
+    'aupd':  AUPD['NONE'],
+    'fc':    FC['PROG'],
+    'pf':    PF['NONE'],
+    'rsel':  RSEL['NONE'],
+    'wsel':  WSEL['SAME'],
+    'easel': EASEL['SRC'],
+    'aeasel': AEASEL['SRC'],
+    'dhi':   0,
+    'size':  SIZE['WORD'],
+    'ccr':   CCR['NONE'],
 }
+
+# The addressing-mode dispatch index: the mode field, except that mode 7 uses
+# its register field to pick between five sub-modes (PRM section 2).
+EA_MODES = [
+    ('DN',      0),   # Dn
+    ('AN',      1),   # An
+    ('AIND',    2),   # (An)
+    ('APOST',   3),   # (An)+
+    ('APRE',    4),   # -(An)
+    ('ADISP',   5),   # (d16,An)
+    ('AIDX',    6),   # (d8,An,Xn)
+    ('ABSW',    8),   # (xxx).W        mode 7 reg 0
+    ('ABSL',    9),   # (xxx).L        mode 7 reg 1
+    ('PCDISP', 10),   # (d16,PC)       mode 7 reg 2
+    ('PCIDX',  11),   # (d8,PC,Xn)     mode 7 reg 3
+    ('IMM',    12),   # #imm           mode 7 reg 4
+]
+EA_INDEX_BITS = 4
 
 
 def width():

@@ -69,7 +69,18 @@ module rd68011_seq (
   logic [31:0] ir_pc;     // address ir was fetched from
   logic [31:0] irc_pc;    // address irc was fetched from
   logic [31:0] t0, t1;    // working registers
-  logic [15:0] dbuf;      // data output buffer
+  // The address the address unit last computed. Real hardware calls this the
+  // address output buffer, and it exists here for the same reason: MOVE to
+  // -(An) prefetches *before* it writes (which the reference vectors show
+  // plainly), so by the time the write happens `ir` already holds the next
+  // instruction and the address register field is gone. This holds the address
+  // across that. It is also the fault address the format $8 frame needs.
+  logic [31:0] ea_latch;
+  // The data output buffer, 32 bits: a long store has to hold the whole
+  // operand, because MOVE to -(An) prefetches first and by the time the two
+  // write cycles run, ir holds the next instruction and the source register
+  // field has gone.
+  logic [31:0] dbuf;
   logic [15:0] sr;
   logic [31:0] vbr;
   logic [31:0] regs [0:15];
@@ -97,8 +108,13 @@ module rd68011_seq (
   logic [rd68011_ucode_pkg::U_DST_W-1:0]  f_dst;
   logic [rd68011_ucode_pkg::U_BUS_W-1:0]  f_bus;
   logic [rd68011_ucode_pkg::U_ASEL_W-1:0] f_asel;
+  logic [rd68011_ucode_pkg::U_AUPD_W-1:0] f_aupd;
   logic [rd68011_ucode_pkg::U_PF_W-1:0]   f_pf;
   logic [rd68011_ucode_pkg::U_RSEL_W-1:0] f_rsel;
+  logic [rd68011_ucode_pkg::U_WSEL_W-1:0] f_wsel;
+  logic [rd68011_ucode_pkg::U_EASEL_W-1:0] f_easel;
+  logic [rd68011_ucode_pkg::U_SIZE_W-1:0]  f_size;
+  logic [rd68011_ucode_pkg::U_CCR_W-1:0]   f_ccr;
 
   assign f_seq  = `UF(uw, SEQ);
   assign f_cond = `UF(uw, COND);
@@ -107,9 +123,14 @@ module rd68011_seq (
   assign f_alu  = `UF(uw, ALU);
   assign f_dst  = `UF(uw, DST);
   assign f_bus  = `UF(uw, BUS);
-  assign f_asel = `UF(uw, ASEL);
+  assign f_asel  = `UF(uw, ASEL);
+  assign f_aupd  = `UF(uw, AUPD);
   assign f_pf   = `UF(uw, PF);
-  assign f_rsel = `UF(uw, RSEL);
+  assign f_rsel  = `UF(uw, RSEL);
+  assign f_wsel  = `UF(uw, WSEL);
+  assign f_easel = `UF(uw, EASEL);
+  assign f_size  = `UF(uw, SIZE);
+  assign f_ccr   = `UF(uw, CCR);
 
   // ===========================================================================
   // Retirement
@@ -164,14 +185,63 @@ module rd68011_seq (
   // Source buses and the ALU
   // ===========================================================================
   logic [31:0] a_bus, b_bus, y;
+  logic  [7:0] rdata_byte;
+  logic        n_flag, z_flag, v_flag, c_flag;
 
-  // Register selection. Only fixed registers for now; selecting from the
-  // opcode's register fields arrives with the addressing modes.
+  // UM table 3-1: a byte at an even address arrives on D15-D8 and one at an
+  // odd address on D7-D0. The address's low bit is the only thing that decides
+  // it, so the microcode never has to know how an address turned out.
+  assign rdata_byte = addr_lsb ? req_rdata[7:0] : req_rdata[15:8];
+
+  // Register selection.
+  //
+  // `easel` picks which half of the opcode carries the mode and register
+  // fields. MOVE is the reason this exists: its destination is bits 11:6 with
+  // the two fields swapped -- register in 11:9, mode in 8:6 (PRM section 4) --
+  // where every other instruction puts mode in 5:3 and register in 2:0.
+  logic [2:0] ea_mode;
+  logic [2:0] ea_reg;
   logic [3:0] reg_index;
+
+  always_comb begin
+    if (f_easel == rd68011_ucode_pkg::U_EASEL_DST) begin
+      ea_mode = ir[8:6];
+      ea_reg  = ir[11:9];
+    end else begin
+      ea_mode = ir[5:3];
+      ea_reg  = ir[2:0];
+    end
+  end
+
+  function automatic logic [3:0] pick_reg(input logic [2:0] sel);
+    unique case (sel)
+      3'd1:    pick_reg = 4'd15;                            // A7
+      3'd2:    pick_reg = {(ea_mode != 3'b000), ea_reg};    // the mode's own
+      3'd3:    pick_reg = {1'b0, ea_reg};                   // forced data
+      3'd4:    pick_reg = {1'b1, ea_reg};                   // forced address
+      3'd5:    pick_reg = {1'b0, ir[11:9]};
+      3'd6:    pick_reg = {1'b1, ir[11:9]};
+      default: pick_reg = 4'd15;
+    endcase
+  endfunction
+
+  // The register written, which is not always the one read: MOVE reads the
+  // source the mode names and writes the destination in bits 11:9.
+  logic [3:0] wreg_index;
+  assign wreg_index = (f_wsel == rd68011_ucode_pkg::U_WSEL_SAME)
+                        ? reg_index : pick_reg(f_wsel);
+
   always_comb begin
     unique case (f_rsel)
-      rd68011_ucode_pkg::U_RSEL_A7: reg_index = 4'd15;
-      default:                      reg_index = 4'd15;
+      rd68011_ucode_pkg::U_RSEL_A7:     reg_index = 4'd15;
+      // The register the mode itself names: a data register for mode 000, an
+      // address register for every other mode that names one.
+      rd68011_ucode_pkg::U_RSEL_EA_ANY: reg_index = {(ea_mode != 3'b000), ea_reg};
+      rd68011_ucode_pkg::U_RSEL_EA_D:   reg_index = {1'b0, ea_reg};
+      rd68011_ucode_pkg::U_RSEL_EA_A:   reg_index = {1'b1, ea_reg};
+      rd68011_ucode_pkg::U_RSEL_IR9_D:  reg_index = {1'b0, ir[11:9]};
+      rd68011_ucode_pkg::U_RSEL_IR9_A:  reg_index = {1'b1, ir[11:9]};
+      default:                          reg_index = 4'd15;
     endcase
   end
 
@@ -202,6 +272,7 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_ASRC_RDATA:    a_bus = {16'd0, req_rdata};
       rd68011_ucode_pkg::U_ASRC_RDATA_SX: a_bus = {{16{req_rdata[15]}}, req_rdata};
       rd68011_ucode_pkg::U_ASRC_REG:      a_bus = regs[reg_index];
+      rd68011_ucode_pkg::U_ASRC_RDATA_B:  a_bus = {24'd0, rdata_byte};
       default:                            a_bus = 32'd0;
     endcase
   end
@@ -223,11 +294,74 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_BSRC_RDATA:    b_bus = {16'd0, req_rdata};
       rd68011_ucode_pkg::U_BSRC_RDATA_SX: b_bus = {{16{req_rdata[15]}}, req_rdata};
       rd68011_ucode_pkg::U_BSRC_REG:      b_bus = regs[reg_index];
+      rd68011_ucode_pkg::U_BSRC_RDATA_B:  b_bus = {24'd0, rdata_byte};
       default:                            b_bus = 32'd0;
     endcase
   end
 
-  rd68011_alu u_alu (.op (f_alu), .a (a_bus), .b (b_bus), .y (y));
+  rd68011_alu u_alu (
+      .op (f_alu), .size (f_size), .a (a_bus), .b (b_bus),
+      .x_in (sr[rd68011_pkg::SR_X]), .y (y),
+      .n_out (n_flag), .z_out (z_flag), .v_out (v_flag), .c_out (c_flag)
+  );
+
+  // ===========================================================================
+  // The address register update
+  //
+  // (An)+ and -(An) have to modify the register in the same microword that
+  // addresses through it -- the reference gives MOVE.W (A0)+,D0 two bus cycles
+  // and no internal ones -- so this is a second write port, independent of the
+  // ALU's destination.
+  //
+  // The amount is the operation's size, except that a byte access through A7
+  // moves it by two: the stack pointer stays even (PRM section 2).
+  // ===========================================================================
+  logic [3:0]  ea_areg;
+  logic [31:0] ea_base;
+  logic [31:0] ea_inc;
+  logic [31:0] ea_updated;
+  logic [31:0] ea_used;      // the address this microword actually addresses
+  logic        aupd_we;
+
+  // The address side reads its register field through aeasel, which is not
+  // always the same half of the opcode the data side uses.
+  logic [2:0] aea_reg;
+  always_comb begin
+    if (`UF(uw, AEASEL) == rd68011_ucode_pkg::U_AEASEL_DST) aea_reg = ir[11:9];
+    else                                                    aea_reg = ir[2:0];
+  end
+
+  assign ea_areg = {1'b1, aea_reg};
+  assign ea_base = regs[ea_areg];
+
+  always_comb begin
+    unique case (f_size)
+      rd68011_ucode_pkg::U_SIZE_BYTE: ea_inc = (ea_areg == 4'd15) ? 32'd2 : 32'd1;
+      rd68011_ucode_pkg::U_SIZE_LONG: ea_inc = 32'd4;
+      default:                        ea_inc = 32'd2;
+    endcase
+  end
+
+  always_comb begin
+    ea_updated = ea_base;
+    ea_used    = ea_base;
+    aupd_we    = 1'b0;
+    unique case (f_aupd)
+      rd68011_ucode_pkg::U_AUPD_POST: begin
+        ea_updated = ea_base + ea_inc;
+        aupd_we    = 1'b1;
+      end
+      rd68011_ucode_pkg::U_AUPD_PRE: begin
+        ea_updated = ea_base - ea_inc;
+        ea_used    = ea_base - ea_inc;
+        aupd_we    = 1'b1;
+      end
+      default: ;
+    endcase
+    // The address the cycle actually uses is computed on the next-microword
+    // path (n_ea_addr), for the same reason every other request field is:
+    // the bus unit latches it on the edge that ends the previous cycle.
+  end
 
   // ===========================================================================
   // Next values of every register the bus address can come from
@@ -237,15 +371,18 @@ module rd68011_seq (
   // Registering them is then a plain assignment, which is also why there is one
   // place to look for what a microword does to the datapath.
   // ===========================================================================
-  logic [31:0] pc_nxt, t0_nxt, t1_nxt;
-  logic [15:0] dbuf_nxt;
+  logic [31:0] pc_nxt, t0_nxt, t1_nxt, ea_latch_nxt;
+  logic [31:0] dbuf_nxt;
   logic [31:0] reg_wdata;
   logic        reg_we;
+  logic        addr_lsb;      // low bit of the address of the cycle in progress
+  logic [15:0] sr_nxt;
 
   always_comb begin
-    pc_nxt    = pc;
-    t0_nxt    = t0;
-    t1_nxt    = t1;
+    pc_nxt       = pc;
+    t0_nxt       = t0;
+    t1_nxt       = t1;
+    ea_latch_nxt = (retire && aupd_we) ? ea_used : ea_latch;
     dbuf_nxt  = dbuf;
     reg_wdata = y;
     reg_we    = 1'b0;
@@ -261,15 +398,70 @@ module rd68011_seq (
       end
 
       unique case (f_dst)
-        rd68011_ucode_pkg::U_DST_PC:     pc_nxt   = y;
-        rd68011_ucode_pkg::U_DST_T0:     t0_nxt   = y;
-        rd68011_ucode_pkg::U_DST_T1:     t1_nxt   = y;
-        rd68011_ucode_pkg::U_DST_T0_SHW: t0_nxt   = {t0[15:0], y[15:0]};
-        rd68011_ucode_pkg::U_DST_T1_SHW: t1_nxt   = {t1[15:0], y[15:0]};
-        rd68011_ucode_pkg::U_DST_DBUF:   dbuf_nxt = y[15:0];
-        rd68011_ucode_pkg::U_DST_REG:    reg_we   = 1'b1;
+        rd68011_ucode_pkg::U_DST_PC:      pc_nxt   = y;
+        rd68011_ucode_pkg::U_DST_T0:      t0_nxt   = y;
+        rd68011_ucode_pkg::U_DST_T1:      t1_nxt   = y;
+        rd68011_ucode_pkg::U_DST_T0_SHW:  t0_nxt   = {t0[15:0], y[15:0]};
+        rd68011_ucode_pkg::U_DST_T1_SHW:  t1_nxt   = {t1[15:0], y[15:0]};
+        // UM table 3-1's footnote: a byte write drives the byte on both
+        // halves of the bus and lets the strobe decide which lands. Doing the
+        // duplication here means it holds however the buffer is read back.
+        rd68011_ucode_pkg::U_DST_DBUF:
+          dbuf_nxt = (f_size == rd68011_ucode_pkg::U_SIZE_BYTE)
+                       ? {y[31:16], y[7:0], y[7:0]} : y;
+        // A byte or word write to a data register leaves the rest of it
+        // alone (PRM section 2); a long write replaces the lot.
+        rd68011_ucode_pkg::U_DST_REG: begin
+          reg_we = 1'b1;
+          unique case (f_size)
+            rd68011_ucode_pkg::U_SIZE_BYTE:
+              reg_wdata = {regs[wreg_index][31:8], y[7:0]};
+            rd68011_ucode_pkg::U_SIZE_WORD:
+              reg_wdata = {regs[wreg_index][31:16], y[15:0]};
+            default:
+              reg_wdata = y;
+          endcase
+        end
+        rd68011_ucode_pkg::U_DST_REG_L: reg_we = 1'b1;
         default: ;   // NONE and SR, which is not written from here yet
       endcase
+    end
+  end
+
+  // ===========================================================================
+  // Condition codes
+  //
+  // PRM section 4 gives them per instruction; they collapse to a few rules,
+  // and which rule a microword uses is its `ccr` field. X is deliberately
+  // separate from C: most operations leave it alone, which is the whole point
+  // of having both.
+  // ===========================================================================
+  always_comb begin
+    sr_nxt = sr;
+    if (retire) begin
+      unique case (f_ccr)
+        rd68011_ucode_pkg::U_CCR_LOGIC: begin
+          sr_nxt[rd68011_pkg::SR_N] = n_flag;
+          sr_nxt[rd68011_pkg::SR_Z] = z_flag;
+          sr_nxt[rd68011_pkg::SR_V] = 1'b0;
+          sr_nxt[rd68011_pkg::SR_C] = 1'b0;
+        end
+        rd68011_ucode_pkg::U_CCR_ARITH: begin
+          sr_nxt[rd68011_pkg::SR_N] = n_flag;
+          sr_nxt[rd68011_pkg::SR_Z] = z_flag;
+          sr_nxt[rd68011_pkg::SR_V] = v_flag;
+          sr_nxt[rd68011_pkg::SR_C] = c_flag;
+          sr_nxt[rd68011_pkg::SR_X] = c_flag;
+        end
+        rd68011_ucode_pkg::U_CCR_CMP: begin
+          sr_nxt[rd68011_pkg::SR_N] = n_flag;
+          sr_nxt[rd68011_pkg::SR_Z] = z_flag;
+          sr_nxt[rd68011_pkg::SR_V] = v_flag;
+          sr_nxt[rd68011_pkg::SR_C] = c_flag;
+        end
+        default: ;
+      endcase
+      if (f_dst == rd68011_ucode_pkg::U_DST_SR) sr_nxt = y[15:0];
     end
   end
 
@@ -313,6 +505,49 @@ module rd68011_seq (
   logic [rd68011_ucode_pkg::U_SIZE_W-1:0] n_size;
   logic [31:0] n_addr;
 
+  // The address register the *next* microword will use, with its own update
+  // applied, for the same reason every other request field comes from the next
+  // microword: the bus unit latches all of it on the edge that ends this cycle.
+  logic [rd68011_ucode_pkg::U_AUPD_W-1:0] n_aupd;
+  logic [rd68011_ucode_pkg::U_SIZE_W-1:0] n_easize;
+  logic  [2:0] n_ea_reg;
+  logic  [3:0] n_ea_areg;
+  logic [31:0] n_ea_base, n_ea_inc, n_ea_addr;
+
+  assign n_aupd   = `UF(uw_nxt, AUPD);
+  assign n_easize = `UF(uw_nxt, SIZE);
+
+  always_comb begin
+    if (`UF(uw_nxt, AEASEL) == rd68011_ucode_pkg::U_AEASEL_DST) begin
+      n_ea_reg = ir_nxt[11:9];
+    end else begin
+      n_ea_reg = ir_nxt[2:0];
+    end
+  end
+
+  assign n_ea_areg = {1'b1, n_ea_reg};
+  // Bypass: if this edge writes the register the next microword addresses
+  // through, the next microword has to see the new value, because the register
+  // file will not have it until after the edge.
+  //
+  // Only when the current microword is actually retiring. Until then uw_nxt is
+  // this same microword, and letting the bypass through would hand (An)+ its
+  // own incremented value as the address -- addressing An+2 instead of An.
+  assign n_ea_base = (reg_we && (wreg_index == n_ea_areg))          ? reg_wdata
+                   : (retire && aupd_we && (ea_areg == n_ea_areg))  ? ea_updated
+                   : regs[n_ea_areg];
+
+  always_comb begin
+    unique case (n_easize)
+      rd68011_ucode_pkg::U_SIZE_BYTE: n_ea_inc = (n_ea_areg == 4'd15) ? 32'd2 : 32'd1;
+      rd68011_ucode_pkg::U_SIZE_LONG: n_ea_inc = 32'd4;
+      default:                        n_ea_inc = 32'd2;
+    endcase
+  end
+
+  assign n_ea_addr = (n_aupd == rd68011_ucode_pkg::U_AUPD_PRE)
+                       ? (n_ea_base - n_ea_inc) : n_ea_base;
+
   assign n_bus  = `UF(uw_nxt, BUS);
   assign n_asel = `UF(uw_nxt, ASEL);
   assign n_fc   = `UF(uw_nxt, FC);
@@ -320,11 +555,16 @@ module rd68011_seq (
 
   always_comb begin
     unique case (n_asel)
-      rd68011_ucode_pkg::U_ASEL_PC:      n_addr = pc_nxt;
+      rd68011_ucode_pkg::U_ASEL_PC:       n_addr = pc_nxt;
       rd68011_ucode_pkg::U_ASEL_T0,
-      rd68011_ucode_pkg::U_ASEL_T0_INC2: n_addr = t0_nxt;
-      rd68011_ucode_pkg::U_ASEL_T1:      n_addr = t1_nxt;
-      default:                           n_addr = pc_nxt;
+      rd68011_ucode_pkg::U_ASEL_T0_INC2:  n_addr = t0_nxt;
+      rd68011_ucode_pkg::U_ASEL_T0_PLUS2: n_addr = t0_nxt + 32'd2;
+      rd68011_ucode_pkg::U_ASEL_T1:       n_addr = t1_nxt;
+      rd68011_ucode_pkg::U_ASEL_EA:       n_addr = n_ea_addr;
+      rd68011_ucode_pkg::U_ASEL_EA_PLUS2: n_addr = n_ea_addr + 32'd2;
+      rd68011_ucode_pkg::U_ASEL_EAL:       n_addr = ea_latch_nxt;
+      rd68011_ucode_pkg::U_ASEL_EAL_PLUS2: n_addr = ea_latch_nxt + 32'd2;
+      default:                            n_addr = pc_nxt;
     endcase
   end
 
@@ -341,18 +581,42 @@ module rd68011_seq (
     endcase
   end
 
+  // UM table 3-1: a byte transfer asserts one strobe, chosen by the address's
+  // low bit; a word transfer asserts both. There is no A0 pin, so this is the
+  // only thing that carries it.
   always_comb begin
-    unique case (n_size)
-      rd68011_ucode_pkg::U_SIZE_BYTE_U: begin req_uds = 1'b1; req_lds = 1'b0; end
-      rd68011_ucode_pkg::U_SIZE_BYTE_L: begin req_uds = 1'b0; req_lds = 1'b1; end
-      default:                          begin req_uds = 1'b1; req_lds = 1'b1; end
-    endcase
+    if (n_size == rd68011_ucode_pkg::U_SIZE_BYTE) begin
+      req_uds = !n_addr[0];
+      req_lds =  n_addr[0];
+    end else begin
+      req_uds = 1'b1;
+      req_lds = 1'b1;
+    end
   end
 
   assign req_valid = (n_bus != rd68011_ucode_pkg::U_BUS_NONE) && reset_sync_n;
   assign req_kind  = n_bus;
   assign req_addr  = n_addr[23:1];
-  assign req_wdata = dbuf_nxt;
+  // The write data comes from the microword that is issuing the write, not
+  // from a microword before it: the bus unit latches it on the falling edge
+  // entering S3 (UM 5.1.2 state 3), a clock and a half after the cycle starts,
+  // which is long enough for this microword's own ALU result to be there.
+  // Loading it a microword early would cost a clock, and the reference gives
+  // MOVE.W D0,(A0) two bus cycles and nothing else.
+  //
+  // UM table 3-1's footnote: on a byte write the processor drives the byte on
+  // both halves of the bus, so the strobe alone decides which half lands.
+  always_comb begin
+    if (f_dst == rd68011_ucode_pkg::U_DST_DBUF) begin
+      // This microword both fills the buffer and drives the bus, so the half
+      // it sends comes from the value on its way in, not from the register.
+      req_wdata = (f_size == rd68011_ucode_pkg::U_SIZE_BYTE)
+                    ? {y[7:0], y[7:0]}
+                    : (`UF(uw, DHI) ? y[31:16] : y[15:0]);
+    end else begin
+      req_wdata = `UF(uw, DHI) ? dbuf[31:16] : dbuf[15:0];
+    end
+  end
 
   // Not driven yet: the RESET instruction and double bus fault detection.
   assign reset_req = 1'b0;
@@ -371,29 +635,40 @@ module rd68011_seq (
       irc    <= 16'd0;
       ir_pc  <= 32'd0;
       irc_pc <= 32'd0;
-      t0     <= 32'd0;
-      t1     <= 32'd0;
-      dbuf   <= 16'd0;
+      t0       <= 32'd0;
+      t1       <= 32'd0;
+      ea_latch <= 32'd0;
+      dbuf     <= 32'd0;
       // UM 5.5: the interrupt level is initialised to seven and, on the
       // MC68010, the vector base register is cleared. The supervisor bit is
       // set because reset always leaves the processor in supervisor mode.
-      sr     <= 16'h2700;
-      vbr    <= 32'd0;
+      sr       <= 16'h2700;
+      vbr      <= 32'd0;
+      addr_lsb <= 1'b0;
       for (i = 0; i < 16; i = i + 1) begin
         regs[i] <= 32'd0;
       end
     end else begin
-      upc    <= upc_nxt;
+      upc      <= upc_nxt;
+      sr       <= sr_nxt;
+      addr_lsb <= n_addr[0];
       pc     <= pc_nxt;
       ir     <= ir_nxt;
       irc    <= irc_nxt;
       ir_pc  <= ir_pc_nxt;
       irc_pc <= irc_pc_nxt;
-      t0     <= t0_nxt;
-      t1     <= t1_nxt;
+      t0       <= t0_nxt;
+      t1       <= t1_nxt;
+      ea_latch <= ea_latch_nxt;
       dbuf   <= dbuf_nxt;
       if (reg_we) begin
-        regs[reg_index] <= reg_wdata;
+        regs[wreg_index] <= reg_wdata;
+      end
+      // The address register update is a separate port. A microword that both
+      // writes a register through the ALU and modifies the same one through
+      // the address unit is a microcode error; the assembler checks for it.
+      if (retire && aupd_we) begin
+        regs[ea_areg] <= ea_updated;
       end
     end
   end

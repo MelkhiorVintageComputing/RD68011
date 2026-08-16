@@ -36,7 +36,7 @@ YOSYS    := yosys
 XPART    ?= xc7a100tcsg324-1
 
 .PHONY: all lint lint-iverilog lint-verilator lint-yosys synth sim check clean dirs \
-        ucode ucode-check model-check
+        ucode ucode-check model-check harte harte-all
 
 all: lint
 
@@ -98,10 +98,39 @@ synth: dirs
 	    -source ../scripts/synth.tcl -tclargs $(XPART) $(XTOP) $(CURDIR)
 
 # ---------------------------------------------------------------------------
+# Reference vectors. `make harte OP=NOP` runs one opcode file; N limits how
+# many of its ~2500 tests are run, which is what you want while developing.
+# ---------------------------------------------------------------------------
+OP ?= NOP
+N  ?= 200
+
+VECDIR := $(BUILD)/vectors
+
+# A sweep across every opcode file the ISA covers so far, for a regression
+# rather than a single-opcode debug loop.
+HARTE_OPS ?= NOP MOVE.q MOVE.b MOVE.w MOVE.l Bcc
+
+harte-all: dirs
+	@fail=0; for op in $(HARTE_OPS); do \
+	  out=$$($(MAKE) --no-print-directory harte OP=$$op N=$(N) 2>&1 | grep -E 'passed|skipped:'); \
+	  printf '%-10s %s\n' "$$op" "$$out"; \
+	  case "$$out" in *" 0 failed"*) ;; *) fail=1;; esac; \
+	done; exit $$fail
+
+harte: dirs
+	@mkdir -p $(VECDIR)
+	@test -f $(VECDIR)/$(OP).$(N).hex || \
+	    python3 tools/harte/export.py $(OP) $(N) > $(VECDIR)/$(OP).$(N).hex
+	@iverilog $(IVFLAGS) -I sim/tb -o $(BUILD)/harte_tb.vvp -s harte_tb \
+	    $(RTL) $(MODELS) sim/tb/harte_tb.sv 2>&1 | grep -v 'sorry:' || true
+	@vvp $(BUILD)/harte_tb.vvp +vec=$(VECDIR)/$(OP).$(N).hex
+
+# ---------------------------------------------------------------------------
 # Simulation. Each testbench is sim/tb/<name>_tb.sv and runs to completion,
 # printing "PASS" or "FAIL"; a FAIL anywhere fails the target.
 # ---------------------------------------------------------------------------
-TBS    := $(wildcard sim/tb/*_tb.sv)
+# harte_tb needs a +vec argument, so it is not part of the plain sim sweep.
+TBS    := $(filter-out sim/tb/harte_tb.sv,$(wildcard sim/tb/*_tb.sv))
 MODELS := $(wildcard sim/models/*.sv)
 
 sim: dirs
