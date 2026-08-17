@@ -17,7 +17,14 @@ module rd68011_ureq_rom (
 );
 
   always_comb begin
-    unique case (addr)
+    // Plain case, not unique case, and for a reason worth writing
+    // down: with a default arm and every address enumerated, unique
+    // adds nothing a synthesiser can use here -- and Vivado xsim
+    // runs out of memory elaborating a unique case of this many
+    // arms, where a plain one of the same size costs it nothing.
+    // rd68011_ucode_rom, the wider store this is cut down from, has
+    // always been emitted as a plain case for the same reason.
+    case (addr)
       13'd0    : rq = 21'h000807;  // address of the reset vector table
       13'd1    : rq = 21'h080818;  // SSP, high word
       13'd2    : rq = 21'h080818;  // SSP, low word

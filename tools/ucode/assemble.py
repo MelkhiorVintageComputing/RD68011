@@ -212,7 +212,14 @@ def emit_ureq(words):
            '    output logic [rd68011_ucode_pkg::RQW-1:0]   rq',
            ');', '',
            '  always_comb begin',
-           '    unique case (addr)']
+           '    // Plain case, not unique case, and for a reason worth writing',
+           '    // down: with a default arm and every address enumerated, unique',
+           '    // adds nothing a synthesiser can use here -- and Vivado xsim',
+           '    // runs out of memory elaborating a unique case of this many',
+           '    // arms, where a plain one of the same size costs it nothing.',
+           '    // rd68011_ucode_rom, the wider store this is cut down from, has',
+           '    // always been emitted as a plain case for the same reason.',
+           '    case (addr)']
     for i, (fields, comment) in enumerate(words):
         out.append("      %d'd%-5d: rq = %d'h%0*x;%s"
                    % (isa.UADDR_BITS, i, w, (w + 3) // 4,

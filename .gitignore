@@ -9,6 +9,11 @@
 *.log
 .Xil/
 
+# Vivado simulator: xvlog/xvhdl/xelab/xsim drop protobuf logs wherever they run,
+# and xsim.dir is the compiled library it keeps beside them.
+*.pb
+xsim.dir/
+
 # Verilator
 obj_dir/
 

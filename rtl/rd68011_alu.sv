@@ -54,41 +54,6 @@ module rd68011_alu (
   assign sumx = {1'b0, b} + {1'b0, a} + {32'd0, x_in};
   assign difx = {1'b0, b} - {1'b0, a} - {32'd0, x_in};
 
-  always_comb begin
-    unique case (op)
-      rd68011_ucode_pkg::U_ALU_A:   y = a;
-      rd68011_ucode_pkg::U_ALU_B:   y = b;
-      rd68011_ucode_pkg::U_ALU_ADD: y = sum[31:0];
-      rd68011_ucode_pkg::U_ALU_SUB: y = dif[31:0];
-      rd68011_ucode_pkg::U_ALU_AND: y = a & b;
-      rd68011_ucode_pkg::U_ALU_OR:  y = a | b;
-      rd68011_ucode_pkg::U_ALU_EOR: y = a ^ b;
-      rd68011_ucode_pkg::U_ALU_NOT: y = ~a;
-      rd68011_ucode_pkg::U_ALU_CAT:  y = {a[15:0], b[15:0]};
-      rd68011_ucode_pkg::U_ALU_SXW:  y = {{16{a[15]}}, a[15:0]};
-      rd68011_ucode_pkg::U_ALU_SXB:  y = {{24{a[7]}},  a[7:0]};
-      rd68011_ucode_pkg::U_ALU_SWAP: y = {a[15:0], a[31:16]};
-      rd68011_ucode_pkg::U_ALU_NOTX: y = ~b;
-      // MOVEP, which moves a register through alternate byte addresses,
-      // high-order byte first (PRM section 4). Reading, a byte shifts in at
-      // the bottom; writing, the byte wanted is brought down to where a byte
-      // write takes it from.
-      rd68011_ucode_pkg::U_ALU_CAT8:  y = {b[23:0], a[7:0]};
-      rd68011_ucode_pkg::U_ALU_SHR8:  y = {8'd0,  a[31:8]};
-      rd68011_ucode_pkg::U_ALU_SHR16: y = {16'd0, a[31:16]};
-      rd68011_ucode_pkg::U_ALU_SHR24: y = {24'd0, a[31:24]};
-      rd68011_ucode_pkg::U_ALU_ANDN: y = b & ~a;
-      // MULU and MULS produce nothing here: the microword carrying them
-      // starts rd68011_mul, and the microword after it reads the answer. See
-      // that file for why the multiplier is not in this module.
-      rd68011_ucode_pkg::U_ALU_ABCD: y = {b[31:8], bcd_add};
-      rd68011_ucode_pkg::U_ALU_SBCD: y = {b[31:8], bcd_sub};
-      rd68011_ucode_pkg::U_ALU_ADDX: y = sumx[31:0];
-      rd68011_ucode_pkg::U_ALU_SUBX: y = difx[31:0];
-      default:                      y = a;
-    endcase
-  end
-
   // -- Binary-coded decimal --------------------------------------------------
   //
   // PRM section 4's ABCD, SBCD and NBCD. The part does not work digit by
@@ -97,6 +62,12 @@ module rd68011_alu (
   // than the way a digit-at-a-time model would predict. Both forms below were
   // settled against the reference vectors, all 1088 of one and 1085 of the
   // other, before being written here.
+  //
+  // This sits above the operation mux because the mux reads bcd_add and
+  // bcd_sub, and a name has to be declared before it is used. Three of the
+  // four tools accept the other order; Vivado's xvlog correctly does not.
+  // (Do not start a comment line with the word "Verilator" -- it reads one as
+  // a lint directive and fails to parse it.)
   //
   // Addition: correct the low digit by six when it carried out of nine, and
   // the high digit by sixty when the *uncorrected* binary sum passed 0x99 or
@@ -135,6 +106,41 @@ module rd68011_alu (
                        - (bcd_hi_borrow ? 10'h060 : 10'h000);
   assign bcd_sub       = bcd_sub_t[7:0];
   assign bcd_sub_c     = bcd_hi_borrow || bcd_sub_t[9] || bcd_sub_t[8];
+
+  always_comb begin
+    unique case (op)
+      rd68011_ucode_pkg::U_ALU_A:   y = a;
+      rd68011_ucode_pkg::U_ALU_B:   y = b;
+      rd68011_ucode_pkg::U_ALU_ADD: y = sum[31:0];
+      rd68011_ucode_pkg::U_ALU_SUB: y = dif[31:0];
+      rd68011_ucode_pkg::U_ALU_AND: y = a & b;
+      rd68011_ucode_pkg::U_ALU_OR:  y = a | b;
+      rd68011_ucode_pkg::U_ALU_EOR: y = a ^ b;
+      rd68011_ucode_pkg::U_ALU_NOT: y = ~a;
+      rd68011_ucode_pkg::U_ALU_CAT:  y = {a[15:0], b[15:0]};
+      rd68011_ucode_pkg::U_ALU_SXW:  y = {{16{a[15]}}, a[15:0]};
+      rd68011_ucode_pkg::U_ALU_SXB:  y = {{24{a[7]}},  a[7:0]};
+      rd68011_ucode_pkg::U_ALU_SWAP: y = {a[15:0], a[31:16]};
+      rd68011_ucode_pkg::U_ALU_NOTX: y = ~b;
+      // MOVEP, which moves a register through alternate byte addresses,
+      // high-order byte first (PRM section 4). Reading, a byte shifts in at
+      // the bottom; writing, the byte wanted is brought down to where a byte
+      // write takes it from.
+      rd68011_ucode_pkg::U_ALU_CAT8:  y = {b[23:0], a[7:0]};
+      rd68011_ucode_pkg::U_ALU_SHR8:  y = {8'd0,  a[31:8]};
+      rd68011_ucode_pkg::U_ALU_SHR16: y = {16'd0, a[31:16]};
+      rd68011_ucode_pkg::U_ALU_SHR24: y = {24'd0, a[31:24]};
+      rd68011_ucode_pkg::U_ALU_ANDN: y = b & ~a;
+      // MULU and MULS produce nothing here: the microword carrying them
+      // starts rd68011_mul, and the microword after it reads the answer. See
+      // that file for why the multiplier is not in this module.
+      rd68011_ucode_pkg::U_ALU_ABCD: y = {b[31:8], bcd_add};
+      rd68011_ucode_pkg::U_ALU_SBCD: y = {b[31:8], bcd_sub};
+      rd68011_ucode_pkg::U_ALU_ADDX: y = sumx[31:0];
+      rd68011_ucode_pkg::U_ALU_SUBX: y = difx[31:0];
+      default:                      y = a;
+    endcase
+  end
 
   // Sign bits, and the carry out, at the operation's width. The carry is the
   // bit that falls off the top of the operation, which for a subtraction is

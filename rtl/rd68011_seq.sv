@@ -258,6 +258,17 @@ module rd68011_seq (
   assign bus_err  = bus_busy && req_last && req_fault;
   assign fault    = bus_err || addr_err_q;
 
+  // A program read that loop mode suppresses issues no cycle, so it has no
+  // req_last to wait for either. The rule this comes from is set out at the
+  // prefetch pipe below, where the rest of loop mode's effect lives; it is
+  // declared here because retire reads it and a name has to be declared
+  // before it is used -- iverilog, Verilator and yosys accept the other
+  // order, and Vivado's xvlog correctly does not.
+  logic loop_suppress;
+  assign loop_suppress = loop_active && bus_busy &&
+                         (f_fc == rd68011_ucode_pkg::U_FC_PROG) &&
+                         (f_bus == rd68011_ucode_pkg::U_BUS_READ);
+
   // An address error's cycle never starts, so there is no req_last to wait
   // for; a microword resumed with the rerun flag set has had its access done
   // in software, so there is none either. Both end the microword here.
@@ -276,6 +287,21 @@ module rd68011_seq (
   // input buffer RTE restored (UM 6.3.9.2).
   logic [15:0] rdata;
   assign rdata = rerun_skip ? dib : req_rdata;
+
+  // Signals the prefetch pipe and the datapath's source multiplexer read, but
+  // which are driven further down alongside the logic that produces them. They
+  // are declared here because a name has to be declared before it is used --
+  // iverilog, Verilator and yosys all accept the other order, and Vivado's
+  // xvlog correctly does not.
+  logic [31:0] a_bus, b_bus, y;  // the ALU result bus and its two sources
+  logic        cc_true;          // the condition the cc field selects
+  logic  [2:0] irq_taken;        // the level being serviced, latched
+  logic        irq_from_stop;    // this interrupt woke a STOP
+  logic  [7:0] vec_num;          // the vector an exception is taking
+  logic [31:0] bit_mask;         // one bit, for the bit operations
+  logic [31:0] mul_res;          // the multiplier's answer
+  logic [15:0] div_q, div_r;     // the divider's
+  logic        addr_lsb;         // low bit of the address of the cycle in progress
 
   // ===========================================================================
   // Prefetch pipe
@@ -301,10 +327,8 @@ module rd68011_seq (
   // the ones that prefetch in the middle because their write comes after it
   // (MOVE to -(An), and the read-modify-writes) advance there instead. Neither
   // needs microcode of its own.
-  logic loop_suppress;
-  assign loop_suppress = loop_active && bus_busy &&
-                         (f_fc == rd68011_ucode_pkg::U_FC_PROG) &&
-                         (f_bus == rd68011_ucode_pkg::U_BUS_READ);
+  //
+  // loop_suppress itself is declared up with retire, which also reads it.
 
   // ir takes the *old* irc, so an advance and a fetch in the same microword
   // shift the pipe along by one rather than colliding.
@@ -370,7 +394,6 @@ module rd68011_seq (
   // ===========================================================================
   // Source buses and the ALU
   // ===========================================================================
-  logic [31:0] a_bus, b_bus, y;
   logic  [7:0] rdata_byte;
   logic        n_flag, n_flag_alu, z_flag, z_flag_alu, v_flag, c_flag;
 
@@ -635,7 +658,6 @@ module rd68011_seq (
   // destination, 8 for a memory one (PRM section 4).
   // The condition code test of PRM section 3, on bits 11:8. Bcc, DBcc and Scc
   // all use it, and it is the only place the flags are read as a group.
-  logic cc_true;
   always_comb begin
     unique case (ir[11:8])
       4'h0: cc_true = 1'b1;                                        // T
@@ -667,9 +689,7 @@ module rd68011_seq (
   // machine is in a state an exception can be built from.
   logic [2:0] irq_level;
   logic       irq_pending;
-  logic [2:0] irq_taken;      // the level being serviced, latched
   logic       trace_armed;    // the trace bit as the current instruction began
-  logic       irq_from_stop;  // this interrupt woke a STOP
   logic [7:0] irq_vec;
   logic       irq_auto;
 
@@ -687,7 +707,6 @@ module rd68011_seq (
   // offset into the vector table, and the frame's format-and-offset word,
   // whose top four bits are the format code -- zero for the four-word frame
   // (UM section 6, figure 6-6).
-  logic  [7:0] vec_num;
   always_comb begin
     unique case (`UF(uw, VSEL))
       2'd1:    vec_num = {4'd2, ir[3:0]};   // TRAP #n is vector 32 + n
@@ -697,7 +716,6 @@ module rd68011_seq (
   end
 
   logic  [4:0] bit_num;
-  logic [31:0] bit_mask;
   logic        bit_z;
 
   always_comb begin
@@ -731,7 +749,6 @@ module rd68011_seq (
   logic loop_op_ok;
   rd68011_loop_rom u_loop_rom (.op (ir_nxt), .is_loop (loop_op_ok));
 
-  logic [31:0] mul_res;
 
   rd68011_mul u_mul (
       .clk       (clk),
@@ -745,7 +762,6 @@ module rd68011_seq (
   );
 
   logic        div_busy, div_ovf;
-  logic [15:0] div_q, div_r;
 
   rd68011_divider u_divider (
       .clk       (clk),
@@ -889,7 +905,6 @@ module rd68011_seq (
   logic [31:0] dbuf_nxt;
   logic [31:0] reg_wdata;
   logic        reg_we;
-  logic        addr_lsb;      // low bit of the address of the cycle in progress
   logic [15:0] sr_nxt;
 
   assign wreg_val = `RDREG(wreg_index);

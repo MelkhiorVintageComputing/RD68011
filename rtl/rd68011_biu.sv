@@ -681,6 +681,13 @@ module rd68011_biu #(
       .q    (doe_q)
   );
 
+  // Whether the bus belongs to someone else. Declared here rather than with
+  // the output enables below, which are its main use, because d_oe reads it
+  // too and a name has to be declared before it is used -- iverilog, Verilator
+  // and yosys accept the other order, and Vivado's xvlog correctly does not.
+  logic bus_granted;
+  assign bus_granted = arb_bus_released_nxt;
+
   // Table 3-4 again: the data bus is also released while RESET is asserted and
   // while the bus belongs to someone else.
   assign d_oe = doe_q && reset_sync_n && !bus_granted;
@@ -699,9 +706,6 @@ module rd68011_biu #(
   // -- Output enables. Table 3-4 gives three behaviours: the address and data
   //    buses go to high impedance on RESET as well as on bus relinquish, the
   //    control group only on bus relinquish, and RESET/HALT are open drain.
-  logic bus_granted;
-  assign bus_granted = arb_bus_released_nxt;
-
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       a_oe  <= 1'b0;
