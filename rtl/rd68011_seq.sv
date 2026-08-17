@@ -378,11 +378,21 @@ module rd68011_seq (
   // ended up feeding the decoder, the decoder feeding the microcode store, and
   // the store feeding the bus request, all inside half a clock. That chain was
   // the critical path; scripts/rd68011.xdc has the measurement.
+  //
+  // These deliberately do not test `commit`, although the pipe only advances
+  // when it holds. `dec_entry` and `dec_dbcc` are read in exactly one place --
+  // the DECODE arm of `upc_target` -- and that arm is only ever selected when
+  // `retire && !fault`, which is `commit`. So the guard cannot change a value
+  // anything uses, and what it does change is when the decoder's opcode
+  // settles: with it, the opcode waits for the bus cycle to end, and the
+  // decoder and the request-preview store are read in series inside half a
+  // clock. Without it all three sources are registers and the decode is a
+  // whole clock's work. doc/critical-path.md measures the difference.
   logic [15:0] dec_op;
   always_comb begin
     dec_op = ir;
-    if (commit && pf_adv)                                     dec_op = irc;
-    if (commit && (f_dst == rd68011_ucode_pkg::U_DST_LOOPBACK)) dec_op = loop_ir;
+    if (pf_adv)                                     dec_op = irc;
+    if (f_dst == rd68011_ucode_pkg::U_DST_LOOPBACK) dec_op = loop_ir;
   end
 
   rd68011_decode_rom u_decode (
