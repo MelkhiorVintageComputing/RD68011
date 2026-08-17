@@ -212,8 +212,8 @@ as the design grew, and once come back: 20 ns with the bus interface alone,
 40 ns with MOVE, 44 ns with the integer set, 52 ns with control flow and
 exceptions, 68 ns with the rest of the instruction set, 72 ns with fault
 processing, and **64 ns once the multiplier moved out of the ALU** -- 15.6 MHz,
-against 12.5 MHz for the fastest MC68010 Motorola shipped, in 14670 LUTs and
-1303 flip-flops with 1.37 ns to spare.
+against 12.5 MHz for the fastest MC68010 Motorola shipped, in 14631 LUTs and
+1303 flip-flops with 2.20 ns to spare.
 
 It has been the same path since P5, and it lengthens every time the microcode
 store widens. Half of that was fixed by giving the multiplier registered

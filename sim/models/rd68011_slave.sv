@@ -99,6 +99,12 @@ module rd68011_slave #(
     peek = mem[addr[ADDR_BITS:1]];
   endfunction
 
+  // Zero the lot, so that a program image loaded on top of it runs from
+  // defined memory rather than from whatever the last test left.
+  task automatic clear();
+    for (int unsigned k = 0; k < (1 << ADDR_BITS); k = k + 1) mem[k] = 16'd0;
+  endtask
+
   // Unused, but named so the port list stays honest.
   logic unused;
   assign unused = &{1'b1, fc};

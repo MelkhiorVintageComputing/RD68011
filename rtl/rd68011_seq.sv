@@ -1305,6 +1305,15 @@ module rd68011_seq (
     end
   end
 
+  // A microword whose access software already completed asks for nothing. The
+  // decision has to be made on the edge the request is presented, which for
+  // the first such microword is the edge RESUME retires on -- one before
+  // `rerun_skip` itself is set, so the flag it will take is what counts here.
+  logic skip_next;
+  assign skip_next = rerun_skip ||
+                     (retire && (f_seq == rd68011_ucode_pkg::U_SEQ_RESUME) &&
+                      rr_flag);
+
   // The address error -- UM 6.3.10: "an address error exception occurs when
   // the processor attempts to access a word or long-word operand or an
   // instruction at an odd address". Caught here rather than in the bus unit,
@@ -1314,20 +1323,17 @@ module rd68011_seq (
   // A byte transfer picks its strobe from the low bit and is never an error,
   // and CPU space is exempt: an interrupt acknowledge drives ones on every
   // address line by definition (UM 5.1.4).
+  //
+  // Not when the access is not going to happen. UM 6.3.10 is explicit about
+  // the case: "if the RR flag is not set, the fault address is used when the
+  // cycle is retried, and another address error exception occurs" -- which
+  // says that when it *is* set, and the access has been done in software,
+  // there is nothing left to fault on.
   logic n_addr_err;
   assign n_addr_err = (n_bus != rd68011_ucode_pkg::U_BUS_NONE) &&
                       (n_size != rd68011_ucode_pkg::U_SIZE_BYTE) &&
                       (n_fc   != rd68011_ucode_pkg::U_FC_CPU) &&
-                      n_addr[0] && !halted;
-
-  // A microword whose access software already completed asks for nothing. The
-  // decision has to be made on the edge the request is presented, which for
-  // the first such microword is the edge RESUME retires on -- one before
-  // `rerun_skip` itself is set, so the flag it will take is what counts here.
-  logic skip_next;
-  assign skip_next = rerun_skip ||
-                     (retire && (f_seq == rd68011_ucode_pkg::U_SEQ_RESUME) &&
-                      rr_flag);
+                      n_addr[0] && !halted && !skip_next;
 
   // In loop mode the instruction fetch that the next microword would make is
   // not made. Decided on the next microword, like every other request field.
@@ -1583,6 +1589,17 @@ module rd68011_seq (
         fault_addr <= cur_addr;
         dib        <= req_rdata;
         upc_save   <= upc;
+        // What a faulted write was carrying. The frame reports the data
+        // output buffer at SP+16, and a handler completing the access itself
+        // reads it from there -- so it has to hold the data even though the
+        // microword that was driving it did not commit. Safe to take: a
+        // microword that loads the buffer computes it again when the cycle is
+        // rerun, and one that only drives it did not touch it here.
+        if ((f_dst == rd68011_ucode_pkg::U_DST_DBUF) ||
+            (f_dst == rd68011_ucode_pkg::U_DST_WDATA)) begin
+          dbuf <= (f_size == rd68011_ucode_pkg::U_SIZE_BYTE)
+                    ? {y[31:16], y[7:0], y[7:0]} : y;
+        end
         // The read/write bit is the bus unit's, not the microword's: a
         // read-modify-write that faults reports the half it was in.
         ssw        <= {cur_ssw[15:9], bus_err ? !req_fault_wr : cur_ssw[8],

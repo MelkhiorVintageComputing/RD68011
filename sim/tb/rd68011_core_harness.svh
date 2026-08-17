@@ -120,8 +120,13 @@
     forever #(CLK_PERIOD / 2.0) clk = ~clk;
   end
 
+  // A safety net, not a measurement. The programs under sim/programs/ run for
+  // rather longer than a directed test, so it is settable from the command
+  // line rather than fixed.
+  int tb_timeout;
   initial begin
-    #(CLK_PERIOD * 20000);
+    if (!$value$plusargs("timeout=%d", tb_timeout)) tb_timeout = 20000;
+    #(CLK_PERIOD * tb_timeout);
     $display("FAIL: timeout");
     $finish;
   end

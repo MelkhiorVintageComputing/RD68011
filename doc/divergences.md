@@ -9,8 +9,38 @@ is the bus-level detail, in `doc/bus-timing-compliance.md`.
 
 ## How this is checked
 
-`make harte-all` runs the SingleStepTests vectors through the core and compares
-registers, status register, prefetch pipe, memory and the bus transaction list.
+Four pressures, and they find different things.
+
+**The reference vectors** are the broadest: `make harte-all` runs the
+SingleStepTests through the core one instruction at a time. **The directed
+testbenches** cover what the vectors cannot -- the bus protocol, the MC68010's
+own instructions, faults and continuation, loop mode. **Real programs** --
+`make programs`, built with `m68k-linux-gnu` and run to completion -- cover
+what neither does: sequences. **Synthesis** covers what none of them does.
+
+The programs are worth their own note. Everything else here tests one
+instruction from a fabricated state; a program is a return address surviving
+three nested calls, a frame pointer still being a frame pointer after the
+callee saved eight registers, a handler that does real work and returns into
+the middle of the instruction that faulted, and compiler output nobody chose by
+hand. Two bugs were found that way and neither could have been found the other
+way:
+
+- **A faulted write did not record its data.** The format $8 frame reports the
+  data output buffer at SP+16, and a handler completing the access itself reads
+  it from there. A microword that both computes the data and drives it does not
+  commit when it faults, so the buffer still held the previous write's. Now the
+  fault captures it.
+- **An address error fired again on a resumed access.** With the rerun flag set
+  the access has been done in software and is not repeated, but the odd-address
+  check was still looking at it. UM 6.3.10 says as much in the other direction:
+  "if the RR flag is not set, the fault address is used when the cycle is
+  retried, and another address error exception occurs".
+
+### The vector sweep
+
+`make harte-all` compares registers, status register, prefetch pipe, memory and
+the bus transaction list.
 Those vectors were generated from MAME's microcoded **MC68000**, so wherever the
 MC68010 must differ, the runner does one of two things:
 
@@ -146,7 +176,13 @@ an MC68000 reference has no vectors for instructions it does not have.
 
 The format $8 frame, RTE reloading one, and everything that continues a faulted
 instruction are covered by `sim/tb/core_fault_tb.sv`, for the same reason: an
-MC68000's fault frame is seven words with no internal state in it at all. What
+MC68000's fault frame is seven words with no internal state in it at all.
+
+And all of it is covered again, in sequence, by the programs under
+`sim/programs/`: nested calls and compiler-shaped stack frames, exception
+handlers that adjust their own frame and return, a bus error handler that
+completes the access itself the way UM 6.3.9.2 describes, and a C program at
+-Os with the register allocator's choices rather than anyone's. What
 the sweep does check about faults is the half that does compare -- where an
 address error is detected, on which cycle of which instruction, across 4442
 tests.

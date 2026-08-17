@@ -54,7 +54,9 @@ The RTL must elaborate under **iverilog, Verilator, yosys and Vivado**. See
 |---|---|
 | `rtl/` | the processor, one module per file, prefix `rd68011_` |
 | `tools/` | microcode assembler, test runners, doc generators (Python) |
-| `sim/` | testbenches, bus-slave models, test programs |
+| `sim/tb/` | testbenches |
+| `sim/models/` | bus-slave models |
+| `sim/programs/` | real code, built and run on the core -- see its README |
 | `doc/` | pinout, coding standard, compliance and divergence reports |
 | `Inputs/doc/` | Motorola manuals, split by section, with machine-readable AC specs |
 | `Inputs/ref/` | reference implementations used as oracles (not as RTL sources) |
@@ -91,9 +93,10 @@ make lint     # elaborate every rtl module under all four tools
 make sim      # directed testbenches (iverilog)
 make harte    # one SingleStepTests opcode file: make harte OP=MOVE.w N=200
 make harte-all  # the whole sweep, every opcode file the ISA covers
+make programs # build sim/programs/ with m68k-linux-gnu and run them
 make ucode    # regenerate the microcode ROMs from tools/ucode/
 make synth    # Vivado synthesis + timing report
-make check    # ucode-check, lint and sim
+make check    # ucode-check, lint, sim and programs
 ```
 
 ## Tooling notes

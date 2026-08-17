@@ -145,11 +145,67 @@ harte: dirs
 	@vvp $(BUILD)/harte_tb.vvp +vec=$(VECDIR)/$(OP).$(N).hex
 
 # ---------------------------------------------------------------------------
+# Test programs: real code, built with the m68k toolchain and run on the core.
+#
+# Each is a flat image -- the vector table at zero and everything after it,
+# which is what an MC68010 sees after reset -- and each is self-checking: it
+# writes a mark to a fixed address when it passes and the number of the check
+# that failed when it does not. sim/tb/core_program_tb.sv has the contract.
+# ---------------------------------------------------------------------------
+PROGDIR  := $(BUILD)/programs
+PROGSRC  := $(wildcard sim/programs/p*.S) $(wildcard sim/programs/p*.c)
+PROGS    := $(basename $(notdir $(PROGSRC)))
+MCFLAGS  := -m68010 -Wall -Wextra -Os -fomit-frame-pointer -nostdlib \
+            -ffreestanding -fno-builtin -Isim/programs
+# No libgcc: there is no 68010 multilib, so the only one available is built
+# for a 68020 and contains instructions this part does not have. The handful
+# of helpers a C program needs are in sim/programs/libmc68010.S instead.
+
+$(PROGDIR)/%.hex: sim/programs/%.S sim/programs/rd68011.inc sim/programs/link.ld
+	@mkdir -p $(PROGDIR)
+	@m68k-linux-gnu-gcc $(MCFLAGS) -c -x assembler-with-cpp -o $(PROGDIR)/$*.o $<
+	@m68k-linux-gnu-ld -T sim/programs/link.ld -o $(PROGDIR)/$*.elf \
+	    $(PROGDIR)/$*.o 2>&1 | grep -v 'RWX permissions' || true
+	@m68k-linux-gnu-objcopy -O binary $(PROGDIR)/$*.elf $(PROGDIR)/$*.bin
+	@python3 tools/bin2hex.py $(PROGDIR)/$*.bin > $@
+
+$(PROGDIR)/%.hex: sim/programs/%.c sim/programs/crt0.S sim/programs/libmc68010.S \
+                  sim/programs/link.ld
+	@mkdir -p $(PROGDIR)
+	@m68k-linux-gnu-gcc $(MCFLAGS) -c -x assembler-with-cpp \
+	    -o $(PROGDIR)/crt0.o sim/programs/crt0.S
+	@m68k-linux-gnu-gcc $(MCFLAGS) -c -x assembler-with-cpp \
+	    -o $(PROGDIR)/libmc68010.o sim/programs/libmc68010.S
+	@m68k-linux-gnu-gcc $(MCFLAGS) -c -o $(PROGDIR)/$*.o $<
+	@m68k-linux-gnu-ld -T sim/programs/link.ld -o $(PROGDIR)/$*.elf \
+	    $(PROGDIR)/crt0.o $(PROGDIR)/$*.o $(PROGDIR)/libmc68010.o 2>&1 | \
+	    grep -v 'RWX permissions' || true
+	@m68k-linux-gnu-objcopy -O binary $(PROGDIR)/$*.elf $(PROGDIR)/$*.bin
+	@python3 tools/bin2hex.py $(PROGDIR)/$*.bin > $@
+
+PROGHEX := $(addprefix $(PROGDIR)/,$(addsuffix .hex,$(PROGS)))
+
+programs: dirs $(PROGHEX)
+	@echo "== test programs =="
+	@iverilog $(IVFLAGS) -I sim/tb -o $(BUILD)/program_tb.vvp \
+	    -s core_program_tb $(RTL) $(MODELS) sim/tb/core_program_tb.sv 2>&1 | \
+	    grep -v 'sorry:' || true
+	@fail=0; for p in $(PROGHEX); do \
+	  a=sim/programs/$$(basename $$p .hex).args; \
+	  extra=$$(test -f $$a && cat $$a || true); \
+	  out=$$(vvp $(BUILD)/program_tb.vvp +prog=$$p +timeout=2000000 $$extra 2>&1 | \
+	         grep -v 'sorry:'); \
+	  echo "$$out"; \
+	  case "$$out" in *"PASS"*) ;; *) fail=1;; esac; \
+	done; exit $$fail
+
+# ---------------------------------------------------------------------------
 # Simulation. Each testbench is sim/tb/<name>_tb.sv and runs to completion,
 # printing "PASS" or "FAIL"; a FAIL anywhere fails the target.
 # ---------------------------------------------------------------------------
 # harte_tb needs a +vec argument, so it is not part of the plain sim sweep.
-TBS    := $(filter-out sim/tb/harte_tb.sv,$(wildcard sim/tb/*_tb.sv))
+TBS    := $(filter-out sim/tb/harte_tb.sv sim/tb/core_program_tb.sv,\
+                       $(wildcard sim/tb/*_tb.sv))
 MODELS := $(wildcard sim/models/*.sv)
 
 sim: dirs
@@ -165,7 +221,7 @@ sim: dirs
 	done; \
 	exit $$fail
 
-check: ucode-check lint sim
+check: ucode-check lint sim programs
 	@echo "check: ok"
 
 clean:
