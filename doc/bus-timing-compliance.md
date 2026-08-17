@@ -238,13 +238,12 @@ than a convention. One bus state is half a clock period, so anything that
 starts at a falling-edge flop and ends at a rising-edge one has half a period
 to get there -- which is where every hard path in the design lives.
 
-Measured on the Artix-7 part, through place and route: **60 ns, which is
-16.8 MHz**, against 12.5 MHz for the fastest MC68010 Motorola shipped -- and
-that is where the constraint closes rather than where the design runs out, the
-worst path being one the microcode cannot activate. The
-period moved as the design grew and then came back as the three things on the
-critical path were dealt with -- `doc/implementation.md` is the full account,
-including what it would cost to go further and why this is where it stops.
+Measured on the Artix-7 part, through place and route: **48 ns, which is
+20.8 MHz**, against 12.5 MHz for the fastest MC68010 Motorola shipped. That is
+where the design closes with margin rather than where it was constrained: for
+most of its life the worst path the timing report showed was one the microcode
+could not take, and `doc/critical-path.md` is the account of measuring what
+really limited it and of the four changes that followed.
 
 The critical path is written out in `scripts/rd68011.xdc`, at the constraint
 itself, because that is where anyone changing the number will look.

@@ -229,6 +229,12 @@ module core_timing_tb;
     measure_loop("TST.W (An)+ looped",        16'h4A58, 10);
     measure_loop("CLR.W (An)+ looped",        16'h4258, 10);
 
+    // Not a cycle count, but measured on the same runs and load-bearing for
+    // scripts/rd68011.xdc: MOVEM and MOVEP put more writes through here than
+    // anything else does.
+    $display("  write data settled %0d half clocks before it was latched",
+             wdata_margin);
+
     if (errors == 0) $display("PASS: core_timing_tb");
     else             $display("FAIL: core_timing_tb, %0d errors", errors);
     $finish;

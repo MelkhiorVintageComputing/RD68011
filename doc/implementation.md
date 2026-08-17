@@ -8,182 +8,145 @@ make lint     # elaborate under iverilog, Verilator and yosys
 make audit    # prove no register initialises outside reset
 make synth    # Vivado synthesis, and the estimate that comes with it
 make impl     # place and route, and the number that means something
+make paths    # what limits the frequency, with the unreachable routes excluded
 ```
 
 ## The numbers
 
-Post-route, `xc7a100tcsg324-1`, out of context, one clock constraint of 60 ns
+Post-route, `xc7a100tcsg324-1`, out of context, one clock constraint of 48 ns
 with a 50 % duty cycle:
 
 | | |
 |---|--:|
-| Clock period | **60.0 ns** |
-| Setup slack | 0.289 ns (0.865 ns on an earlier run -- see below) |
-| Hold slack | 0.111 ns |
-| **Fastest the routed design will run** | **16.8 MHz**, give or take a run |
-| Slice LUTs | 12650 (20.0 % of the part) |
-| Slice registers | 1381 (1.1 %) |
-| F7 / F8 muxes | 1707 / 282 |
+| Clock period | **48.0 ns**, which is **20.8 MHz** |
+| Setup slack | 2.077 ns |
+| Hold slack | 0.168 ns |
+| Slice LUTs | 13011 (20.5 % of the part) |
+| Slice registers | 1304 (1.0 %) |
+| F7 / F8 muxes | 1503 / 206 |
 | DSP48E1 | 3 |
 | Block RAM | 0 |
+
+46 ns also closed, at 0.277 ns. That is inside the run-to-run variation
+described below, so it is not the number to quote; 48 ns is where it closes
+with margin.
 
 For scale: the fastest MC68010 Motorola shipped ran at 12.5 MHz, and the part
 this is modelled on was usually clocked at 8 or 10.
 
 `make synth` reports a different, more optimistic slack, because before
-placement the router's contribution is a guess — and two thirds of this
-design's critical path is routing. The number above is the one to quote.
+placement the router's contribution is a guess — and most of this design's
+critical path is routing. The number above is the one to quote.
+
+**Do not convert that slack into a frequency by dividing.** Every critical path
+here launches on one clock edge and captures on the next, so its budget is half
+the period and both halves shrink together; the shortest period the design can
+take is `48 - 2 x slack`, not `48 - slack`. `scripts/impl.tcl` prints the
+second form, which is right for a rising-to-rising path and is what it has for
+the general case. Where a frequency is quoted below it is measured, by editing
+`clk_period_ns` in `scripts/rd68011.xdc` and running place and route again.
 
 ## Why the clock is what it is
 
-Half a clock, not a whole one, because the path starts at a falling-edge flop
-and ends at a rising-edge one. That much is the bus protocol and not a choice:
-figure 5-3 lets a cycle begin on the rising edge immediately after the falling
-edge that ended the previous one, so the request for the next cycle must be
-ready by then -- and it comes from the microword that only becomes current on
-that same edge. Which is why the store is read twice, once for the current
-microword and once for the next.
+Half a clock, not a whole one, because the paths that bind start at one edge
+and end at the next. That much is the bus protocol and not a choice: figure 5-3
+lets a cycle begin on the rising edge immediately after the falling edge that
+ended the previous one, so the request for the next cycle must be ready by then.
 
-The path place and route reports as worst is this:
+What is on that half clock has been measured rather than read off the timing
+report, because for most of this design's life the worst path the report showed
+was one the microcode could not take. **`doc/critical-path.md` is that work**:
+what `make paths` does, what it found, and the four changes that came out of it.
+The summary is:
+
+| | worst slack, all at 60 ns |
+|---|--:|
+| P8, as measured | 0.289 ns |
+| ... with the unreachable route excluded | 1.464 ns |
+| decode the next opcode without waiting for the bus cycle | 0.534 ns |
+| previews carried in the microword, `rd68011_ureq_rom` deleted | 1.953 ns |
+| steer the request on MOVEM's mask alone | 1.509 ns |
+| give the write data the three half clocks it actually has | **3.027 ns** |
+
+and the constraint then moved from 60 ns to 48.
+
+The route that used to be reported as worst -- read data, through the ALU, to a
+flag, to the micro-branch, to the store, to the bus request -- was worth
+**1.175 ns** of the thirty. It is now absent rather than excluded: the request is
+selected on the mask test, so the ALU is not in its fan-in, and the exclusion
+`make paths` applies finds nothing left to cut.
+
+What limits it now is real and is required by the cycle counts:
 
 ```
   read data                      latched on the falling edge of S6
-    -> the A source multiplexer
-    -> the ALU
-    -> the zero flag
-    -> the micro-branch condition
-    -> the next micro-address
-    -> the request-preview store
+    -> the A and B source multiplexers
+    -> the ALU, or the shifter, whichever the microword selects
+    -> t0_nxt / pc_nxt
+    -> the next bus address, and the address-error check on it
     -> the bus request, latched on the rising edge that ends S7
 ```
 
-41 logic levels, 29.4 ns of a 30.0 ns budget, and **72 % of it routing** -- only
-8.2 ns is gates. At that ratio it is a placement and congestion problem more
-than a logic-depth one, which is worth knowing before anyone restructures logic
-to fix it.
-
-### That path cannot actually happen
-
-This document used to present the chain above as the design's defining
-structure. It is the longest *topological* route, which is all static timing
-analysis looks at, and the microcode never takes it.
-
-For it to be real, one microword would have to issue a bus read, feed the read
-data into the ALU, **and** branch on a flag the ALU computed -- all three, since
-`asrc`, `alu` and `cond` come from the same microword. Counting them in
-`build/ucode.lst`:
-
-```
-bus cycle + RDATA into the ALU + a conditional branch:   16 microwords
-the condition those 16 use:                              cond=MASK, all of them
-
-every condition that ever coexists with a bus cycle:
-    MASK 56,  XWDR 21,  FMT0 1,  FMT8 1,  VERSION 1
-```
-
-None is an ALU flag. `MASK` is MOVEM's register mask and `XWDR` an
-extension-word test, both from registers; `FMT0`, `FMT8` and `VERSION` test
-`rdata` bits directly -- `cond_true = (rdata[15:12] == 4'h0)` -- without
-touching the ALU. `cond_true` is a mux over every condition and `z_flag` is one
-of its inputs, so the wire is there; synthesis has no way to know that the
-microword selecting `RDATA` into the ALU is never the microword selecting a
-flag to branch on.
-
-What *is* real, and is the same shape one hop shorter, is
-`movem_in_word_aind_loop`:
-
-```
-6129  seq=COND cond=MASK asrc=RDATA alu=SXW dst=REG_L bus=READ asel=T0_INC2
-      wsel=MNEXT mop=STEP        ; a register, sign-extended from a word
-```
-
-`MOVEM.W (An),<list>`, one word per iteration: read it, sign-extend it through
-the ALU, write the register, step the mask, decide whether to go round again,
-and start the next read back to back. So read data through the ALU to the
-register file in half a period is a genuine requirement, and so is read data to
-the next bus request -- but by way of `MASK`, which does not pass through the
-ALU. It is the *concatenation* of the two that no microword performs.
-
-This is a functional false path, not a structural one: it depends on which
-microwords exist, not on how the logic is wired. That makes it awkward to
-exclude. A `set_false_path` through the flag input of the condition mux would
-also disable the paths where a microword legitimately does branch on a flag,
-and those still have to meet timing. Making it impossible rather than merely
-improbable would mean registering `cond_true`, which costs a microword on every
-conditional branch -- and the cycle counts are part of what this project
-promises.
-
-So the 60 ns constraint is met, and it is being set by a route the processor
-cannot take. The honest reading of 16.8 MHz is "the design closes at 60 ns",
-not "the design cannot go faster". What the real limit is has not been
-measured, and measuring it means either excluding this path carefully or
-looking at what place and route reports once it is gone.
-
-Three things were done earlier to shorten this chain, and each is measured:
-
-Three things have been done about it, and each is measured:
-
-| | |
-|---|--:|
-| The multiplier moved out of the ALU into `rd68011_mul`, with registered operands and a registered result. Synthesis has no way to know that no multiply ever takes its operands from read data, so a DSP sat in the chain. | 4.0 ns |
-| The decoder's address stopped being `ir_nxt`. RTE restoring `ir` put the ALU into it — never on a microword that decodes anything, but synthesis cannot know that either, so the ALU fed the decoder, the decoder fed the store, and the store fed the request. | 1.7 ns |
-| The second read is of a store of its own, holding only the twenty-one bits a bus request is built from rather than all hundred and three. Area, mostly; the depth of an 8192-entry mux does not depend on its width. | 0.2 ns |
-
-The period went 72 ns to 60 ns across those, which is 13.9 MHz to 16.8.
+Absolute-long addressing reads the low half of an address and concatenates it
+into T0 through the ALU, and the next microword issues at `asel=T0`; branch
+targets do the same through the PC. Read data through the datapath into the next
+bus address in half a period is what having no wasted clock between the two
+means. At 60 ns the ALU is the worse of the two arms and at 48 ns the shifter
+is; they are the same path.
 
 ## Two cautions about these numbers
 
 **Two different LUT counts, both correct.** `scripts/impl.tcl` prints the number
-of LUT *primitives* (13647); the utilisation report says *Slice LUTs* (12650),
-which counts occupied LUT sites. They differ by about 8 %, and comparing one
-against the other looks exactly like an 8 % area regression. It is not one. The
-table above quotes the report.
+of LUT *primitives* (14522); the utilisation report says *Slice LUTs* (13011),
+which counts occupied LUT sites. They differ by more than 10 %, and comparing
+one against the other looks exactly like a regression. It is not one. The table
+above quotes the report.
 
-**Place and route varies more than the design does.** Adding `term_berr_late` --
+**Place and route varies more than small changes do.** Adding `term_berr_late` --
 one flip-flop, the fix in `doc/divergences.md` -- costs +6 LUTs and +1 register
-at synthesis, with worst slack identical to the nanosecond (1.211 ns both ways).
-Through place and route the same change reads as +71 Slice LUTs, +78 registers
-and 0.576 ns less slack, because the router took a different trajectory and
-replicated 78 flops along the way. Measured by checking out the earlier commit
-into a worktree and running the same script, which is the only way to compare
-these honestly.
+at synthesis, with worst slack identical to the nanosecond. Through place and
+route the same change reads as +71 Slice LUTs, +78 registers and 0.576 ns less
+slack, because the router took a different trajectory and replicated 78 flops
+along the way. Measured by checking out the earlier commit into a worktree and
+running the same script, which is the only way to compare these honestly.
 
-So the routed slack at 60 ns sits somewhere around 0.3 to 0.9 ns depending on
-the run. That is a statement about how tight the constraint is, not about any
-particular change: a one-flop perturbation moves the result across most of that
-band. Anyone chasing a few hundred picoseconds here should re-run the baseline
-rather than trust a number in a document.
+So a difference under about 0.6 ns is a statement about the router, not about
+the design. Two rows of the table in "Why the clock is what it is" differ by
+less than that and should not be read as a regression. Anyone chasing a few
+hundred picoseconds should re-run the baseline rather than trust a number in a
+document.
+
+**What the previews cost.** Deleting `rd68011_ureq_rom` and widening the
+microword from 103 bits to 145 is **+342 Slice LUTs, +2.7 %** -- and 77 *fewer*
+registers, because the router had less reason to replicate. The 8192-entry
+21-bit store it replaced was worth more than the 42 bits added.
 
 ### What is left, and what it would cost
 
-To go faster, one of these would have to give -- and the first is the one to do
-before any of the others:
+- **The floor is the address path.** Read data through the datapath into the
+  next bus address is required by absolute-long addressing and by branch
+  targets, and
+  shortening it means changing what those instructions cost. The one thing on it
+  that is not obviously necessary is the address-error check standing between
+  `n_addr` and `req_valid`; whether the bus unit could make that check itself, a
+  state later, has not been looked at.
+- **It is a routing problem more than a depth one.** 72 % of the delay was
+  routing when it was last broken down. That ratio is worth knowing before
+  anyone restructures logic to fix a placement problem.
+- **Registering the bus request** would present it a cycle earlier, which means
+  knowing the next microword a cycle earlier, which a conditional branch cannot
+  do. It would cost a cycle on every bus access and break the exact cycle counts
+  that `sim/tb/core_timing_tb.sv` checks and `doc/timing-divergences.md`
+  accounts for. It is not worth it and it is not necessary.
 
-- **Find out what the real limit is first.** The reported path is one the
-  microcode cannot take (above). Before trading anything away for speed, the
-  thing to do is establish what the longest *activatable* path costs -- because
-  everything below may be solving a problem the design does not have.
-- **Register the bus request.** Present it a cycle earlier, which means knowing
-  the next microword a cycle earlier, which a conditional branch cannot do. It
-  would cost a cycle on every bus access and break the exact cycle counts that
-  `sim/tb/core_timing_tb.sv` checks and `doc/timing-divergences.md` accounts
-  for.
-- **Precompute both arms.** A conditional microword branches to `next` or
-  `next|1`, so the assembler could store both successors' request fields in the
-  microword itself and leave the late signal driving only a mux. That keeps the
-  cycle counts exactly and would take the store out of the path. It widens the
-  microword by two request previews — 42 bits on top of 103 — and does not help
-  the `DECODE` case, whose successor comes from the opcode.
-- **Accept 16.8 MHz**, which is already faster than any MC68010 that was ever
-  sold, and is what this project does.
-
-The microcode store as a block RAM was considered and is not the answer. The
-*current* microword could come from one — its address is a register, so a BRAM
-with a registered output holds exactly the same value — and that would move
-about half the LUTs into the 135 block RAMs the part has. But the current
-microword is not on the critical path; the *next* one is, and its address is
-not known a cycle early. It is an area trade, not a speed one, and the area is
-not what is short.
+The microcode store as a block RAM was considered and remains an area trade
+rather than a speed one. The store's *second* read -- the one that was on the
+critical path -- no longer exists; what is left is the read at `upc`, whose
+address is already a register, so a block RAM with a registered output would
+hold exactly the same value at the same time. That would move a large part of
+the LUTs into the 135 block RAMs the part has, and buy no frequency. It would
+also need the reset rule bent, because a block RAM output register has only a
+synchronous reset.
 
 ## The reset audit
 

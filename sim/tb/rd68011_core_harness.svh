@@ -194,6 +194,59 @@
     end
   end
 
+  // -- How long the write data has really had ---------------------------------
+  //
+  // `d_o` is loaded on the falling edge entering S3, and the microword that
+  // supplies the data became current on the rising edge that started S0. The
+  // states in between alternate edges unconditionally -- S0 to S1 on a falling
+  // edge, S1 to S2 on a rising one, S2 to S3 on a falling one -- and nothing in
+  // the sequencer moves while a cycle is in progress, because `retire` waits
+  // for the bus unit. So the data has had three half clocks.
+  //
+  // Static timing analysis sees a rising-edge launch and a falling-edge capture
+  // and allows half of one, which is why scripts/rd68011.xdc puts a multicycle
+  // on this register's data input. That constraint is only sound while what is
+  // measured here stays at 3 or more, so it is measured rather than argued: at
+  // every load, how many edges the captured value had already been stable for.
+  int          wdata_stable, wdata_margin;
+  logic [15:0] wdata_prev;
+  logic        wdata_capture;
+
+  assign wdata_capture =
+      ((dut.u_biu.st_n_nxt == rd68011_pkg::ST_S3) && dut.u_biu.cyc_is_write) ||
+       (dut.u_biu.st_n_nxt == rd68011_pkg::ST_S15);
+
+  initial begin
+    wdata_stable = 0;
+    wdata_margin = 99;
+    wdata_prev   = 16'h0;
+    forever begin
+      @(negedge clk);
+      // The value this falling edge latches is the one that was there before
+      // it, so the run that matters ended at the previous edge: read
+      // `wdata_stable` before this edge updates it. It counts edges at which
+      // the value was already unchanged, so the settling time in half clocks
+      // is one more than that.
+      if (rst_n && wdata_capture && ((wdata_stable + 1) < wdata_margin)) begin
+        wdata_margin = wdata_stable + 1;
+        if (wdata_margin < 3) begin
+          $display("FAIL: write data had %0d half clocks to settle, and scripts/rd68011.xdc assumes 3",
+                   wdata_margin);
+          errors = errors + 1;
+        end
+      end
+      #1;
+      if (dut.u_seq.req_wdata !== wdata_prev) wdata_stable = 0;
+      else                                    wdata_stable = wdata_stable + 1;
+      wdata_prev = dut.u_seq.req_wdata;
+      @(posedge clk);
+      #1;
+      if (dut.u_seq.req_wdata !== wdata_prev) wdata_stable = 0;
+      else                                    wdata_stable = wdata_stable + 1;
+      wdata_prev = dut.u_seq.req_wdata;
+    end
+  end
+
   // -- Checking ---------------------------------------------------------------
   task automatic expect_tr(input int i, input logic [31:0] addr,
                            input logic [2:0] fc, input logic rw,
@@ -289,6 +342,9 @@
 
   task automatic core_done(input string name);
     begin
+      if (wdata_margin != 99)
+        $display("  write data settled %0d half clocks before it was latched",
+                 wdata_margin);
       if (errors == 0) $display("PASS: %s", name);
       else             $display("FAIL: %s, %0d error(s)", name, errors);
       $finish;

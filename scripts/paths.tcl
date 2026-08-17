@@ -93,6 +93,21 @@ puts "RD68011-PATHS: baseline slack [lindex $base 0] ns\
       ([mhz $period [lindex $base 0]] MHz)"
 puts "RD68011-PATHS: baseline worst [lindex $base 1] -> [lindex $base 2]"
 
+# The multicycle on the write data has a silent failure mode: if its -to
+# pattern stops matching -- a renamed register, a replicated flop -- Vivado
+# drops it and nothing says so, and the design simply gets a harder constraint
+# than it needs. Report what the tool thinks the requirement is; a multicycle of
+# two on a rising-to-falling path makes it one and a half periods.
+set wd [get_timing_paths -quiet -delay_type max -max_paths 1 \
+            -to [get_pins -quiet u_biu/d_o_reg[*]/D]]
+if {[llength $wd] == 0} {
+    puts "RD68011-PATHS: write data: no path to u_biu/d_o_reg[*]/D at all"
+} else {
+    puts "RD68011-PATHS: write data requirement\
+          [get_property REQUIREMENT $wd] ns, slack [get_property SLACK $wd] ns\
+          (scripts/rd68011.xdc asks for [expr {$period * 1.5}])"
+}
+
 report_timing -delay_type max -max_paths 400 -unique_pins -nworst 1 \
     -file paths_baseline.rpt
 

@@ -1,8 +1,9 @@
 # What actually limits the frequency
 
-`make impl` reports the worst path static timing analysis can find. For this design
-that path is one the microcode cannot take, so the number it produces answers a
-question nobody asked. This document reports the other one.
+For most of this design's life the worst path `make impl` reported was one the
+microcode could not take, so the number it produced answered a question nobody
+asked. This document is the measurement that replaced it, and what the
+measurement led to.
 
 ```sh
 make impl     # place and route, and the checkpoint this works from
@@ -10,162 +11,144 @@ make paths    # the exclusions, the survivors, and the families
 ```
 
 `make paths` runs on the checkpoint `make impl` leaves behind, so placement and
-routing are bit-identical to the run that produced `build/impl_timing.rpt` and any
-difference in the answer is attributable to the exclusion and to nothing else. It
-costs about a minute.
+routing are bit-identical to the run being examined and any difference in the
+answer is attributable to the exclusion and to nothing else. It costs about a
+minute.
 
-## The headline
+## Where it started, and where it is
 
-| | slack at 60 ns | shortest period | |
-|---|--:|--:|---|
-| What `make impl` reports | 0.289 ns | 59.4 ns | a path the microcode cannot take |
-| What the microcode can actually reach | **1.464 ns** | **57.1 ns** | the number that means something |
-| The unreachable route is worth | 1.175 ns | | |
+All at the 60 ns constraint the design started from, so the rows compare:
 
-**So the false path costs a nanosecond, not a wall.** `doc/implementation.md` was right
-that 16.8 MHz is "the design closes at 60 ns" rather than "the design cannot go
-faster" — but the ceiling it was hiding is 17.5 MHz, not 25. Anyone who was about to
-restructure the microcode engine to recover that nanosecond should read the families
-table first.
+| | worst slack | what was limiting it |
+|---|--:|---|
+| P8, as measured | 0.289 ns | a route the microcode cannot take |
+| ... with that route excluded | 1.464 ns | the decoder and the preview store, in series |
+| decode the next opcode early | 0.534 / 1.943 ns | the write data, over-constrained |
+| previews carried in the microword | 1.953 ns | the write data |
+| steer the request on the mask alone | 1.509 ns | the write data |
+| the write data's real budget | **3.027 ns** | read data through the datapath into the next address |
 
-## Reading the frequency off a slack
+The first two rows are the same design measured two ways; the rest are changes.
+What limits it now is real, is named, and is required by the cycle counts.
 
-`scripts/impl.tcl` prints `1000 / (period - slack)`. That is right for a path between
-two rising edges and wrong for this design, whose critical paths all launch on one
-edge and capture on the next. Their budget is *half* the period, so both halves
-shrink together as the clock tightens:
+The constraint then moved to where the design actually closes:
+
+| clock | slack | |
+|--:|--:|---|
+| 54 ns | +3.497 ns | |
+| **48 ns** | **+2.077 ns** | **20.8 MHz, and what `scripts/rd68011.xdc` now asks for** |
+| 46 ns | +0.277 ns | closes, but inside the run-to-run variation |
+
+16.8 MHz to 20.8, and the fastest MC68010 Motorola shipped ran at 12.5.
+
+**The false path was worth 1.175 ns.** `doc/implementation.md` used to present it
+as the design's defining structure, and it was not: it cost about a nanosecond of
+a thirty-nanosecond budget. It is now gone rather than excluded -- the exclusion
+`make paths` applies finds nothing left to cut -- because the bus request is
+selected on MOVEM's mask test alone.
+
+## Reading a frequency off a slack
+
+`scripts/impl.tcl` prints `1000 / (period - slack)`. That is right for a path
+between two rising edges and wrong for this design, whose critical paths all
+launch on one edge and capture on the next. Their budget is *half* the period, so
+both halves shrink together as the clock tightens:
 
 ```
-    half-period paths:   T >= 2 x (T_now/2 - slack)  =  T_now - 2 x slack
+    half-period paths:   T >= T_now - 2 x slack
 ```
 
-At 0.289 ns that is 59.4 ns rather than the reported 59.7 — no difference worth
-having. At 10 ns of slack it is 40 ns rather than 50, which is the difference between
-25 MHz and 20. The table above uses the halving form. `impl.tcl` has not been changed,
-because the formula is only wrong for paths whose launch and capture edges differ and
-it does not know which it has; the number to quote is here.
+At 0.289 ns the two forms differ by 0.3 ns. At 3 ns they differ by 3 ns, and at
+10 ns by 10. `impl.tcl` has not been changed, because the formula is only wrong
+for paths whose launch and capture edges differ and it does not know which it
+has. Where a frequency is quoted, it is measured by editing `clk_period_ns` in
+`scripts/rd68011.xdc` and running place and route again, not extrapolated.
+Making that conditional on the environment was tried and is a trap: `read_xdc`
+accepts an `if` around the `create_clock` without complaint and then creates no
+clock at all, so the design places and routes unconstrained and only fails at
+the very end, when `impl.tcl` asks a clock that does not exist for its slack.
 
-## The families
+## What limits it now
 
-From `make paths`, one path per endpoint, grouped by the units each passes through.
-400 endpoints, worst slack 1.464 ns:
+34 endpoints at 48 ns, and it is the shape the cycle counts require:
+
+```
+req_rdata                     latched on the falling edge of S6
+  -> the A and B source multiplexers
+  -> the ALU, or the shifter, whichever the microword selects
+  -> t0_nxt / pc_nxt / ea_latch_nxt
+  -> n_addr, and the address-error check on it
+  -> req_valid
+  -> start_new                the bus unit latches the next cycle, rising edge
+```
+
+The microcode that needs it is absolute-long addressing, where one microword
+reads the low half of an address and concatenates it with `irc` into T0, and the
+next issues at `asel=T0`:
+
+```
+1119  next=1120 asrc=IRC bsrc=RDATA alu=CAT dst=T0 bus=READ pf=FETCH
+1120  next=1121 asrc=T1 dst=DBUF bus=WRITE asel=T0 fc=DATA aeasel=DST dhi=1 size=LONG
+```
+
+and branch targets do the same through `dst=PC` into `asel=PC`. Read data through
+the ALU into the next bus address, in half a period, is what "no wasted clock
+between the address arriving and the cycle that uses it" means. Shortening it
+means changing what the instructions cost.
+
+The families behind it, from `make paths`:
 
 | slack | behind | ends | family |
 |--:|--:|--:|---|
-| **1.464** | — | 30 | `req_last -> decode-rom -> dec_entry -> ureq-rom -> rq_nxt -> req_valid -> start_new` |
-| 1.815 | +0.35 | 7 | the same, ending at `fc_o` |
-| 1.827 | +0.36 | 65 | the same, ending at `cur_addr` |
-| **2.323** | +0.86 | 16 | `ucode-rom -> shifter`, ending at the write-data register |
-| 6.616 | +5.15 | 47 | `req_last -> decode-rom -> dec_entry -> ureq-rom` |
-| 10.658 | +9.19 | 21 | `a-mux -> alu -> z_flag`, ending at the micro-PC |
-| 11.633 | +10.17 | 18 | `a-mux -> alu -> alu_y -> loop-rom` |
-| 11.927 | +10.46 | 68 | `req_last -> decode-rom -> dec_entry` |
-| 14.302 | +12.84 | 74 | `a-mux -> alu -> alu_y`, into the register file |
-| 14.355 | +12.89 | 20 | `req_last` alone |
-| 14.847 | +13.38 | 33 | `a-mux -> shifter` |
+| **2.077** | — | 34 | `a-mux -> shifter -> req_valid -> start_new` |
+| 2.315 | +0.24 | 3 | the same, ending at `req_valid` |
+| 2.566 | +0.49 | 59 | `a-mux -> shifter`, into the sequencer's own registers |
+| 3.806 | +1.73 | 272 | `shifter` |
+| 4.835 | +2.76 | 18 | `shifter -> loop-rom` |
+| 8.342 | +6.27 | 1 | `alu` |
+| 8.898 | +6.82 | 13 | `alu -> alu_y` |
 
-68 of the 400 endpoints are within a nanosecond of the worst, 101 within two. This is
-a plateau, not a peak: **there is no single change that moves this design**, and any
-one fix that is not accompanied by the others buys a fraction of a nanosecond.
+At 60 ns the ALU was the worse of the two datapath arms and at 48 ns the
+shifter is. They are the same path with a different unit in the middle.
 
-Two families account for everything within 2.4 ns. Both are described below.
+## The four changes
 
-## Family A — two stores in series, at every instruction boundary
+### Decode the next opcode without waiting for the bus cycle to end
 
-28.247 ns of a 30 ns budget, 30 logic levels, **79 % of it routing**.
+`dec_op` tested `commit` on both of its alternatives, so the decoder's opcode only
+settled once the current cycle terminated -- and the decoder and the preview store
+were then read in series inside half a clock, 15.8 ns of a 28.2 ns path, at every
+instruction boundary.
 
-```
-st_n[3]                          the bus state machine, falling edge
-  -> req_last                    this is the last state of the cycle
-  -> dec_op                      so commit is true, so the decoder looks at irc
-  -> rd68011_decode_rom          1401 ordered patterns, opcode to entry point
-  -> dec_entry
-  -> rd68011_ureq_rom            8192 entries, the request preview
-  -> rq_nxt -> req_addr, req_valid
-  -> start_new                   the bus unit latches the next cycle, rising edge
-```
+The guard was never doing anything. `dec_entry` and `dec_dbcc` are read in one
+place, the DECODE arm of `upc_target`, and that arm is only selected when
+`retire && !fault`, which is `commit`. All three sources are registers, so
+removing it gives the decode a whole clock. The family went from worst at
+1.464 ns to 12.084 ns and left the top of the report.
 
-| segment | ns |
-|---|--:|
-| the flop, and `st_n` to `req_last` | 3.26 |
-| `req_last` to the decoder's opcode | **4.27** |
-| the decode ROM | **5.35** |
-| `dec_entry` to the preview store's address | **2.77** |
-| the preview store | **3.42** |
-| `rq_nxt` to `req_valid` (includes the address adders) | 7.36 |
-| `req_valid` to `start_new` | 1.83 |
+### Carry the successors' request previews in the microword
 
-The four bold rows — **15.8 ns, over half the path** — are one late signal being turned
-into a store address and used to read two stores in series. Neither address needs to
-be late. `dec_op` is `commit ? (loopback ? loop_ir : irc) : ir` (`rtl/rd68011_seq.sv:381-386`),
-so it has two candidates, both registers; `commit` is the only late part. Both
-candidates could be decoded in advance and the late signal left choosing between two
-answers rather than driving a lookup.
+The bus request has to come from the microword that will be current after the
+coming edge, and which that is depends on the bus terminating, the condition
+resolving and any fault. It used to be read out of an 8192-entry store at an
+address computed from all of that; the store's address net alone carried 1.241 ns
+of routing to 1189 loads.
 
-This is the path 1429 microwords take — every one with `seq=DECODE`, which is every
-instruction boundary in the machine. It is entirely real.
+Nothing is looked up late now. A microword carries the previews of its own two
+successors, the decoder emits its entry point's beside the entry, the entry points
+the sequencer can be thrown to have constant ones, and the arms that hold the
+micro-PC take the current microword's own fields. `rd68011_ureq_rom` is gone and
+the microword is 145 bits rather than 103.
 
-`doc/implementation.md` says of precomputing successors that it "does not help the
-`DECODE` case, whose successor comes from the opcode". That is the wrong way round:
-the `DECODE` case *is* the critical path, and it is helpable, because the opcode it
-comes from is one of two registers.
+One arm has no preview to carry: RESUME goes to `upc_save`, which RTE reloads out
+of the format $8 frame. It presents no request and the resumed microword's cycle
+starts a clock later through the `!retire` arm -- one clock, on the rarest path in
+the machine, and no second store.
 
-## Family B — the write data, constrained at a third of its real budget
+### Steer the request on the mask test alone
 
-2.323 ns, 16 endpoints, all of them `u_biu/d_o[15:0]`.
-
-```
-upc -> rd68011_ucode_rom -> uw[sh] -> rd68011_shifter -> req_wdata -> d_o
-```
-
-Reported requirement: `clk fall@30.000ns - clk rise@0.000ns`, half a period. The
-design does not need that. `d_o` is latched on the falling edge entering S3
-(`rtl/rd68011_biu.sv:632-636`), and the microword became current on the rising edge
-that started S0 — **three half-periods earlier**, not one. `upc` cannot change in
-between, because `retire` is false until `req_last` and `upc_nxt` holds `upc`
-(`rtl/rd68011_seq.sv:1227`) for the whole of a bus microword.
-
-So this looks like a multicycle path that the constraints do not express —
-`scripts/rd68011.xdc` contains no `set_multicycle_path` at all. If that is right, the
-family is a constraints artefact rather than a property of the design, and saying so
-costs two lines.
-
-It is deliberately **not** asserted yet. A multicycle exception that is wrong is a
-silent functional failure rather than a timing failure, and this one needs the S15
-read-modify-write case checked as well as S3. It is recorded here as the next thing
-to establish, not as a conclusion.
-
-## What the exclusion is, and why it is not in the build
-
-`scripts/paths.tcl` applies, in the reporting session only:
-
-```tcl
-set_false_path -through {u_seq/z_flag u_seq/n_flag u_seq/y[*] u_seq/alu_y[*] u_seq/sh_out[*]} \
-               -through {u_seq/u_ureq_nxt/addr[*]}
-```
-
-A *pair* of `-through` points, so it cuts the concatenation and neither half: branching
-on an ALU flag has to meet timing, and read data reaching the next bus request has to
-meet timing; it is doing both in one microword that never happens. Counting
-`build/ucode.lst`, the conditions that ever share a microword with a bus cycle are
-MASK 56, XWDR 21, FMT0 1, FMT8 1 and VERSION 1, and none of the three ALU-sourced
-conditions (`ZERO`, `N`, `CNT`) is among them.
-
-It stays out of `scripts/rd68011.xdc` because it is a *functional* exclusion — it
-depends on which microwords exist, not on how the logic is wired — and a constraints
-file has no way to say that. Written into the build it would also disable the flag
-branches that are real and do have to meet timing.
-
-The script fails loudly rather than quietly if either `-through` names nothing, since
-an exception that matches nothing looks exactly like a design that had no such path.
-
-## The false path can be made structurally impossible, for nothing
-
-Worth recording even though it is only worth a nanosecond, because it costs nothing
-at all.
-
-Applying `tools/ucode/isa.py`'s own `req_word()` to the resolved microprogram, and
-comparing the two successors of every conditional microword:
+A conditional microword only steers the *bus* if its two successors present
+different requests. Applying `req_word()` to both arms of all 228 of them:
 
 ```
 condition   arms differ   arms agree
@@ -173,34 +156,80 @@ MASK                 56            0
 every other            0          172
 ```
 
-For all 172 non-MASK conditional microwords — including **every one of the 46 that
-branch on an ALU flag** — both successors present the *identical* bus request. Only
-MOVEM's mask test decides between two different ones, and `xw_after` is built from the
-`xw` and `irc` registers (`rtl/rd68011_seq.sv:490-496`); it never touches the ALU.
+Only MOVEM's mask test, deciding whether there is another transfer. The other 172
+-- including every one of the 46 that branch on an ALU flag -- present the same
+request either way, so the condition cannot reach the bus through them.
 
-So the condition multiplexer does not need to be in the request's fan-in at all,
-except for MASK. Narrowing the select to MASK removes the ALU, the shifter, the
-divider and the multiplier from the request cone by construction — no exception, no
-deferral, no extra clock, no microcode change. The assembler can prove the premise on
-every build and refuse to assemble a microprogram that breaks it.
+So `prev_sel` tests the mask rather than `cond_true`, and the ALU, the shifter,
+the divider and the multiplier leave the request's fan-in by construction.
+`xw_after` is `irc`, `xw`, or `xw` with a bit cleared: registers, all of them.
+`tools/ucode/isa.py`'s `BUS_STEERING_CONDS` is the same statement on the
+assembler's side, and `assemble.py` fails the build if the microprogram ever needs
+a condition the RTL does not implement.
 
-## Where this leaves the design
+### The write data's real budget
 
-The order these are worth doing in, by measured value:
+`d_o` is loaded on the falling edge entering S3. The microword that supplies the
+data became current on the rising edge that started S0, and S0 to S1, S1 to S2 and
+S2 to S3 alternate edges unconditionally, so it has had three half clocks. Static
+timing analysis sees a rising launch and a falling capture and allows one.
 
-1. **Family A.** 15.8 ns of the 28.2 ns path is two stores read at a late address.
-   Carrying the previews in the microword and in the decode ROM, and decoding both
-   candidate opcodes in advance, replaces the pair with a multiplexer.
-2. **Family B.** Establish whether the write-data path really is multicycle. If it is,
-   two lines of constraint.
-3. **The MASK-only select.** A nanosecond, and free.
+`scripts/rd68011.xdc` now says so. This is the only exception in the build whose
+failure mode is silent, so it is measured as well as argued:
+`sim/tb/rd68011_core_harness.svh` records how long the captured value had already
+been stable at every load, across every core testbench, the five programs and the
+reference vectors, and fails if it is ever less than three half clocks. `make sim`
+prints the number, which is 3. `make paths` also reports what the tool thinks the
+requirement is, because a `-to` pattern that stops matching would drop the
+constraint silently.
 
-With all three, the next thing in the way is at 10.658 ns — `read data -> A-source
-multiplexer -> ALU -> zero flag -> the micro-PC` — which would put the design somewhere
-near 38 ns and 26 MHz. That is a floor set by the cycle counts: read data through the
-ALU in half a period is what MOVEM and absolute-long addressing require, and shortening
-it means changing what the instructions cost.
+## What the exclusion is, and why it is not in the build
 
-Every number here is one routed run. `doc/implementation.md:142-155` records that a
-one-flop change moves routed slack by 0.58 ns, so treat differences under a nanosecond
-as noise and re-run the baseline rather than trusting a figure in a document.
+`scripts/paths.tcl` applies, in the reporting session only, a *pair* of `-through`
+points so that it cuts a concatenation and neither half:
+
+```tcl
+set_false_path -through {u_seq/u_alu/y[*] u_seq/u_alu/n_out u_seq/u_alu/z_out
+                         u_seq/u_shifter/dout[*]} \
+               -through {u_biu/req_kind[*]}
+```
+
+Branching on an ALU flag has to meet timing; read data reaching the next bus
+request has to meet timing; doing both in one microword is what never happens. It
+stays out of `scripts/rd68011.xdc` because it is a *functional* exclusion, and a
+constraints file has no way to say "depends on which microwords exist".
+
+Both ends name module pins, not the nets between them, and that was learned the
+hard way -- twice. `n_flag` is a multiplexer over `n_flag_alu` and the shifter's
+flag, and synthesis folds that multiplexer into the logic downstream, so a route
+can reach the request without the net `u_seq/n_flag` existing anywhere on it; the
+first version of this script missed a whole family that way and reported a
+too-good number. Then `rq_nxt` stopped existing as a net at all once it became a
+multiplexer rather than a store output, and the second version aborted. Hierarchy
+survives, because `scripts/synth.tcl` passes `-flatten_hierarchy none`.
+
+`req_kind` is the witness rather than the whole request: it says which kind of bus
+cycle happens and is built from the preview and nothing else, unlike `req_addr`,
+which the ALU legitimately reaches through the address unit. Every bit of the
+preview is selected by the same signal, so if the ALU cannot reach `req_kind` it
+is not in the preview's fan-in at all.
+
+The script fails loudly if either end names nothing, and reports it as a result --
+not an error -- when the route simply is not there, which is what it now says.
+
+## What is left
+
+- **The floor is the address path.** Read data through the datapath into the
+  next bus address is required by absolute-long addressing and by branch
+  targets. The only
+  thing on it that is not obviously necessary is the address-error check standing
+  between `n_addr` and `req_valid`; whether the bus unit could make that check
+  itself, a state later, has not been looked at.
+- **72 % of the delay was routing** when it was last broken down, and the ratio has
+  not been re-measured since. At that ratio it is a placement and congestion
+  problem more than a logic-depth one, which is worth knowing before anyone
+  restructures logic.
+- **Place and route varies more than small changes do.** `doc/implementation.md`
+  records a one-flop change reading as ±0.6 ns after routing. Two of the rows in
+  the table above differ by less than that and should not be read as regressions.
+  Re-run the baseline rather than trusting a figure in a document.
