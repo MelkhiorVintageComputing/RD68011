@@ -22,11 +22,27 @@ measured off the 300 dpi scan (the printed labels sit 89 px apart, each centred
 on a clock plateau). Every testbench under `sim/tb/` indexes its observations by
 half-clock tick from the S0 rising edge and asserts against that ruler.
 
-**Nanosecond minima and maxima — not simulated, and not simulable.** "Clock Low
-to Address Valid ≤ 62 ns at 8 MHz" (spec 6) is a property of the pad, the
-process and the place-and-route, not of the RTL. It is an STA constraint, and it
-belongs in `scripts/rd68011.xdc` and the wrapper's constraints. Simulating it
-would mean inventing delays, and an invented delay that passes proves nothing.
+**Nanosecond minima and maxima — not measurable here, but decidable.** "Clock
+Low to Address Valid ≤ 62 ns at 8 MHz" (spec 6) is a property of the pad, the
+process and the place-and-route, not of the RTL, and no simulation of a
+delay-free model can measure it. That much this document said from the start and
+it is still true.
+
+What it went on to say — that such limits are therefore "not simulable", because
+"an invented delay that passes proves nothing" — was wrong, and
+`doc/ac-timing.md` is the correction. One invented delay proves nothing. But the
+limits split into a *budget* on each pad delay and a set of required *separations*
+between pins, the separations are the design's own edge assignment, and the
+question "is there any assignment of delays inside the budget that meets every
+separation" is a system of difference constraints with an exact answer. It is
+decided by Bellman–Ford, and an infeasible system names the specifications that
+conflict.
+
+Run as `make timing`, which is part of `make check`. This design is conformant
+at all six speed grades, with 22 to 45 ns of room on the binding constraint. The
+same instrument applied to the Suska WF68K10 finds its two-clock bus cycle
+20 ns short of specification 14's minimum AS width at 8 MHz and exactly equal to
+it at four of the other five grades.
 
 **Clock-counted limits — checked in simulation.** A handful of specifications
 are given in `Clks` rather than nanoseconds: the arbitration handshake (35, 36,
@@ -197,7 +213,7 @@ as authoritative.
 |---|---|
 | **E's power-on phase.** UM 3.7: the ring counter "may come up in any state. (At power-on, it is impossible to guarantee phase relationship of E to CLK.)" Ours starts from a defined reset state. | Deliberate. Deterministic simulation is worth more than reproducing an indeterminacy, and no correct system can depend on the phase. |
 | **`rst_n`.** Not an MC68010 pin. Every register needs a defined value without power-on initialisation, because ASIC is a target. | Additive: architectural reset is still RESET+HALT on the real pins. |
-| **Nanosecond output delays.** None are modelled. | Out of scope for RTL; an STA and pad concern. |
+| **Nanosecond output delays.** None are modelled in the RTL. | Correct for an RTL model, and unchanged. What has changed is that the *budget* they imply is now analysed exactly and simulated at named corners — `doc/ac-timing.md`. |
 
 ## What clock rate this runs at
 

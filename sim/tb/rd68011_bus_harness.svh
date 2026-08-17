@@ -13,9 +13,17 @@
 //
 // This is the check the manual's figures actually support: figure 10-4's
 // horizontal axis is the source's own S0..S7 ruler, so "AS asserts in S2" is a
-// fact recoverable from the drawing. The nanosecond limits in
-// ac-electrical-specifications.csv are pad and STA concerns and are recorded in
-// doc/bus-timing-compliance.md instead of simulated.
+// fact recoverable from the drawing.
+//
+// It is a check against the figure, and the figure is stricter than the
+// specification. The nanosecond limits in ac-electrical-specifications.csv
+// permit placements this harness rejects -- at 10 MHz, specifications 6 and 11
+// between them put AS anywhere in the second half of S2 -- and whether *any*
+// assignment of pad delays satisfies them all is a separate question with an
+// exact answer. sim/tb/timing/ asks it and doc/ac-timing.md has the results.
+// Both checks are kept: this one says the design matches what the manual draws,
+// that one says it matches what the manual requires, and they are not the same
+// statement.
 
 `ifndef RD68011_BUS_HARNESS_SVH
 `define RD68011_BUS_HARNESS_SVH

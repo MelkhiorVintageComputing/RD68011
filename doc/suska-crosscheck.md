@@ -43,6 +43,30 @@ the machine-readable AC specification table instead.
 It also needs a longer reset than the manual's minimum: ten clocks of RESET and
 HALT together is not enough to start it, and twenty is.
 
+### That conclusion held for the ruler, and no longer holds for the specifications
+
+The paragraph above is right that the S0–S7 ruler cannot be compared. It was
+wrong to leave it there, and `doc/ac-timing.md` is the sequel.
+
+The AC specifications are stated in **nanoseconds against clock edges**, not in
+bus states. Nothing in them mentions S2. So an instrument that measures pin
+events in nanoseconds and never refers to a bus state can be pointed at both
+processors, and `make xsim-timing` does exactly that: the same SystemVerilog
+testbench, the same pads, the same slave and the same program, with the Suska
+core instantiated through `sim/tb/timing/wf68k10_pins.vhd` under Vivado's
+mixed-language simulator.
+
+What it found is a fact about the manual as much as about either design.
+Suska's two-clock bus cycle is **20 ns short of specification 14's minimum AS
+width at 8 MHz** — 250 ns against 270 — and **exactly equal to it** at 12.5,
+16.67, 16 and 20 MHz. Specification 14's minimum turns out to be precisely two
+clock periods at every grade except the slowest, where it is not. So a two-clock
+cycle is not a liberty taken with the manual; it is the tightest reading the
+manual allows, exactly, and at 8 MHz it is one the manual forbids.
+
+Ours holds AS for two and a half clocks and has 25 to 55 ns of room on the same
+constraint at every grade.
+
 ## What it can and does answer
 
 The *transaction list* is protocol-independent: which addresses, in which

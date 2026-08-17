@@ -36,7 +36,9 @@ YOSYS    := yosys
 XPART    ?= xc7a100tcsg324-1
 
 .PHONY: all lint lint-iverilog lint-verilator lint-yosys synth sim check clean dirs \
-        ucode ucode-check model-check harte harte-all
+        ucode ucode-check model-check harte harte-all \
+        audit impl programs suska cosim \
+        timing timing-events timing-check xsim-smoke xsim-timing
 
 all: lint
 
@@ -248,8 +250,10 @@ SUSKAUNIT := wf68k10_pkg wf68k10_address_registers wf68k10_alu \
              wf68k10_bus_interface wf68k10_control wf68k10_data_registers \
              wf68k10_exception_handler wf68k10_opcode_decoder wf68k10_top
 
-suska: dirs
-	@echo "== suska cross-check =="
+# One program, built once, for both the transaction cross-check and the
+# AC-timing measurement. Neither should get its own copy: the whole value of
+# running two processors is that they ran the same thing.
+$(SUSKADIR)/bus_probe.hex: sim/suska/bus_probe.S sim/suska/probe.ld | dirs
 	@mkdir -p $(SUSKADIR)
 	@m68k-linux-gnu-gcc -m68010 -c -x assembler-with-cpp \
 	    -o $(SUSKADIR)/bus_probe.o sim/suska/bus_probe.S
@@ -257,8 +261,10 @@ suska: dirs
 	    $(SUSKADIR)/bus_probe.o 2>&1 | grep -v 'RWX permissions' || true
 	@m68k-linux-gnu-objcopy -O binary $(SUSKADIR)/bus_probe.elf \
 	    $(SUSKADIR)/bus_probe.bin
-	@python3 tools/bin2hex.py $(SUSKADIR)/bus_probe.bin \
-	    > $(SUSKADIR)/bus_probe.hex
+	@python3 tools/bin2hex.py $(SUSKADIR)/bus_probe.bin > $@
+
+suska: dirs $(SUSKADIR)/bus_probe.hex
+	@echo "== suska cross-check =="
 	@cd $(SUSKADIR) && for u in $(SUSKAUNIT); do \
 	    ghdl -a $(GHDLFLAGS) $(CURDIR)/$(SUSKASRC)/$$u.vhd 2>&1 | \
 	    grep -i error || true; done
@@ -344,7 +350,109 @@ sim: dirs
 	done; \
 	exit $$fail
 
-check: ucode-check lint audit sim programs
+# ---------------------------------------------------------------------------
+# AC-timing conformance.
+#
+# Every other bus testbench here asks whether the design does what UM section 5
+# *draws* -- AS at the rising edge entering S2, and so on. These ask whether it
+# does what section 10 *requires*, which is a looser and quite different
+# question, and one the S0-S7 ruler cannot express because the limits are in
+# nanoseconds against clock edges rather than in bus states.
+#
+# One measurement run per speed grade, because the design places its events in
+# half-clocks and so every spacing scales with the period: an 8 MHz recording is
+# evidence about 8 MHz and nothing else. doc/ac-timing.md has the results.
+# ---------------------------------------------------------------------------
+TIMDIR     := $(BUILD)/timing
+TIMPERIODS := 125 100 80 60 50
+TIMMODELS  := sim/models/rd68011_pads.sv sim/models/rd68011_slave_ac.sv
+TIMINC     := -I sim/tb -I sim/tb/timing
+TIMCYCLES  ?= 30
+PADSKEW    ?= 0
+
+timing-events: dirs $(SUSKADIR)/bus_probe.hex
+	@echo "== AC timing: measuring =="
+	@mkdir -p $(TIMDIR)
+	@cp $(SUSKADIR)/bus_probe.hex $(TIMDIR)/
+	@iverilog $(IVFLAGS) $(TIMINC) -o $(TIMDIR)/ac.vvp -s rd68011_ac_tb \
+	    $(RTL) $(TIMMODELS) sim/tb/timing/rd68011_ac_tb.sv 2>&1 | \
+	    grep -v 'sorry:' || true
+	@cd $(TIMDIR) && for p in $(TIMPERIODS); do \
+	    vvp ac.vvp +image=bus_probe.hex +period=$$p \
+	        +cycles=$(TIMCYCLES) > ours-$$p.events 2>&1; done
+	@echo "   $(words $(TIMPERIODS)) logs in $(TIMDIR)"
+
+timing-check: timing-events
+	@echo "== AC timing: one delay per pin (the conservative reading) =="
+	@python3 tools/timing/analyse.py --brief --pad-skew $(PADSKEW) \
+	    $(TIMDIR)/ours-*.events
+	@echo
+	@echo "== AC timing: transition delays independent (the loosest reading) =="
+	@python3 tools/timing/analyse.py --brief $(TIMDIR)/ours-*.events
+
+timing: timing-check
+
+# --- Vivado xsim ------------------------------------------------------------
+#
+# The gate everything above the line depends on: our SystemVerilog and the
+# Suska VHDL elaborated together, so one testbench can drive either processor.
+# Kept out of `check` because it needs a Vivado installation.
+#
+# The xvhdl output is reduced to error counts and message codes on purpose.
+# CLAUDE.md permits Inputs/Suska_Configware/ to be run and not to be read;
+# a compiler's diagnostics quote the source it is compiling, so they are counted
+# rather than printed or kept.
+XSIMDIR := $(BUILD)/xsim
+XVHDL    = $(CURDIR)/scripts/xilinx.sh xvhdl
+XVLOG    = $(CURDIR)/scripts/xilinx.sh xvlog
+XELAB    = $(CURDIR)/scripts/xilinx.sh xelab
+XSIM     = $(CURDIR)/scripts/xilinx.sh xsim
+
+$(XSIMDIR)/.libs: $(RTL) sim/tb/timing/wf68k10_pins.vhd | dirs
+	@mkdir -p $(XSIMDIR)
+	@printf '%s\n' $(addprefix $(CURDIR)/,$(RTL)) > $(XSIMDIR)/rtl.f
+	@cd $(XSIMDIR) && for u in $(SUSKAUNIT); do \
+	    n=$$($(XVHDL) -2008 -work wf68k10 $(CURDIR)/$(SUSKASRC)/$$u.vhd 2>&1 | \
+	         grep -c '^ERROR' || true); \
+	    if [ "$$n" != "0" ]; then echo "xvhdl: $$u: $$n error(s)"; exit 1; fi; \
+	  done
+	@cd $(XSIMDIR) && $(XVHDL) -2008 -work xil_defaultlib -L wf68k10 \
+	    $(CURDIR)/sim/tb/timing/wf68k10_pins.vhd 2>&1 | grep '^ERROR' && exit 1 || true
+	@cd $(XSIMDIR) && $(XVLOG) -sv -f rtl.f 2>&1 | grep '^ERROR' && exit 1 || true
+	@touch $@
+
+xsim-smoke: $(XSIMDIR)/.libs
+	@echo "== xsim: does SystemVerilog bind to VHDL for these two designs? =="
+	@cd $(XSIMDIR) && $(XVLOG) -sv $(CURDIR)/sim/tb/timing/xsim_smoke_tb.sv \
+	    2>&1 | grep '^ERROR' && exit 1 || true
+	@cd $(XSIMDIR) && $(XELAB) -timescale 1ns/1ps -mt off -L wf68k10 \
+	    -L xil_defaultlib xsim_smoke_tb -s smoke_snap 2>&1 | \
+	    grep -E '^ERROR' && exit 1 || true
+	@cd $(XSIMDIR) && $(XSIM) smoke_snap -R 2>&1 | grep -E 'SMOKE|PASS|FAIL'
+
+xsim-timing: $(XSIMDIR)/.libs $(SUSKADIR)/bus_probe.hex timing-events
+	@echo "== AC timing: the Suska core, on the same instrument =="
+	@cp $(SUSKADIR)/bus_probe.hex $(XSIMDIR)/
+	@cd $(XSIMDIR) && $(XVLOG) -sv $(CURDIR)/sim/models/rd68011_pads.sv \
+	    $(CURDIR)/sim/models/rd68011_slave_ac.sv \
+	    -i $(CURDIR)/sim/tb/timing \
+	    $(CURDIR)/sim/tb/timing/wf68k10_ac_tb.sv 2>&1 | \
+	    grep '^ERROR' && exit 1 || true
+	@cd $(XSIMDIR) && $(XELAB) -timescale 1ns/1ps -mt off -L wf68k10 \
+	    -L xil_defaultlib wf68k10_ac_tb -s suska_ac 2>&1 | \
+	    grep -E '^ERROR' && exit 1 || true
+	@cd $(XSIMDIR) && for p in $(TIMPERIODS); do \
+	    $(XSIM) suska_ac -R -testplusarg "image=bus_probe.hex" \
+	        -testplusarg "period=$$p" -testplusarg "cycles=20" 2>&1 | \
+	    grep -E '^(# design|EV|BUS|CLK|GLITCH)' > suska-$$p.events; done
+	@echo
+	@# Reports rather than fails. That the other core cannot meet
+	@# specification 14 at 8 MHz is a finding about it, not a fault in this
+	@# design, and `make timing-check` is where our own verdict is a gate.
+	@python3 tools/timing/analyse.py --brief --pad-skew $(PADSKEW) \
+	    $(TIMDIR)/ours-*.events $(XSIMDIR)/suska-*.events || true
+
+check: ucode-check lint audit sim programs timing-check
 	@echo "check: ok"
 
 clean:

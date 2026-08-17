@@ -98,11 +98,14 @@ make harte-all  # the whole sweep, every opcode file the ISA covers
 make programs # build sim/programs/ with m68k-linux-gnu and run them
 make cosim    # ... and run them against Musashi, comparing every register
 make suska    # compare bus transactions against the Suska VHDL core under ghdl
+make timing   # AC-specification conformance: is any pad-delay assignment legal?
+make xsim-smoke   # gate: does SystemVerilog bind to the Suska VHDL under xsim?
+make xsim-timing  # the AC measurement applied to both processors, under xsim
 make ucode    # regenerate the microcode ROMs from tools/ucode/
 make audit    # prove no register initialises outside reset
 make synth    # Vivado synthesis + timing report
 make impl     # place and route, for the timing number that means something
-make check    # ucode-check, lint, audit, sim and programs
+make check    # ucode-check, lint, audit, sim, programs and timing-check
 ```
 
 ## Tooling notes
