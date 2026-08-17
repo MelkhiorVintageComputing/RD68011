@@ -182,12 +182,22 @@ module rd68011_seq (
   // The current microword, and the one that follows it
   // ===========================================================================
   logic [rd68011_ucode_pkg::UW-1:0]    uw;
-  logic [rd68011_ucode_pkg::UW-1:0]    uw_nxt;
   logic [rd68011_ucode_pkg::UADDR-1:0] upc_nxt;
   logic [rd68011_ucode_pkg::UADDR-1:0] upc_target;
 
-  rd68011_ucode_rom u_urom     (.addr (upc),     .uw (uw));
-  rd68011_ucode_rom u_urom_nxt (.addr (upc_nxt), .uw (uw_nxt));
+  rd68011_ucode_rom u_urom (.addr (upc), .uw (uw));
+
+  // The request the bus unit is about to latch comes from the microword that
+  // will be current after the coming edge, so it is read at an address the
+  // sequencer has only just computed -- from the ALU and the bus, in the same
+  // half clock the request has to reach the pins in. That read is the design's
+  // critical path, so it is of a store holding only the fields a request needs:
+  // twenty-one bits rather than a hundred and three. tools/ucode/isa.py's
+  // REQ_FIELDS says which, and rd68011_ureq_rom is generated from it.
+  logic [rd68011_ucode_pkg::RQW-1:0] rq_nxt;
+  rd68011_ureq_rom u_ureq_nxt (.addr (upc_nxt), .rq (rq_nxt));
+
+  `define RF(w, f) w[rd68011_ucode_pkg::R_``f``_LSB +: rd68011_ucode_pkg::R_``f``_W]
 
   // Field extraction. The positions come from the generated package, so the
   // microcode format is defined in exactly one place.
@@ -334,8 +344,25 @@ module rd68011_seq (
   logic [rd68011_ucode_pkg::UADDR-1:0] dec_entry;
   logic                                dec_illegal;
 
+  // The opcode the decoder looks at is not `ir_nxt` but the two ways ir can
+  // change on a microword that ends an instruction: the pipe advancing, and
+  // loop mode putting the looped instruction back. Both are registers.
+  //
+  // `ir_nxt` would be the obvious thing to use and is what this was. It also
+  // carries RTE's restore of ir out of the ALU -- which is never on a microword
+  // that decodes anything, but synthesis has no way to know that, so the ALU
+  // ended up feeding the decoder, the decoder feeding the microcode store, and
+  // the store feeding the bus request, all inside half a clock. That chain was
+  // the critical path; scripts/rd68011.xdc has the measurement.
+  logic [15:0] dec_op;
+  always_comb begin
+    dec_op = ir;
+    if (commit && pf_adv)                                     dec_op = irc;
+    if (commit && (f_dst == rd68011_ucode_pkg::U_DST_LOOPBACK)) dec_op = loop_ir;
+  end
+
   rd68011_decode_rom u_decode (
-      .op      (ir_nxt),
+      .op      (dec_op),
       .entry   (dec_entry),
       .illegal (dec_illegal)
   );
@@ -1111,7 +1138,7 @@ module rd68011_seq (
   // Sending it there from the decoder rather than testing loop mode inside the
   // ordinary DBcc keeps two clocks off every DBcc that is not in a loop.
   logic dec_dbcc;
-  assign dec_dbcc = (ir_nxt[15:12] == 4'h5) && (ir_nxt[7:3] == 5'b11001);
+  assign dec_dbcc = (dec_op[15:12] == 4'h5) && (dec_op[7:3] == 5'b11001);
 
   always_comb begin
     if (f_seq == rd68011_ucode_pkg::U_SEQ_DECODE) begin
@@ -1207,11 +1234,11 @@ module rd68011_seq (
   logic  [3:0] n_ea_areg;
   logic [31:0] n_ea_base, n_ea_inc, n_ea_addr;
 
-  assign n_aupd   = `UF(uw_nxt, AUPD);
-  assign n_easize = `UF(uw_nxt, SIZE);
+  assign n_aupd   = `RF(rq_nxt, AUPD);
+  assign n_easize = `RF(rq_nxt, SIZE);
 
   always_comb begin
-    unique case (`UF(uw_nxt, AEASEL))
+    unique case (`RF(rq_nxt, AEASEL))
       rd68011_ucode_pkg::U_AEASEL_DST: n_ea_reg = ir_nxt[11:9];
       rd68011_ucode_pkg::U_AEASEL_SP:  n_ea_reg = 3'b111;
       default:                         n_ea_reg = ir_nxt[2:0];
@@ -1241,10 +1268,10 @@ module rd68011_seq (
   assign n_ea_addr = (n_aupd == rd68011_ucode_pkg::U_AUPD_PRE)
                        ? (n_ea_base - n_ea_inc) : n_ea_base;
 
-  assign n_bus  = `UF(uw_nxt, BUS);
-  assign n_asel = `UF(uw_nxt, ASEL);
-  assign n_fc   = `UF(uw_nxt, FC);
-  assign n_size = `UF(uw_nxt, SIZE);
+  assign n_bus  = `RF(rq_nxt, BUS);
+  assign n_asel = `RF(rq_nxt, ASEL);
+  assign n_fc   = `RF(rq_nxt, FC);
+  assign n_size = `RF(rq_nxt, SIZE);
 
   always_comb begin
     unique case (n_asel)
@@ -1392,37 +1419,25 @@ module rd68011_seq (
   //   BY  a byte transfer
   //   RW  1 read, 0 write
   // ---------------------------------------------------------------------------
-  logic n_reads_data, n_ssw_if, n_ssw_df, n_is_read;
-  logic [rd68011_ucode_pkg::U_ASRC_W-1:0] n_asrc;
-  logic [rd68011_ucode_pkg::U_BSRC_W-1:0] n_bsrc;
-  logic [rd68011_ucode_pkg::U_PF_W-1:0]   n_pf;
+  // Whether the microword consumes the data and whether it loads the
+  // instruction input buffer are one bit each in the request preview: the
+  // assembler works them out from the source and prefetch fields, which are
+  // twelve and two bits that nothing else on this path would look at.
+  logic n_ssw_if, n_ssw_df, n_is_read;
 
-  assign n_asrc = `UF(uw_nxt, ASRC);
-  assign n_bsrc = `UF(uw_nxt, BSRC);
-  assign n_pf   = `UF(uw_nxt, PF);
-
-  function automatic logic is_rdata_src(input logic [5:0] sel);
-    is_rdata_src = (sel == rd68011_ucode_pkg::U_ASRC_RDATA) ||
-                   (sel == rd68011_ucode_pkg::U_ASRC_RDATA_SX) ||
-                   (sel == rd68011_ucode_pkg::U_ASRC_RDATA_B);
-  endfunction
-
-  assign n_reads_data = is_rdata_src(n_asrc) || is_rdata_src(n_bsrc);
   assign n_is_read    = (n_bus == rd68011_ucode_pkg::U_BUS_READ) ||
                         (n_bus == rd68011_ucode_pkg::U_BUS_RMW)  ||
                         (n_bus == rd68011_ucode_pkg::U_BUS_IACK) ||
                         (n_bus == rd68011_ucode_pkg::U_BUS_BKPT);
-  assign n_ssw_if = n_is_read &&
-                    ((n_pf == rd68011_ucode_pkg::U_PF_FETCH) ||
-                     (n_pf == rd68011_ucode_pkg::U_PF_ADVFETCH));
-  assign n_ssw_df = n_is_read && n_reads_data;
+  assign n_ssw_if = n_is_read && `RF(rq_nxt, PFFET);
+  assign n_ssw_df = n_is_read && `RF(rq_nxt, RDSRC);
 
   logic [15:0] n_ssw;
   assign n_ssw = {1'b0,                                       // RR, set by software
                   1'b0,
                   n_ssw_if, n_ssw_df,
                   (n_bus == rd68011_ucode_pkg::U_BUS_RMW),    // RM
-                  `UF(uw_nxt, HB),                            // HB
+                  `RF(rq_nxt, HB),                            // HB
                   (n_size == rd68011_ucode_pkg::U_SIZE_BYTE), // BY
                   n_is_read,                                  // RW
                   5'd0, req_fc};
@@ -1695,5 +1710,6 @@ module rd68011_seq (
 
   `undef UF
   `undef RDREG
+  `undef RF
 
 endmodule

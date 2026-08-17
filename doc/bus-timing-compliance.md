@@ -207,24 +207,14 @@ than a convention. One bus state is half a clock period, so anything that
 starts at a falling-edge flop and ends at a rising-edge one has half a period
 to get there -- which is where every hard path in the design lives.
 
-Measured on the Artix-7 part `make synth` targets, the clock period has moved
-as the design grew, and once come back: 20 ns with the bus interface alone,
-40 ns with MOVE, 44 ns with the integer set, 52 ns with control flow and
-exceptions, 68 ns with the rest of the instruction set, 72 ns with fault
-processing, and **64 ns once the multiplier moved out of the ALU** -- 15.6 MHz,
-against 12.5 MHz for the fastest MC68010 Motorola shipped, in 14631 LUTs and
-1303 flip-flops with 2.20 ns to spare.
+Measured on the Artix-7 part, through place and route: **60 ns, which is
+16.9 MHz**, against 12.5 MHz for the fastest MC68010 Motorola shipped. The
+period moved as the design grew and then came back as the three things on the
+critical path were dealt with -- `doc/implementation.md` is the full account,
+including what it would cost to go further and why this is where it stops.
 
-It has been the same path since P5, and it lengthens every time the microcode
-store widens. Half of that was fixed by giving the multiplier registered
-operands and a registered result, which took a DSP out of the chain and was
-worth 4 ns; what is left is the store itself, and that is P8's. The measurement
-and the fix are written up at the constraint in `scripts/rd68011.xdc`.
-
-The critical path and the two known fixes for it are written out in
-`scripts/rd68011.xdc`, at the constraint itself, because that is where anyone
-changing the number will look. Both fixes belong to P8; neither is a
-correctness problem.
+The critical path is written out in `scripts/rd68011.xdc`, at the constraint
+itself, because that is where anyone changing the number will look.
 
 ## Not yet implemented
 

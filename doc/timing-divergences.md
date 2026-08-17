@@ -110,8 +110,8 @@ The divider was sequential from the start, for the more ordinary reason that a
 32-by-16 divide is large; `rtl/rd68011_divider.sv` explains. It takes 33 clocks
 whatever the operands, plus the microcode loop that waits on it. That loop
 polls every two clocks, so the cost is 45 rather than 41; making it one would
-need a wait state in the sequencer of the kind bus cycles already have, which
-is P8 work if it is ever worth doing.
+need a wait state in the sequencer of the kind bus cycles already have, and
+nothing has yet been worth spending one on.
 
 **What it costs.** Nothing a program can observe except elapsed time: no bus
 cycle happens during either, so the transaction list is the reference's, which
@@ -223,8 +223,11 @@ Building a frame is 26 writes and a two-word vector fetch either way. Neither
 number is measured against a reference, because none exists: the vectors are an
 MC68000 with a seven-word frame.
 
-## Still to come
+## What changed the clock and not these numbers
 
-P8 is implementation readiness, and the one thing on this page it will change
-is the clock period rather than any cycle count. `scripts/rd68011.xdc` has that
-measurement.
+Three things came off the critical path in P8 -- the multiplier moved into a
+unit of its own, the decoder stopped taking its address through the ALU, and
+the second read of the microcode store was narrowed to the fields a bus request
+needs. None of them changed a cycle count, which is what
+`sim/tb/core_timing_tb.sv` is there to say: every row of it was measured again
+afterwards and none moved. `doc/implementation.md` has what they did change.

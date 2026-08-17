@@ -7,6 +7,9 @@ Writes three generated files under rtl/gen/ and a listing under build/:
 
   rd68011_ucode_pkg.sv    field positions and every encoding, as localparams
   rd68011_ucode_rom.sv    micro-address -> microword
+  rd68011_ureq_rom.sv     micro-address -> the fields a bus request needs,
+                          which is the copy read at the address the sequencer
+                          has only just computed
   rd68011_decode_rom.sv   opcode -> microcode entry point, as a casez
   rd68011_loop_rom.sv     opcode -> can this be a looped instruction, UM
                           table A-1, also a casez
@@ -95,8 +98,16 @@ def emit_pkg(labels=None):
            '// drift apart.', '',
            'package rd68011_ucode_pkg;', '']
     out.append('  localparam int UW    = %d;   // microword width' % isa.width())
+    out.append('  localparam int RQW   = %d;   // request preview width'
+               % isa.req_width())
     out.append('  localparam int UADDR = %d;   // micro-address width'
                % isa.UADDR_BITS)
+    out.append('')
+    out.append('  // The request preview -- tools/ucode/isa.py REQ_FIELDS.')
+    for name, w, _ in isa.REQ_FIELDS:
+        out.append('  localparam int R_%s_LSB = %d;' % (name.upper(),
+                                                        isa.req_lsb(name)))
+        out.append('  localparam int R_%s_W   = %d;' % (name.upper(), w))
     out.append('')
     for name, w, enc in isa.FIELDS:
         out.append('  // %s: %d bits at %d' % (name, w, isa.lsb(name)))
@@ -176,6 +187,38 @@ def emit_decode(patterns, labels):
                                                           labels['illegal']))
     out.append("        illegal = 1'b1;")
     out.append('      end')
+    out.append('    endcase')
+    out.append('  end')
+    out.append('')
+    out.append('endmodule')
+    out.append('')
+    return '\n'.join(out)
+
+
+def emit_ureq(words):
+    """The narrow copy: only what a bus request is built from."""
+    w = isa.req_width()
+    out = [BANNER, '',
+           '// Micro-address to request preview.',
+           '//',
+           '// The same store as rd68011_ucode_rom, cut down to the fields the',
+           '// bus request needs. This is the copy read at `upc_nxt` -- an',
+           '// address the sequencer computes from the ALU and the bus in the',
+           '// same half clock the request has to reach the pins in -- so its',
+           '// width is the width of that path. tools/ucode/isa.py says which',
+           '// fields and why.', '',
+           'module rd68011_ureq_rom (',
+           '    input  logic [rd68011_ucode_pkg::UADDR-1:0] addr,',
+           '    output logic [rd68011_ucode_pkg::RQW-1:0]   rq',
+           ');', '',
+           '  always_comb begin',
+           '    unique case (addr)']
+    for i, (fields, comment) in enumerate(words):
+        out.append("      %d'd%-5d: rq = %d'h%0*x;%s"
+                   % (isa.UADDR_BITS, i, w, (w + 3) // 4,
+                      isa.req_word(fields),
+                      ('  // ' + comment) if comment else ''))
+    out.append("      default: rq = %d'd0;" % w)
     out.append('    endcase')
     out.append('  end')
     out.append('')
@@ -296,15 +339,17 @@ def main():
     for name, text in [
             ('rtl/gen/rd68011_ucode_pkg.sv', emit_pkg(labels)),
             ('rtl/gen/rd68011_ucode_rom.sv', emit_urom(words)),
+            ('rtl/gen/rd68011_ureq_rom.sv', emit_ureq(words)),
             ('rtl/gen/rd68011_decode_rom.sv', emit_decode(patterns, labels)),
             ('rtl/gen/rd68011_loop_rom.sv', emit_loop(program.loop_patterns)),
             ('build/ucode.lst', emit_listing(words, labels, patterns))]:
         if write(os.path.join(ROOT, name), text):
             changed.append(name)
 
-    print('%d microwords, %d bits wide, %d opcode patterns, '
-          '%d loop mode patterns'
-          % (len(words), isa.width(), len(patterns), len(program.loop_patterns)))
+    print('%d microwords, %d bits wide (%d of request preview), '
+          '%d opcode patterns, %d loop mode patterns'
+          % (len(words), isa.width(), isa.req_width(), len(patterns),
+             len(program.loop_patterns)))
     if changed:
         print('updated: ' + ', '.join(changed))
     else:

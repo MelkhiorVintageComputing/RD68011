@@ -608,6 +608,75 @@ def field_width(name):
     raise KeyError(name)
 
 
+# --------------------------------------------------------------------------
+# The request preview
+#
+# The bus request the processor presents has to come from the microword that
+# will be current *after* the coming edge, because the bus unit latches it on
+# the edge that ends the current cycle. That means reading the microcode store
+# at an address the sequencer has only just computed -- and with a conditional
+# microword, that address depends on the ALU, which depends on read data. The
+# whole chain is inside half a clock, and it is what limits this design's
+# frequency.
+#
+# So the second read is of a store of its own, holding only the fields a
+# request is built from: a fifth of the width, and a fifth of the logic. Two of
+# its bits are not fields at all but answers computed here, because what the
+# request needs from them is one bit each rather than the six the field holds.
+#
+# The order here is the bit order, least significant first, as with FIELDS.
+REQ_FIELDS = [
+    ('bus',    3, BUS),
+    ('asel',   5, ASEL),
+    ('fc',     3, FC),
+    ('size',   2, SIZE),
+    ('aupd',   3, AUPD),
+    ('aeasel', 2, AEASEL),
+    ('hb',     1, None),   # the special status word's high-byte flag
+    # Derived: does the microword consume the data this cycle reads, and does
+    # it load the instruction input buffer? The special status word's DF and IF
+    # bits, which are otherwise twelve and two bits of source and prefetch
+    # encoding that nothing else here would look at.
+    ('rdsrc',  1, None),
+    ('pffet',  1, None),
+]
+
+
+def req_width():
+    return sum(w for _, w, _ in REQ_FIELDS)
+
+
+def req_lsb(name):
+    p = 0
+    for n, w, _ in REQ_FIELDS:
+        if n == name:
+            return p
+        p += w
+    raise KeyError(name)
+
+
+def req_word(fields):
+    """The request preview of one microword, from its fields."""
+    val = 0
+    for name, w, _ in REQ_FIELDS:
+        if name == 'rdsrc':
+            v = int(fields.get('asrc', DEFAULTS['asrc']) in RDATA_SOURCES or
+                    fields.get('bsrc', DEFAULTS['bsrc']) in RDATA_SOURCES)
+        elif name == 'pffet':
+            v = int(fields.get('pf', DEFAULTS['pf']) in
+                    (PF['FETCH'], PF['ADVFETCH']))
+        else:
+            v = fields.get(name, DEFAULTS[name])
+        if v >= (1 << w):
+            raise ValueError('request field %s = %d does not fit %d bits'
+                             % (name, v, w))
+        val |= v << req_lsb(name)
+    return val
+
+
+RDATA_SOURCES = (SRC['RDATA'], SRC['RDATA_SX'], SRC['RDATA_B'])
+
+
 def check():
     """Every encoding has to fit the field it lives in."""
     for name, w, enc in FIELDS:
@@ -617,3 +686,10 @@ def check():
             if v >= (1 << w):
                 raise ValueError('%s.%s = %d does not fit %d bits'
                                  % (name, k, v, w))
+    # The request preview copies its fields, so its widths have to match.
+    for name, w, _ in REQ_FIELDS:
+        if name in ('rdsrc', 'pffet'):
+            continue
+        if field_width(name) != w:
+            raise ValueError('request field %s is %d bits and the microword '
+                             'has %d' % (name, w, field_width(name)))

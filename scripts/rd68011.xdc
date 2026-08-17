@@ -30,13 +30,13 @@
 # was worth 4.0 ns, less than the 5.4 the DSP itself costs, because two thirds
 # of this path is routing.
 #
-# What is left is the microcode store, which is read twice combinationally in
-# series: the current microword, then the next one, whose bus request has to
-# reach the pins on the edge that ends the current cycle. That structure is
-# what buys the exact cycle counts, so it is not something to change casually,
-# but the store wants to be a block RAM with the handful of request fields
-# split into a narrow second copy that can be read ahead. P8's problem, and not
-# a correctness one; see doc/bus-timing-compliance.md.
+# The narrow second copy is done -- rd68011_ureq_rom holds the twenty-one bits
+# a request is built from rather than all hundred and three -- and so are the
+# two other things that were on this path. What is left is the shape of the
+# design itself: an ALU result choosing the next microword, and that microword
+# presenting the next bus request, inside half a clock. doc/implementation.md
+# sets out what it would cost to go further, and why 16.9 MHz is where this
+# stops.
 #
 # Both edges of clk are used (one bus state per half period), so a single
 # create_clock covers the design and Vivado times the negative-edge paths
@@ -44,7 +44,7 @@
 # UM 3.9 requires a square wave, and the half period is a real timing budget
 # here, not a convention.
 
-set clk_period_ns 64.000
+set clk_period_ns 60.000
 
 create_clock -period $clk_period_ns -name clk -waveform "0.000 [expr {$clk_period_ns / 2.0}]" [get_ports clk]
 

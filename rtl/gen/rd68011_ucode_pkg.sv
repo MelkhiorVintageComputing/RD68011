@@ -9,7 +9,28 @@
 package rd68011_ucode_pkg;
 
   localparam int UW    = 103;   // microword width
+  localparam int RQW   = 21;   // request preview width
   localparam int UADDR = 13;   // micro-address width
+
+  // The request preview -- tools/ucode/isa.py REQ_FIELDS.
+  localparam int R_BUS_LSB = 0;
+  localparam int R_BUS_W   = 3;
+  localparam int R_ASEL_LSB = 3;
+  localparam int R_ASEL_W   = 5;
+  localparam int R_FC_LSB = 8;
+  localparam int R_FC_W   = 3;
+  localparam int R_SIZE_LSB = 11;
+  localparam int R_SIZE_W   = 2;
+  localparam int R_AUPD_LSB = 13;
+  localparam int R_AUPD_W   = 3;
+  localparam int R_AEASEL_LSB = 16;
+  localparam int R_AEASEL_W   = 2;
+  localparam int R_HB_LSB = 18;
+  localparam int R_HB_W   = 1;
+  localparam int R_RDSRC_LSB = 19;
+  localparam int R_RDSRC_W   = 1;
+  localparam int R_PFFET_LSB = 20;
+  localparam int R_PFFET_W   = 1;
 
   // next: 13 bits at 0
   localparam int U_NEXT_LSB = 0;

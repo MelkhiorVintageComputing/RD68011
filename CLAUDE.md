@@ -57,7 +57,7 @@ The RTL must elaborate under **iverilog, Verilator, yosys and Vivado**. See
 | `sim/tb/` | testbenches |
 | `sim/models/` | bus-slave models |
 | `sim/programs/` | real code, built and run on the core -- see its README |
-| `doc/` | pinout, coding standard, compliance and divergence reports |
+| `doc/` | pinout, coding standard, compliance, divergence and implementation reports |
 | `Inputs/doc/` | Motorola manuals, split by section, with machine-readable AC specs |
 | `Inputs/ref/` | reference implementations used as oracles (not as RTL sources) |
 | `Inputs/tests/` | external test vectors |
@@ -95,8 +95,10 @@ make harte    # one SingleStepTests opcode file: make harte OP=MOVE.w N=200
 make harte-all  # the whole sweep, every opcode file the ISA covers
 make programs # build sim/programs/ with m68k-linux-gnu and run them
 make ucode    # regenerate the microcode ROMs from tools/ucode/
+make audit    # prove no register initialises outside reset
 make synth    # Vivado synthesis + timing report
-make check    # ucode-check, lint, sim and programs
+make impl     # place and route, for the timing number that means something
+make check    # ucode-check, lint, audit, sim and programs
 ```
 
 ## Tooling notes

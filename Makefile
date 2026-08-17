@@ -66,6 +66,18 @@ model-check:
 lint: lint-iverilog lint-verilator lint-yosys
 	@echo "lint: all tools clean"
 
+# ---------------------------------------------------------------------------
+# The reset audit -- CLAUDE.md's hard rule, checked rather than assumed.
+#
+# ASIC is a target, so there is no power-on register state. The source side of
+# this is quick; the netlist side synthesises the whole design to gate-level
+# flops and reads back their types, because a flop without a reset is a
+# different cell there and cannot hide.
+# ---------------------------------------------------------------------------
+audit:
+	@echo "== reset audit =="
+	@YOSYS=$(YOSYS) python3 tools/reset_audit.py $(RTL)
+
 lint-iverilog: dirs
 	@echo "== iverilog =="
 	@iverilog $(IVFLAGS) -o $(BUILD)/$(TOP).vvp -s $(TOP) $(RTL)
@@ -90,12 +102,29 @@ lint-yosys: dirs
 
 # ---------------------------------------------------------------------------
 # Vivado synthesis. Slow, so it is not part of `check`.
+#
+# Vivado is not on a login shell's PATH; scripts/vivado.sh sources its settings
+# script when it needs to, so this works from a plain shell. Point
+# VIVADO_SETTINGS at another installation to use that one.
 # ---------------------------------------------------------------------------
+VIVADO_SETTINGS ?= /opt/Xilinx/2025.2/Vivado/settings64.sh
+
 synth: dirs
 	@echo "== vivado $(XTOP) on $(XPART) =="
 	@printf '%s\n' $(addprefix $(CURDIR)/,$(RTL)) > $(BUILD)/rtl.f
-	@cd $(BUILD) && vivado -mode batch -nojournal -nolog \
+	@cd $(BUILD) && VIVADO_SETTINGS=$(VIVADO_SETTINGS) \
+	    $(CURDIR)/scripts/vivado.sh -mode batch -nojournal -nolog \
 	    -source ../scripts/synth.tcl -tclargs $(XPART) $(XTOP) $(CURDIR)
+
+# Place and route, for the number that means something: two thirds of the
+# critical path is routing, and before placement that part is an estimate.
+# Slower than synthesis, and not part of `check`.
+impl: dirs
+	@echo "== vivado place and route: $(XTOP) on $(XPART) =="
+	@printf '%s\n' $(addprefix $(CURDIR)/,$(RTL)) > $(BUILD)/rtl.f
+	@cd $(BUILD) && VIVADO_SETTINGS=$(VIVADO_SETTINGS) \
+	    $(CURDIR)/scripts/vivado.sh -mode batch -nojournal -nolog \
+	    -source ../scripts/impl.tcl -tclargs $(XPART) $(XTOP) $(CURDIR)
 
 # ---------------------------------------------------------------------------
 # Reference vectors. `make harte OP=NOP` runs one opcode file; N limits how
@@ -221,7 +250,7 @@ sim: dirs
 	done; \
 	exit $$fail
 
-check: ucode-check lint sim programs
+check: ucode-check lint audit sim programs
 	@echo "check: ok"
 
 clean:

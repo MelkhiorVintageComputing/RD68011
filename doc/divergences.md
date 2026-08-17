@@ -16,7 +16,9 @@ SingleStepTests through the core one instruction at a time. **The directed
 testbenches** cover what the vectors cannot -- the bus protocol, the MC68010's
 own instructions, faults and continuation, loop mode. **Real programs** --
 `make programs`, built with `m68k-linux-gnu` and run to completion -- cover
-what neither does: sequences. **Synthesis** covers what none of them does.
+what neither does: sequences. And **`make lint`, `make audit` and `make impl`**
+cover what none of them does, which is whether any of it can be built;
+`doc/implementation.md` has those numbers.
 
 The programs are worth their own note. Everything else here tests one
 instruction from a fabricated state; a program is a return address surviving
@@ -124,10 +126,9 @@ would have thrown away with the rest.
 ## Not yet implemented
 
 Nothing. Every instruction, every exception and both of the MC68010's own
-mechanisms -- instruction continuation and loop mode -- are built. What is left
-is P8, which is implementation readiness rather than behaviour: the clock
-period, the microcode store's shape, and an audit that no register initialises
-outside reset.
+mechanisms -- instruction continuation and loop mode -- are built, the design
+places and routes on a named part at 16.9 MHz, and no register in it
+initialises outside reset. `doc/implementation.md` is the record.
 
 ## Deliberate divergences added in P7
 
