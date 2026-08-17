@@ -18,7 +18,9 @@ own instructions, faults and continuation, loop mode. **Real programs** --
 `make programs`, built with `m68k-linux-gnu` and run to completion -- cover
 what neither does: sequences. **`make cosim`** runs those programs against
 Musashi and compares every register after every instruction, which is the same
-question asked by a second implementation nobody here wrote. And **`make lint`,
+question asked by a second implementation nobody here wrote. **`make suska`**
+asks a third, in VHDL, about the bus -- `doc/suska-crosscheck.md` says what it
+could and could not answer. And **`make lint`,
 `make audit` and `make impl`** cover what none of them does, which is whether
 any of it can be built; `doc/implementation.md` has those numbers.
 
@@ -67,6 +69,19 @@ One real disagreement came out of it, and the vectors settle it:
 | | |
 |---|---|
 | **BCD on digits that are not valid BCD.** `NBCD` of $FF with X set gives $9A and a carry here, and Musashi leaves the operand alone with no carry. | The operation is only defined for BCD operands, so this is outside the manual -- but it is not outside the hardware, and the reference vectors have 161 invalid-digit NBCD cases which this design matches every one of. The whole BCD model was fitted to those vectors before any of it was written; `rtl/rd68011_alu.sv` has the derivation. Musashi is the outlier. `sim/programs/p05_stress.S` therefore feeds the BCD chain valid digits, so that what is compared is the carry propagating along it rather than an answer to a question nobody asked. |
+
+### The Suska cross-check
+
+`Inputs/Suska_Configware/68K10/` is another MC68010-compatible design, and
+CLAUDE.md allows it to be run to validate testbenches and never read to write
+RTL. `make suska` runs it. Its transaction list agrees with ours -- 79 data
+accesses at the same addresses in the same order and the same sizes -- which
+independently confirms the addressing modes.
+
+What it could not do is corroborate the bus *timing*, which was the hope: its
+bus cycle is two clocks with AS asserting on a falling edge where the manual's
+is four with AS asserting on a rising one. `doc/suska-crosscheck.md` has the
+measurement, the two places it diverges, and what pins the timing down instead.
 
 ### The vector sweep
 

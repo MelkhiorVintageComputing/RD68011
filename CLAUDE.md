@@ -28,7 +28,9 @@ Anyone (human or agent) writing code in `rtl/` must not open files in that direc
 
 The golden reference is the documentation in `Inputs/doc/`. Suska is known to diverge from
 the real chip on parts of the bus protocol (notably interrupts), so testbenches must
-tolerate those divergences rather than encode them.
+tolerate those divergences rather than encode them. `make suska` runs the comparison and
+`doc/suska-crosscheck.md` records what it found -- including that Suska's bus cycle is two
+clocks where the manual's is four, so it cannot corroborate timing at all.
 
 ### No initialisation outside reset
 
@@ -95,6 +97,7 @@ make harte    # one SingleStepTests opcode file: make harte OP=MOVE.w N=200
 make harte-all  # the whole sweep, every opcode file the ISA covers
 make programs # build sim/programs/ with m68k-linux-gnu and run them
 make cosim    # ... and run them against Musashi, comparing every register
+make suska    # compare bus transactions against the Suska VHDL core under ghdl
 make ucode    # regenerate the microcode ROMs from tools/ucode/
 make audit    # prove no register initialises outside reset
 make synth    # Vivado synthesis + timing report

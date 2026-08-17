@@ -229,6 +229,52 @@ programs: dirs $(PROGHEX)
 	done; exit $$fail
 
 # ---------------------------------------------------------------------------
+# Cross-check against the Suska WF68K10, under ghdl.
+#
+# CLAUDE.md is explicit about what Inputs/Suska_Configware/ is for: it may be
+# run to validate testbenches, and it may never be read to work out how to
+# write our RTL. This is the running. Nothing in rtl/ or in the testbenches was
+# written from its source; its entity declaration is what an instantiation
+# needs and is all that was looked at.
+#
+# What it turned out to be good for, and what it turned out not to be, is in
+# doc/suska-crosscheck.md. Not part of `check`: it is a diagnostic, and its
+# answer is a paragraph rather than a pass or a fail.
+# ---------------------------------------------------------------------------
+SUSKADIR  := $(BUILD)/suska
+SUSKASRC  := Inputs/Suska_Configware/68K10
+GHDLFLAGS := --std=08 -fsynopsys -fexplicit -frelaxed --work=wf68k10 --workdir=.
+SUSKAUNIT := wf68k10_pkg wf68k10_address_registers wf68k10_alu \
+             wf68k10_bus_interface wf68k10_control wf68k10_data_registers \
+             wf68k10_exception_handler wf68k10_opcode_decoder wf68k10_top
+
+suska: dirs
+	@echo "== suska cross-check =="
+	@mkdir -p $(SUSKADIR)
+	@m68k-linux-gnu-gcc -m68010 -c -x assembler-with-cpp \
+	    -o $(SUSKADIR)/bus_probe.o sim/suska/bus_probe.S
+	@m68k-linux-gnu-ld -T sim/suska/probe.ld -o $(SUSKADIR)/bus_probe.elf \
+	    $(SUSKADIR)/bus_probe.o 2>&1 | grep -v 'RWX permissions' || true
+	@m68k-linux-gnu-objcopy -O binary $(SUSKADIR)/bus_probe.elf \
+	    $(SUSKADIR)/bus_probe.bin
+	@python3 tools/bin2hex.py $(SUSKADIR)/bus_probe.bin \
+	    > $(SUSKADIR)/bus_probe.hex
+	@cd $(SUSKADIR) && for u in $(SUSKAUNIT); do \
+	    ghdl -a $(GHDLFLAGS) $(CURDIR)/$(SUSKASRC)/$$u.vhd 2>&1 | \
+	    grep -i error || true; done
+	@cd $(SUSKADIR) && ghdl -a $(GHDLFLAGS) $(CURDIR)/sim/suska/wf68k10_tb.vhd \
+	    2>&1 | grep -i error || true
+	@cd $(SUSKADIR) && ghdl -e $(GHDLFLAGS) wf68k10_tb 2>/dev/null; \
+	    ghdl -r $(GHDLFLAGS) wf68k10_tb --stop-time=2ms 2>&1 | \
+	    grep -o 'CYCLE .*' > suska.txt
+	@iverilog $(IVFLAGS) -I sim/tb -o $(SUSKADIR)/rd68011_bus_tb.vvp \
+	    -s rd68011_bus_tb $(RTL) $(MODELS) sim/suska/rd68011_bus_tb.sv 2>&1 | \
+	    grep -v 'sorry:' || true
+	@cd $(SUSKADIR) && vvp rd68011_bus_tb.vvp +image=bus_probe.hex \
+	    +timeout=2000000 +cycles=400 2>&1 | grep -o 'CYCLE .*' > ours.txt
+	@python3 tools/suska/compare.py $(SUSKADIR)/ours.txt $(SUSKADIR)/suska.txt
+
+# ---------------------------------------------------------------------------
 # Co-simulation against Musashi.
 #
 # Musashi is an instruction-set simulator: no bus cycles, no prefetch pipe, no
