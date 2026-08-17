@@ -229,6 +229,54 @@ programs: dirs $(PROGHEX)
 	done; exit $$fail
 
 # ---------------------------------------------------------------------------
+# Co-simulation against Musashi.
+#
+# Musashi is an instruction-set simulator: no bus cycles, no prefetch pipe, no
+# cycle counts, so it says nothing about the half of this project that is bus
+# behaviour. What it is, is an independent implementation of the other half,
+# written by somebody else from the same manuals -- so running a real program
+# through both and comparing every register after every instruction asks a
+# question no single-instruction vector can.
+#
+# Its own m68kconf.h is not used: Inputs/ is immutable, and three switches have
+# to move. tools/cosim/m68kconf.h is the copy with those three changed, forced
+# ahead of the original with -include, because Musashi includes its own with
+# quotes and that searches its own directory first.
+#
+# Programs with an .args file are left out: those need faults injected from
+# outside the processor, which an ISS with no bus has no way to reproduce.
+# ---------------------------------------------------------------------------
+COSIMDIR  := $(BUILD)/cosim
+MUSASHI   := Inputs/ref/Musashi
+COSIMPROG := $(foreach p,$(PROGS),\
+               $(if $(wildcard sim/programs/$(p).args),,$(p)))
+
+$(COSIMDIR)/musashi_trace: tools/cosim/musashi_trace.c tools/cosim/m68kconf.h
+	@mkdir -p $(COSIMDIR)
+	@gcc -O1 -w -o $(COSIMDIR)/m68kmake $(MUSASHI)/m68kmake.c
+	@cd $(COSIMDIR) && ./m68kmake . $(CURDIR)/$(MUSASHI)/m68k_in.c >/dev/null
+	@gcc -O2 -w -include $(CURDIR)/tools/cosim/m68kconf.h \
+	    -I $(MUSASHI) -I $(COSIMDIR) -o $@ \
+	    tools/cosim/musashi_trace.c $(MUSASHI)/m68kcpu.c \
+	    $(MUSASHI)/m68kdasm.c $(MUSASHI)/softfloat/softfloat.c \
+	    $(COSIMDIR)/m68kops.c -lm
+
+cosim: programs $(COSIMDIR)/musashi_trace
+	@echo "== musashi co-simulation =="
+	@iverilog $(IVFLAGS) -I sim/tb -o $(BUILD)/program_tb.vvp \
+	    -s core_program_tb $(RTL) $(MODELS) sim/tb/core_program_tb.sv 2>&1 | \
+	    grep -v 'sorry:' || true
+	@fail=0; for p in $(COSIMPROG); do \
+	  vvp $(BUILD)/program_tb.vvp +prog=$(PROGDIR)/$$p.hex \
+	      +timeout=6000000 +trace=$(COSIMDIR)/$$p.rtl >/dev/null 2>&1; \
+	  $(COSIMDIR)/musashi_trace $(PROGDIR)/$$p.hex 4000000 \
+	      > $(COSIMDIR)/$$p.ref; \
+	  printf '%-12s ' "$$p"; \
+	  python3 tools/cosim/compare.py $(COSIMDIR)/$$p.rtl \
+	      $(COSIMDIR)/$$p.ref || fail=1; \
+	done; exit $$fail
+
+# ---------------------------------------------------------------------------
 # Simulation. Each testbench is sim/tb/<name>_tb.sv and runs to completion,
 # printing "PASS" or "FAIL"; a FAIL anywhere fails the target.
 # ---------------------------------------------------------------------------

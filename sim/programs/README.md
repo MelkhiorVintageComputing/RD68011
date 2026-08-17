@@ -39,12 +39,26 @@ with the vector rather than hanging.
 | `p01_flow.S` | Control flow and the stack: nested `BSR`, `LINK`/`UNLK` frames, `MOVEM` save and restore across a callee that clobbers everything, `RTD`, a `DBcc` loop, a jump table, recursion, a block copy, and condition codes surviving a call. |
 | `p02_excep.S` | Exceptions as a program uses them: four `TRAP`s telling themselves apart by vector, divide by zero, `CHK`, `TRAPV`, `ILLEGAL` and line A and F stepped over by their own handlers, a privilege violation taken from user mode and returned from in supervisor mode, single-stepping with the trace bit, the vector base register moved and put back, and `MOVES` through `SFC` and `DFC`. |
 | `p03_fault.S` | A bus error handler that completes the access itself, the way UM 6.3.9.2 describes: it sets the rerun flag and fills in the data input buffer image, so an address that faults behaves like a device register that is not there. Reads, writes, a `MOVEM` across it, an address error handled the same way, and sixteen faults inside one loop. Needs `p03_fault.args`, which tells the harness which address to fault on. |
+| `p05_stress.S` | Arithmetic in long chains, driven by a pseudo-random sequence: the ALU group at all three sizes with flags carried along, eight words of multi-precision `SUBX`, BCD chains where the correction propagates across bytes, multiply and divide feeding each other, every shift and rotate at data-dependent counts, bit operations, a `TAS`, a `CMPM` and a `MOVEP`. It exists mostly for `make cosim`, which compares every register after every instruction; the checksum at the end is a regression marker on top of that. |
 | `p04_ccode.c` | C at `-Os`: 32-bit multiply and divide, sign extension across widths, structs sorted by value, a `switch`, byte-at-a-time string work, a table-driven CRC32 checked against its standard value, an FNV hash, recursion, calls through a table of function pointers, and shifts at every width. |
 
 `p04_ccode.c` pushes every input through an inline-assembly barrier before
 using it. Without that, gcc folds the whole program at compile time and `main`
 becomes five instructions — a test of gcc's constant folder and of nothing
 else.
+
+## Co-simulation
+
+`make cosim` runs each of these on the core and on Musashi and compares the
+program counter, the status register and all sixteen registers before every
+instruction. `p03_fault` is left out: it needs faults injected from outside the
+processor, which an instruction-set simulator with no bus has no way to
+reproduce.
+
+A program that is only self-checking checks what its author thought to check. A
+program run in lockstep checks everything, which is why `p05_stress` is written
+the way it is -- it computes almost nothing anyone cares about, and exists to
+put the machine through states nobody chose.
 
 ## No libgcc
 

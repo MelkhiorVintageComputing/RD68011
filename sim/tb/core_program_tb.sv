@@ -40,6 +40,10 @@ module core_program_tb;
   localparam logic [31:0] PASS_MARK  = 32'h600D_600D;
 
   string       progfile;
+  string       tracefile;
+  int          tf;
+  logic        tracing;
+  logic        boundary;
   int          limit;
   int          berr_word;
   logic [31:0] res, prog;
@@ -48,6 +52,44 @@ module core_program_tb;
   function automatic logic [31:0] peek_l(input logic [22:0] wa);
     peek_l = {mem.peek(wa), mem.peek(wa + 23'd1)};
   endfunction
+
+  // -- The co-simulation trace -----------------------------------------------
+  //
+  // One line per instruction, printed at the instruction boundary that starts
+  // it: the address, the opcode about to run, the status register, and all
+  // sixteen registers.
+  // tools/cosim/musashi_trace.c prints the same line from an instruction-set
+  // simulator running the same image, and tools/cosim/compare.py finds the
+  // first place the two stop agreeing.
+  //
+  // The boundary is detected on the falling edge, where `retire` has settled --
+  // the bus unit's acknowledge only arrives in the second half of the clock --
+  // and the state is read after the rising edge that acts on it, which is when
+  // the registers hold what the next instruction starts with.
+  int tr_i;
+
+  // Not every boundary starts the instruction at ir_pc: a trace exception or
+  // an interrupt is taken at exactly this point, and the instruction the pipe
+  // had ready is pre-empted rather than executed. Musashi's hook fires only
+  // for instructions that actually run, so this has to as well.
+  always @(negedge clk) begin
+    #1;
+    boundary = rst_n && dut.u_seq.retire &&
+               (dut.u_seq.f_seq == rd68011_ucode_pkg::U_SEQ_DECODE) &&
+               !dut.u_seq.take_trace && !dut.u_seq.take_irq;
+  end
+
+  always @(posedge clk) begin
+    #2;
+    if (tracing && boundary) begin
+      $fwrite(tf, "%06h %04h %04h", dut.u_seq.ir_pc[23:0], dut.u_seq.ir,
+              dut.u_seq.sr);
+      for (tr_i = 0; tr_i < 15; tr_i = tr_i + 1)
+        $fwrite(tf, " %08h", dut.u_seq.regs[tr_i]);
+      $fwrite(tf, " %08h\n", dut.u_seq.sr[rd68011_pkg::SR_S] ? dut.u_seq.ssp
+                                                              : dut.u_seq.usp);
+    end
+  end
 
   initial begin
     errors = 0;
@@ -58,6 +100,11 @@ module core_program_tb;
     end
     if (!$value$plusargs("limit=%d", limit))   limit = 3000000;
     if (!$value$plusargs("berr=%d", berr_word)) berr_word = -1;
+    tracing = 1'b0;
+    if ($value$plusargs("trace=%s", tracefile)) begin
+      tf      = $fopen(tracefile, "w");
+      tracing = (tf != 0);
+    end
 
     core_reset();
     mem.clear();
@@ -103,6 +150,7 @@ module core_program_tb;
       errors = errors + 1;
     end
 
+    if (tracing) $fclose(tf);
     if (errors == 0) $display("PASS: %s", progfile);
     else             $display("FAIL: core_program_tb");
     $finish;

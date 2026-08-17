@@ -63,6 +63,18 @@ progress:   .long   0
 done:       .word   0
     .endm
 
+| The first thing every program does.
+|
+| UM 5.5 says what reset leaves behind -- the interrupt mask at seven, the
+| supervisor bit set, and on the MC68010 the vector base register cleared --
+| and says nothing at all about the condition codes, so they are undefined and
+| two implementations may differ. Setting them here means the co-simulation in
+| tools/cosim/ has something to compare from the second instruction onward
+| rather than waiting for the first one that happens to write a flag.
+    .macro  PROGRAM_BEGIN
+    move.w  #0x2700,%sr
+    .endm
+
 | ---------------------------------------------------------------------------
 | Checks
 | ---------------------------------------------------------------------------

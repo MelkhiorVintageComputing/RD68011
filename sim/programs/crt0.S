@@ -12,6 +12,7 @@
     .text
     .globl  _start
 _start:
+    PROGRAM_BEGIN
     | .bss, cleared the honest way rather than relying on the image being
     | padded with zeros -- which it is, but a crt0 that assumed so would be
     | wrong on any real part.

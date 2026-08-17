@@ -94,6 +94,7 @@ make sim      # directed testbenches (iverilog)
 make harte    # one SingleStepTests opcode file: make harte OP=MOVE.w N=200
 make harte-all  # the whole sweep, every opcode file the ISA covers
 make programs # build sim/programs/ with m68k-linux-gnu and run them
+make cosim    # ... and run them against Musashi, comparing every register
 make ucode    # regenerate the microcode ROMs from tools/ucode/
 make audit    # prove no register initialises outside reset
 make synth    # Vivado synthesis + timing report

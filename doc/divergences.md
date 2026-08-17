@@ -16,9 +16,11 @@ SingleStepTests through the core one instruction at a time. **The directed
 testbenches** cover what the vectors cannot -- the bus protocol, the MC68010's
 own instructions, faults and continuation, loop mode. **Real programs** --
 `make programs`, built with `m68k-linux-gnu` and run to completion -- cover
-what neither does: sequences. And **`make lint`, `make audit` and `make impl`**
-cover what none of them does, which is whether any of it can be built;
-`doc/implementation.md` has those numbers.
+what neither does: sequences. **`make cosim`** runs those programs against
+Musashi and compares every register after every instruction, which is the same
+question asked by a second implementation nobody here wrote. And **`make lint`,
+`make audit` and `make impl`** cover what none of them does, which is whether
+any of it can be built; `doc/implementation.md` has those numbers.
 
 The programs are worth their own note. Everything else here tests one
 instruction from a fabricated state; a program is a return address surviving
@@ -38,6 +40,33 @@ way:
   check was still looking at it. UM 6.3.10 says as much in the other direction:
   "if the RR flag is not set, the fault address is used when the cycle is
   retried, and another address error exception occurs".
+
+### Co-simulation against Musashi
+
+`make cosim` runs each program on the core and on Musashi -- an
+instruction-set simulator written by somebody else from the same manuals -- and
+compares the program counter, the status register and all sixteen registers
+before every instruction. **93991 instructions, every register the same.**
+
+An ISS has no bus cycles, no prefetch pipe and no cycle counts, so it says
+nothing about the half of this project that is bus behaviour. What it is good
+for is being independent: it was not derived from the vectors this design was
+built against, so where the two agree, two different readings of the manual
+agree.
+
+Two things are excluded, and the comparator prints how often each mattered:
+
+- **The condition codes PRM section 4 marks undefined** -- N and V after ABCD,
+  SBCD and NBCD. Each trace line carries the opcode so the mask is applied
+  exactly where the manual says undefined and nowhere else. 469 of 93991.
+- **The condition codes at reset**, which UM 5.5 does not define either. Every
+  program sets them with its first instruction, so this is one line each.
+
+One real disagreement came out of it, and the vectors settle it:
+
+| | |
+|---|---|
+| **BCD on digits that are not valid BCD.** `NBCD` of $FF with X set gives $9A and a carry here, and Musashi leaves the operand alone with no carry. | The operation is only defined for BCD operands, so this is outside the manual -- but it is not outside the hardware, and the reference vectors have 161 invalid-digit NBCD cases which this design matches every one of. The whole BCD model was fitted to those vectors before any of it was written; `rtl/rd68011_alu.sv` has the derivation. Musashi is the outlier. `sim/programs/p05_stress.S` therefore feeds the BCD chain valid digits, so that what is compared is the carry propagating along it rather than an answer to a question nobody asked. |
 
 ### The vector sweep
 
