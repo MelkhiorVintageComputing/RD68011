@@ -138,7 +138,17 @@
   // same instant, which is what a directly-switched bus does.
   int  ntr;         // bus cycles seen
   int  tick;        // half-clock index from the end of reset
-  logic logging;
+  logic logging;    // print the log
+  logic capturing;  // count and record cycles
+
+  // Recording the cycles as well as printing them, because the setup and hold
+  // measurements work by running the same program a few dozen times with an
+  // input moved a little each time and asking whether anything changed. That
+  // needs the transaction list in a variable, and does not want sixty logs.
+  localparam int MAXTR = 256;
+  logic [23:1] tr_addr [0:MAXTR-1];
+  logic        tr_rw   [0:MAXTR-1];
+  real         tr_time [0:MAXTR-1];
 
   // Macros rather than tasks. One shared automatic task called from a dozen
   // concurrent always blocks is the natural way to write this and it makes the
@@ -214,9 +224,15 @@
   // One line per bus cycle, so the analyser can group events into cycles
   // without knowing anything about either design's state machine.
   always @(negedge as_n_pad) begin
-    if (logging) begin
-      $display("BUS  %0.3f addr=%06h fc=%0d rw=%0d",
-               $realtime, {a_pad, 1'b0}, fc_pad, rw_pad);
+    if (capturing) begin
+      if (ntr < MAXTR) begin
+        tr_addr[ntr] = a_pad;
+        tr_rw[ntr]   = rw_pad;
+        tr_time[ntr] = $realtime;
+      end
+      if (logging)
+        $display("BUS  %0.3f addr=%06h fc=%0d rw=%0d",
+                 $realtime, {a_pad, 1'b0}, fc_pad, rw_pad);
       ntr = ntr + 1;
     end
   end
@@ -258,6 +274,7 @@
   task automatic timing_reset();
     begin
       logging   = 1'b0;
+      capturing = 1'b0;
       ntr       = 0;
       tick      = 0;
       rst_n     = 1'b0;
@@ -281,11 +298,41 @@
     begin
       $display("# design=%s corner=%s period=%0.3f hi=%0.3f lo=%0.3f",
                which, corner, clk_hi_ns + clk_lo_ns, clk_hi_ns, clk_lo_ns);
-      tick    = 0;
-      logging = 1'b1;
+      tick      = 0;
+      ntr       = 0;
+      capturing = 1'b1;
+      logging   = 1'b1;
       while (ntr < tb_cycles) @(posedge clk);
-      logging = 1'b0;
+      logging   = 1'b0;
+      capturing = 1'b0;
       $display("# cycles=%0d", ntr);
+    end
+  endtask
+
+  // The same run with nothing printed: reset the processor, reload the image so
+  // that a program which writes to memory starts from the same place every
+  // time, and record `n` bus cycles. A trial is deterministic, so two trials
+  // that differ differ because of the one input timing that was moved.
+  task automatic timing_trial(input string image, input int n);
+    real t0, budget;
+    begin
+      timing_reset();
+      u_slave.reset();
+      u_slave.clear();
+      $readmemh(image, u_slave.mem);
+      ntr       = 0;
+      capturing = 1'b1;
+      logging   = 1'b0;
+      // Bounded from the start of *this* trial, not in absolute time. A trial
+      // whose input arrives so late that the processor never latches anything
+      // useful can wander off and stop issuing cycles altogether, and that is a
+      // perfectly good answer -- it did not match the golden run -- but only if
+      // the trial gives up. Bounded absolutely instead, the first such trial
+      // eats the whole simulation.
+      t0     = $realtime;
+      budget = (clk_hi_ns + clk_lo_ns) * 20.0 * n;
+      while ((ntr < n) && (($realtime - t0) < budget)) @(posedge clk);
+      capturing = 1'b0;
     end
   endtask
 

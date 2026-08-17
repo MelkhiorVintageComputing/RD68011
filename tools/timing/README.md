@@ -6,11 +6,20 @@ this way; this is the map.
 
 ```sh
 make timing                                   # measure and judge this design
+make timing-setup                             # where it samples its inputs
 python3 tools/timing/specs.py --dump read-write   # the limits, defects resolved
 python3 tools/timing/anchors.py                   # what each spec measures between
 python3 tools/timing/events.py <log>              # the spacings in one log
 python3 tools/timing/analyse.py --brief <logs>    # the verdict
+python3 tools/timing/setup_report.py <setup log>  # the input requirements
 ```
+
+Two debugging aids in the setup testbench, both behind plusargs and both worth
+knowing about, because each was added after a measurement lied. `+scan` prints
+whether every point across the range matched, which is how you find out that the
+bisection's assumption of a single clean transition does not hold; and
+`+tracebisect` prints each bisection step, which is how you find out that it
+does hold and something else is wrong.
 
 | | |
 |---|---|
@@ -19,7 +28,8 @@ python3 tools/timing/analyse.py --brief <logs>    # the verdict
 | `events.py` | Reads a log; groups events into bus cycles; resolves anchors to times |
 | `feasible.py` | The difference-constraint system, Bellman–Ford, and the skew envelope |
 | `analyse.py` | The command line and the verdict |
-| `corners.py` | *(not yet written)* named pad-delay corners as tool options |
+| `corners.py` | Named pad-delay corners, worked out from the CSV, as tool options |
+| `setup_report.py` | Judges the measured input requirements — and note that two of the four limits run the opposite way from the other two |
 
 ## The two things worth knowing before changing any of it
 

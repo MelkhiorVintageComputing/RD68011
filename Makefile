@@ -38,7 +38,8 @@ XPART    ?= xc7a100tcsg324-1
 .PHONY: all lint lint-iverilog lint-verilator lint-yosys synth sim check clean dirs \
         ucode ucode-check model-check harte harte-all \
         audit impl programs suska cosim \
-        timing timing-events timing-check timing-duty xsim-smoke xsim-timing
+        timing timing-events timing-check timing-duty timing-setup \
+        xsim-smoke xsim-timing xsim-setup
 
 all: lint
 
@@ -408,7 +409,23 @@ timing-duty: timing-events
 	    python3 tools/timing/analyse.py --pad-skew $(PADSKEW) \
 	        $(TIMDIR)/duty-$$hi.events | grep 'address may lag'; done
 
-timing: timing-check timing-duty
+# The class-3 limits -- 27, 28, 29, 47 -- are demands on the memory system, so
+# `make timing` measures them and cannot judge them: what the slave happened to
+# do says nothing about what the processor requires. This finds out what it
+# requires, by moving one input later on each run until the behaviour changes.
+# Black-box throughout, so the identical measurement runs against the other core.
+timing-setup: dirs $(SUSKADIR)/bus_probe.hex
+	@echo "== AC timing: where the processor samples its inputs =="
+	@mkdir -p $(TIMDIR)
+	@cp $(SUSKADIR)/bus_probe.hex $(TIMDIR)/
+	@iverilog $(IVFLAGS) $(TIMINC) -o $(TIMDIR)/setup.vvp -s rd68011_setup_tb \
+	    $(RTL) $(TIMMODELS) sim/tb/timing/rd68011_setup_tb.sv 2>&1 | \
+	    grep -v 'sorry:' || true
+	@cd $(TIMDIR) && vvp setup.vvp +image=bus_probe.hex +period=125 \
+	    +timeout=4000000 2>&1 | grep -E '^(#|MEASURE|PASS|FAIL)' > ours.setup
+	@python3 tools/timing/setup_report.py $(TIMDIR)/ours.setup
+
+timing: timing-check timing-duty timing-setup
 
 # --- Vivado xsim ------------------------------------------------------------
 #
@@ -470,7 +487,29 @@ xsim-timing: $(XSIMDIR)/.libs $(SUSKADIR)/bus_probe.hex timing-events
 	@python3 tools/timing/analyse.py --brief --pad-skew $(PADSKEW) \
 	    $(TIMDIR)/ours-*.events $(XSIMDIR)/suska-*.events || true
 
-check: ucode-check lint audit sim programs timing-check
+# The same input-sampling measurement, against the other core. This is the
+# comparison doc/suska-crosscheck.md had concluded was impossible: the S0-S7
+# ruler cannot be shared, but "how many nanoseconds after AS does it look at
+# DTACK" can be asked of anything.
+xsim-setup: $(XSIMDIR)/.libs $(SUSKADIR)/bus_probe.hex timing-setup
+	@echo "== AC timing: where the Suska core samples its inputs =="
+	@cp $(SUSKADIR)/bus_probe.hex $(XSIMDIR)/
+	@cd $(XSIMDIR) && $(XVLOG) -sv $(CURDIR)/sim/models/rd68011_pads.sv \
+	    $(CURDIR)/sim/models/rd68011_slave_ac.sv \
+	    -i $(CURDIR)/sim/tb/timing \
+	    $(CURDIR)/sim/tb/timing/wf68k10_setup_tb.sv 2>&1 | \
+	    grep '^ERROR' && exit 1 || true
+	@cd $(XSIMDIR) && $(XELAB) -timescale 1ns/1ps -mt off -L wf68k10 \
+	    -L xil_defaultlib wf68k10_setup_tb -s suska_setup 2>&1 | \
+	    grep -E '^ERROR' && exit 1 || true
+	@cd $(XSIMDIR) && $(XSIM) suska_setup -R \
+	    -testplusarg "image=bus_probe.hex" -testplusarg "period=125" \
+	    -testplusarg "timeout=4000000" 2>&1 | \
+	    grep -E '^(# design|# golden|MEASURE|PASS|FAIL)' > suska.setup
+	@python3 tools/timing/setup_report.py $(TIMDIR)/ours.setup \
+	    $(XSIMDIR)/suska.setup || true
+
+check: ucode-check lint audit sim programs timing-check timing-setup
 	@echo "check: ok"
 
 clean:

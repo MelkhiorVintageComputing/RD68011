@@ -83,6 +83,14 @@ the state ruler and has S5 entered at 5.0, so an acknowledge that meets
 specification 47 (10 ns setup at 8 MHz) before the falling edge ending S4 is
 acted on at that very edge.
 
+Confirmed from outside, and in nanoseconds: `make timing-setup` moves DTACK
+later and later until the cycle gains a wait state, and puts the boundary at
+187.5 ns after AS asserts — 1.5 clocks at 8 MHz, which is the falling edge
+ending S4. Read data goes the same way and lands at 2.5 clocks, the falling edge
+ending S6. Neither measurement looks inside the design or refers to a bus state,
+so the same experiment gives the Suska core's instants on the same scale;
+`doc/ac-timing.md` puts them side by side.
+
 **BR, BGACK, RESET, IPL** go through `rd68011_sync`, the two-stage falling-edge
 path of UM 5.3 figure 5-17: "sampled on the falling edge of the clock and valid
 internally after the next falling edge." Combined with UM 5.3's rule that

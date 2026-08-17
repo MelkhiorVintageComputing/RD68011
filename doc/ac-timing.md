@@ -249,26 +249,66 @@ could have found, and it is what this instrument was built to be able to say.
 Our own design has 25 to 55 ns of room on the same constraint, because it holds
 AS for two and a half clocks rather than two.
 
-## What is measured but not judged
+## Where each processor samples its inputs
 
-The class-3 limits constrain the memory system. `analyse.py` prints them so the
-two halves can be read together; with the default slave timings, on a read at
-8 MHz:
+The class-3 limits constrain the memory system, so `make timing` can only report
+what the slave happened to do. What the *processor* requires is a different
+question, and `make timing-setup` answers it by moving one input a little later
+on each run and finding where the behaviour changes.
 
-| Spec | | Measured | Limit |
-|---|---|---|---|
-| 27 | data-in valid to clock low | 37.5 ns | ≥ 10 |
-| 28 | AS negated to DTACK negated | 0.0 ns | 0–240 |
-| 29 | AS negated to data-in invalid | 5.0 ns | ≥ 0 |
-| 29A | AS negated to data-in high impedance | 10.0 ns | ≤ 187 |
-| 31 | DTACK asserted to data-in valid | 5.0 ns | ≤ 90 |
-| 47 | DTACK asserted to clock low | 42.5 ns | ≥ 10 |
+The observable is black-box on purpose: the same program from reset each time,
+and the transaction list it produces. An input latched too late gives a wrong
+value and the addresses diverge; an acknowledge that misses its edge costs a
+wait state and the run lengthens; a stale acknowledge terminates the next cycle
+early and it shortens. Nothing looks inside the processor, which is what lets
+the identical measurement run against the other core.
 
-What these do *not* say is where this processor's own sampling instants are —
-only that the slave met the limits comfortably. Establishing the real
-requirement means walking an input to the point where the processor stops
-honouring it, which `sim/models/rd68011_slave_ac.sv` can do and which is the
-next thing to build.
+**RD68011 at 8 MHz** — `make timing-setup`, part of `make check`:
+
+| Spec | | Measured | Limit | |
+|---|---|---|---|---|
+| 47 | DTACK setup it needs | 0.028 ns | ≤ 10 | ok |
+| 27 | read-data setup it needs | 0.025 ns | ≤ 10 | ok |
+| 29 | read-data hold it needs | 0.000 ns | ≤ 0 | ok |
+| 28 | stale DTACK it tolerates | 375.0 ns | ≥ 240 | ok |
+
+The measured setups are the bisection's own resolution, which is the right
+answer for a delay-free model: it needs no setup, and what matters is that its
+requirement is nowhere near the 10 ns the specification allows the system.
+
+### The sampling instants, and the comparison
+
+The numbers worth putting side by side are not the verdicts but *where in the
+cycle each input is acted on*, in nanoseconds from AS asserting:
+
+| | RD68011 | Suska WF68K10 |
+|---|---|---|
+| DTACK sampled | **187.5 ns** = 1.50 clocks | **125.0 ns** = 1.00 clock |
+| Read data latched | **312.5 ns** = 2.50 clocks | **250.0 ns** = 2.00 clocks |
+| Stale DTACK tolerated | 375.0 ns | 250.0 ns |
+
+Ours confirms, black-box and in nanoseconds, exactly what
+`doc/bus-timing-compliance.md` claims from reading the manual: 1.5 clocks after
+AS is the falling edge ending S4, where DTACK is sampled, and 2.5 clocks is the
+falling edge ending S6, where read data is latched. That the documentation and
+an experiment which never mentions a bus state agree is worth more than either
+alone.
+
+Suska samples both a half clock earlier in its own shorter cycle, and both cores
+are conformant — but not equally. Specification 28 permits the system 240 ns to
+negate DTACK after the strobes; Suska tolerates 250.0 ns, a margin of 10 ns,
+where ours has 135. A slave that took the 240 ns the manual explicitly allows
+would come within ten nanoseconds of breaking that core.
+
+### What is asserted, and what is not
+
+Not that an input arriving *later* than the threshold is refused. Specification
+47 obliges the system to be early; it does not oblige the processor to reject a
+late input, and a real part very likely accepts one. A test written that way
+would encode this implementation's flop into the suite and fail the day somebody
+added a synchroniser — a false alarm on a correct change. So the threshold is
+reported and the assertion is one-directional: the requirement is no worse than
+the specification allows.
 
 ## What the instrument is
 

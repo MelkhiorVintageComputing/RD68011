@@ -30,7 +30,10 @@ The golden reference is the documentation in `Inputs/doc/`. Suska is known to di
 the real chip on parts of the bus protocol (notably interrupts), so testbenches must
 tolerate those divergences rather than encode them. `make suska` runs the comparison and
 `doc/suska-crosscheck.md` records what it found -- including that Suska's bus cycle is two
-clocks where the manual's is four, so it cannot corroborate timing at all.
+clocks where the manual's is four, so it cannot corroborate the S0-S7 ruler. It *can* be
+compared against the AC specifications, which are stated in nanoseconds against clock
+edges rather than in bus states: `make xsim-timing` and `make xsim-setup` do that, and
+`doc/ac-timing.md` has the results.
 
 ### No initialisation outside reset
 
@@ -99,13 +102,15 @@ make programs # build sim/programs/ with m68k-linux-gnu and run them
 make cosim    # ... and run them against Musashi, comparing every register
 make suska    # compare bus transactions against the Suska VHDL core under ghdl
 make timing   # AC-specification conformance: is any pad-delay assignment legal?
+make timing-setup # where the processor samples DTACK and read data, in ns
 make xsim-smoke   # gate: does SystemVerilog bind to the Suska VHDL under xsim?
 make xsim-timing  # the AC measurement applied to both processors, under xsim
+make xsim-setup   # ... and where each of them samples its inputs
 make ucode    # regenerate the microcode ROMs from tools/ucode/
 make audit    # prove no register initialises outside reset
 make synth    # Vivado synthesis + timing report
 make impl     # place and route, for the timing number that means something
-make check    # ucode-check, lint, audit, sim, programs and timing-check
+make check    # ucode-check, lint, audit, sim, programs and the timing gates
 ```
 
 ## Tooling notes

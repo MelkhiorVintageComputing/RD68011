@@ -67,6 +67,20 @@ manual allows, exactly, and at 8 MHz it is one the manual forbids.
 Ours holds AS for two and a half clocks and has 25 to 55 ns of room on the same
 constraint at every grade.
 
+`make xsim-setup` goes further and asks where each core samples its inputs, by
+moving one a little later on each run until the behaviour changes. That is
+black-box -- the observable is the transaction list -- so it needs no ruler at
+all:
+
+| | RD68011 | Suska WF68K10 |
+|---|---|---|
+| DTACK sampled | 187.5 ns after AS = 1.50 clocks | 125.0 ns = 1.00 clock |
+| Read data latched | 312.5 ns = 2.50 clocks | 250.0 ns = 2.00 clocks |
+| Stale DTACK tolerated | 375.0 ns | 250.0 ns |
+
+Both are conformant, and one of them barely: specification 28 allows the system
+240 ns to negate DTACK after the strobes, and this core tolerates 250.
+
 ## What it can and does answer
 
 The *transaction list* is protocol-independent: which addresses, in which

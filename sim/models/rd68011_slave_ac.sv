@@ -82,6 +82,16 @@ module rd68011_slave_ac #(
   // before acting, so an answer meant for a cycle that has already ended is
   // dropped instead of corrupting the next one.
   int  epoch;
+  // The cycle whose acknowledgement is currently on the wire. A negation
+  // scheduled by an earlier cycle must still happen even though a new cycle has
+  // begun -- a real slave releases DTACK a fixed time after AS negates and does
+  // not know or care that the processor has started another cycle. Guarding the
+  // negation on `epoch` instead, which is the obvious thing to write, drops it
+  // entirely and leaves DTACK asserted for ever; the specification 28
+  // measurement then reports the processor as tolerating a stale acknowledge
+  // only as far as the next cycle's AS, which is a fact about this model and
+  // not about the processor.
+  int  ack_epoch;
   logic selected;
 
   assign selected = !as_n && ((a & MASK) == (BASE & MASK));
@@ -97,6 +107,7 @@ module rd68011_slave_ac #(
     berr_after_ns   =  -1.0;
     berr_negate_ns  =   0.0;
     epoch           =   0;
+    ack_epoch       =   0;
     dtack_n         = 1'b1;
     vpa_n           = 1'b1;
     berr_n          = 1'b1;
@@ -143,11 +154,15 @@ module rd68011_slave_ac #(
         begin
           if (vpa_assert_ns >= 0.0) begin
             #(vpa_assert_ns);
-            if (epoch == my) vpa_n = 1'b0;
+            if (epoch == my) begin
+              vpa_n     = 1'b0;
+              ack_epoch = my;
+            end
           end else if (dtack_assert_ns >= 0.0) begin
             #(dtack_assert_ns);
             if (epoch == my) begin
-              dtack_n = 1'b0;
+              dtack_n   = 1'b0;
+              ack_epoch = my;
               // The MC68010's late bus error: specification 48* measures from
               // DTACK asserted to BERR asserted, and it is the only line in
               // the whole table that names this part alone (UM 5.4.1).
@@ -195,7 +210,10 @@ module rd68011_slave_ac #(
     fork
       begin
         if (dtack_negate_ns > 0.0) #(dtack_negate_ns);
-        if (epoch == my) begin
+        // Still negate if a later cycle has begun; only stand down if a later
+        // cycle has already put its own acknowledgement on the wire, in which
+        // case the line is being held for that one and is not ours to release.
+        if (ack_epoch <= my) begin
           dtack_n = 1'b1;
           vpa_n   = 1'b1;
         end
@@ -209,6 +227,27 @@ module rd68011_slave_ac #(
       end
     join_none
   end
+
+  // Put the wires back where they started, and abandon anything still pending.
+  //
+  // Needed because the setup and hold measurements run the same program dozens
+  // of times in one simulation, and a scheduled answer outlives the run that
+  // scheduled it. Worse, an answer whose negation was suppressed leaves DTACK
+  // asserted, and the next run then terminates every cycle immediately whatever
+  // its knob says -- which looks exactly like a processor that tolerates any
+  // input timing at all. Advancing the epoch invalidates every fork still
+  // waiting, because each one checks the epoch it was born with.
+  task automatic reset();
+    begin
+      epoch     = epoch + 1000000;
+      ack_epoch = epoch;
+      dtack_n   = 1'b1;
+      vpa_n     = 1'b1;
+      berr_n    = 1'b1;
+      d_oe      = 1'b0;
+      d_out     = 16'd0;
+    end
+  endtask
 
   // -- Loading and inspection, the same API rd68011_slave offers --------------
   function automatic void poke(input logic [23:1] addr, input logic [15:0] val);
