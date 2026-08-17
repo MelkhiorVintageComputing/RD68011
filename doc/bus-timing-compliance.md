@@ -239,7 +239,9 @@ starts at a falling-edge flop and ends at a rising-edge one has half a period
 to get there -- which is where every hard path in the design lives.
 
 Measured on the Artix-7 part, through place and route: **60 ns, which is
-16.9 MHz**, against 12.5 MHz for the fastest MC68010 Motorola shipped. The
+16.8 MHz**, against 12.5 MHz for the fastest MC68010 Motorola shipped -- and
+that is where the constraint closes rather than where the design runs out, the
+worst path being one the microcode cannot activate. The
 period moved as the design grew and then came back as the three things on the
 critical path were dealt with -- `doc/implementation.md` is the full account,
 including what it would cost to go further and why this is where it stops.

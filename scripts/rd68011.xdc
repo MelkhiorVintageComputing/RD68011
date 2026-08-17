@@ -4,9 +4,9 @@
 # build is expected to run the core faster than the original; the number here
 # is what `make synth` reports slack against.
 #
-# 68 ns is where the design closes today on the Artix-7 part, with 0.95 ns to
-# spare and 12396 LUTs and 1148 flip-flops -- 14.7 MHz, against the fastest
-# original MC68010's 12.5 MHz. The number has moved as the
+# 60 ns is where the design closes today on the Artix-7 part, with 0.3 to 0.9 ns
+# to spare depending on the place-and-route run, and 12650 Slice LUTs -- about
+# 16.8 MHz, against the fastest original MC68010's 12.5. The number has moved as the
 # design grew: 20 ns with a bus interface and a 17-word microcode store, 40 ns
 # with MOVE, 44 ns with the whole integer set, 52 ns with control flow and
 # exceptions, and 68 ns with the rest of the instruction set.
@@ -32,11 +32,20 @@
 #
 # The narrow second copy is done -- rd68011_ureq_rom holds the twenty-one bits
 # a request is built from rather than all hundred and three -- and so are the
-# two other things that were on this path. What is left is the shape of the
-# design itself: an ALU result choosing the next microword, and that microword
-# presenting the next bus request, inside half a clock. doc/implementation.md
-# sets out what it would cost to go further, and why 16.9 MHz is where this
-# stops.
+# two other things that were on this path.
+#
+# BUT: this path is a false one, found in the AC-timing work and written up in
+# doc/implementation.md. For it to happen a single microword would have to read
+# from the bus, put the read data through the ALU, *and* branch on a flag the
+# ALU produced. None does: every condition that coexists with a bus cycle is
+# MASK, XWDR, or a direct test of rdata bits, none of which passes through the
+# ALU. The condition mux makes the wire exist and synthesis cannot know the
+# combination never arises.
+#
+# So this constraint is met against a route the processor cannot take, and the
+# real limit is unmeasured. It is a functional exclusion rather than a
+# structural one, so a set_false_path here would also disable the flag
+# branches that are real; nothing is asserted about it below, deliberately.
 #
 # Both edges of clk are used (one bus state per half period), so a single
 # create_clock covers the design and Vivado times the negative-edge paths

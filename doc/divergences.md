@@ -202,7 +202,7 @@ between two of this project's own testbenches seriously.
 
 Nothing. Every instruction, every exception and both of the MC68010's own
 mechanisms -- instruction continuation and loop mode -- are built, the design
-places and routes on a named part at 16.9 MHz, and no register in it
+places and routes on a named part at 16.8 MHz, and no register in it
 initialises outside reset. `doc/implementation.md` is the record.
 
 ## Deliberate divergences added in P7
