@@ -422,7 +422,7 @@ timing-setup: dirs $(SUSKADIR)/bus_probe.hex
 	    $(RTL) $(TIMMODELS) sim/tb/timing/rd68011_setup_tb.sv 2>&1 | \
 	    grep -v 'sorry:' || true
 	@cd $(TIMDIR) && vvp setup.vvp +image=bus_probe.hex +period=125 \
-	    +timeout=4000000 2>&1 | grep -E '^(#|MEASURE|PASS|FAIL)' > ours.setup
+	    +timeout=20000000 2>&1 | grep -E '^(#|MEASURE|PASS|FAIL)' > ours.setup
 	@python3 tools/timing/setup_report.py $(TIMDIR)/ours.setup
 
 timing: timing-check timing-duty timing-setup
@@ -504,7 +504,7 @@ xsim-setup: $(XSIMDIR)/.libs $(SUSKADIR)/bus_probe.hex timing-setup
 	    grep -E '^ERROR' && exit 1 || true
 	@cd $(XSIMDIR) && $(XSIM) suska_setup -R \
 	    -testplusarg "image=bus_probe.hex" -testplusarg "period=125" \
-	    -testplusarg "timeout=4000000" 2>&1 | \
+	    -testplusarg "timeout=20000000" 2>&1 | \
 	    grep -E '^(# design|# golden|MEASURE|PASS|FAIL)' > suska.setup
 	@python3 tools/timing/setup_report.py $(TIMDIR)/ours.setup \
 	    $(XSIMDIR)/suska.setup || true

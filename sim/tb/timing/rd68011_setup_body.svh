@@ -24,6 +24,18 @@
   // specification 28 measurement deliberately makes it slow -- see there.
   real   base_dtack_assert;
 
+  // Which cycle the late bus error is applied to; -1 while nothing is
+  // measuring it. Set by measure_late_berr and honoured in knob_defaults.
+  int    berr_on_cycle;
+
+  // How long the slave keeps BERR asserted past the strobes negating.
+  // Specification 30 lets the system hold it any time at or after that edge,
+  // and zero is the wrong choice for measuring a *late* bus error: our design
+  // recognises one on the falling edge that ends the cycle, which is the very
+  // instant AS negates, so releasing BERR there withdraws it in the same moment
+  // it would have been sampled and it is never seen at all.
+  real   berr_hold_ns;
+
   logic [23:1] g_addr [0:MAXTR-1];
   int          g_n;
   real         g_span;
@@ -45,7 +57,8 @@
       u_slave.vpa_assert_ns   =  -1.0;
       u_slave.berr_assert_ns  =  -1.0;
       u_slave.berr_after_ns   =  -1.0;
-      u_slave.berr_negate_ns  =   0.0;
+      u_slave.berr_negate_ns  = berr_hold_ns;
+      u_slave.berr_cycle      = berr_on_cycle;
     end
   endtask
 
@@ -174,7 +187,9 @@
       for (int i = 0; i <= steps; i = i + 1) begin
         v = lo + ((hi - lo) * i) / steps;
         trial(id, v, ok);
-        $display("SCAN %s %0.3f %0d", what, v, ok);
+        $display("SCAN %s %0.3f ok=%0d ntr=%0d span=%0.1f addr6=%06h",
+                 what, v, ok, ntr, tr_time[g_n - 1] - tr_time[0],
+                 {tr_addr[6], 1'b0});
       end
     end
   endtask
@@ -238,6 +253,79 @@
     end
   endtask
 
+  // How late a bus error may arrive and still be recognised.
+  //
+  // Specification 48* -- the only line in section 10 that names the MC68010
+  // alone -- allows the system to assert BERR up to 80 ns *after* DTACK at
+  // 8 MHz, and requires the processor to notice it anyway. UM 5.4.1 is the
+  // behaviour: a bus error "asserted within one clock cycle after the assertion
+  // of data transfer acknowledge" still terminates the cycle as a fault, where
+  // an MC68000 would have completed it normally.
+  //
+  // So this runs the other way round from the setup measurements. A recognised
+  // bus error changes the program's behaviour -- on the first cycle it is a
+  // fault during reset processing, which is a double bus fault and halts the
+  // processor -- so the trial that *differs* from golden is the one where BERR
+  // was seen. The threshold is the first delay at which it is missed.
+  task automatic measure_late_berr(input string spec, input real dtack_at,
+                                   input int on_cycle,
+                                   input real lo, input real span_mult,
+                                   input int steps);
+    real thresh, a, b, hi;
+    bit  found, ok_lo, ok_hi;
+    begin
+      base_dtack_assert = dtack_at;
+      berr_hold_ns      = (clk_hi_ns + clk_lo_ns) / 2.0;
+      take_golden();
+      // The range has to come from *this* measurement's golden, not from
+      // whichever one ran last.
+      hi            = span_mult * g_spacing;
+      berr_on_cycle = on_cycle;
+
+      trial(K_BERR_AFTER, lo, ok_lo);
+      if (ok_lo) begin
+        // Not even an immediate bus error changed anything, so this measures
+        // nothing about lateness. Saying so is better than reporting a number.
+        $display("MEASURE %s berr none 0.000 a bus error at DTACK was not recognised at all",
+                 spec);
+      end else begin
+        // Step across the range and bisect inside the *first* bracket where the
+        // answer flips, rather than bisecting the whole range.
+        //
+        // Bisection needs the answer to change once and stay changed, and this
+        // one does not: a bus error delayed well past its own cycle can still
+        // disturb a later one, so `recognised` reappears further out. Bisecting
+        // the whole range walks into one of those and returns a number several
+        // cycles too large -- it reported 792 ns on a 500 ns cycle. Only the
+        // first transition is the recognition window; the rest is a different
+        // phenomenon and not what specification 48* is about.
+        a = lo;
+        found = 1'b0;
+        for (int i = 1; (i <= steps) && !found; i = i + 1) begin
+          b = lo + ((hi - lo) * i) / steps;
+          trial(K_BERR_AFTER, b, ok_hi);
+          if (ok_hi) found = 1'b1; else a = b;
+        end
+        if (!found) begin
+          $display("MEASURE %s berr none %0.3f still recognised at the end of the range",
+                   spec, hi);
+        end else begin
+          while ((b - a) > resolution) begin
+            thresh = (a + b) / 2.0;
+            trial(K_BERR_AFTER, thresh, ok_hi);
+            if (ok_hi) b = thresh; else a = thresh;
+          end
+          // `a` is the latest delay still recognised.
+          $display("MEASURE %s berr recognises %0.3f fromas %0.3f",
+                   spec, a, dtack_at + a);
+        end
+      end
+      base_dtack_assert = 20.0;
+      berr_on_cycle     = -1;
+      berr_hold_ns      = 0.0;
+    end
+  endtask
+
   task automatic setup_main(input string which);
     real period;
     begin
@@ -256,6 +344,11 @@
       if ($test$plusargs("scan")) begin
         scan("dtack",  K_DTACK_ASSERT, 0.0, 2.0 * g_spacing, 24);
         scan("datain", K_DATA_VALID,   0.0, 2.0 * g_spacing, 24);
+        berr_on_cycle = 6;
+        berr_hold_ns  = (clk_hi_ns + clk_lo_ns) / 2.0;
+        scan("berr",   K_BERR_AFTER,   0.0, 2.0 * g_spacing, 24);
+        berr_on_cycle = -1;
+        berr_hold_ns  = 0.0;
       end
 
       // 47: how late DTACK may arrive, measured from AS asserting, and the
@@ -282,6 +375,16 @@
       take_golden();
       measure_tolerance("28", "dtack", K_DTACK_NEGATE, 0.0, 3.0 * g_spacing);
       base_dtack_assert = 20.0;
+
+      // 48*: how late a bus error may be, measured from DTACK asserting,
+      //      which is what the specification measures.
+      // Twice, because the answer depends on when DTACK arrived. The window
+      // this design offers runs to a fixed edge, so an early acknowledge leaves
+      // a wide window after it and a late one leaves a narrow one -- and it is
+      // the late acknowledge that the specification is about, since 48* is a
+      // maximum the system is allowed to take.
+      measure_late_berr("48*", 20.0, 6, 0.0, 1.0, 12);
+      measure_late_berr("48*late", 180.0, 6, 0.0, 1.0, 12);
 
       $display("PASS: setup measurements for %s", which);
       $finish;

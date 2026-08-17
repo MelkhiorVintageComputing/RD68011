@@ -167,6 +167,22 @@ would have thrown away with the rest.
 | **The order the four words of a format $0 frame are written in.** They go out from the top of the frame down: the format word, the low half of the program counter, its high half, then the status register. | No available reference records the order for an MC68010 -- the vectors are an MC68000 with a different frame -- so this one was chosen rather than measured. The resulting memory is exactly what UM figure 6-6 specifies, which is what software sees; only a bus analyser could tell the difference. |
 | **CHK's Z, V and C flags.** PRM section 4 leaves all three undefined and defines N only for the two trapping cases. This takes the flags from the first bound test and leaves the second alone. | Undefined is undefined, but matching something real is better than matching nothing: this is what the reference does, and it is what the sweep checks against. |
 
+## An open question
+
+**The MC68010's late bus error may not be implemented.** Specification 48\* --
+the only line in section 10 that names this part alone -- lets the system assert
+BERR up to 80 ns *after* DTACK at 8 MHz and requires the processor to fault the
+cycle anyway (UM 5.4.1, table 5-1 cases 4 and 6). Measured on the whole
+processor, this design recognises BERR only at the edge that samples DTACK, so
+with a late but legal acknowledge the window is 7.5 ns rather than 80.
+
+That contradicts `sim/tb/bus_error_tb.sv` case 4, which drives the bus unit
+directly and does see a late BERR recognised. The Suska core, measured the same
+way, has a second recognition instant that moves with the acknowledge where ours
+does not -- which is evidence the mechanism is real. `doc/ac-timing.md` sets out
+the measurements and the three possible explanations. Unresolved, reported
+rather than judged, and not gated on.
+
 ## Not yet implemented
 
 Nothing. Every instruction, every exception and both of the MC68010's own

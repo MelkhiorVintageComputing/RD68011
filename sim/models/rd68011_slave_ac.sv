@@ -78,6 +78,15 @@ module rd68011_slave_ac #(
   real berr_after_ns;     // from DTACK asserted (specifications 48*, 27A)
   real berr_negate_ns;    // from AS negated    (specification 30)
 
+  // Which cycle the late bus error applies to, counting from reset; -1 for
+  // every cycle. Measuring specification 48* needs exactly one faulting access:
+  // applied to every cycle, a bus error delayed past the end of its own cycle
+  // interferes with the next one, and whether it does depends on how far apart
+  // those two cycles happen to be -- which makes the answer non-monotonic in
+  // the delay and a bisection on it meaningless. It measured 792 ns that way,
+  // on a cycle 500 ns long.
+  int  berr_cycle;
+
   // The number of the cycle in progress. Every scheduled action re-reads it
   // before acting, so an answer meant for a cycle that has already ended is
   // dropped instead of corrupting the next one.
@@ -92,6 +101,13 @@ module rd68011_slave_ac #(
   // only as far as the next cycle's AS, which is a fact about this model and
   // not about the processor.
   int  ack_epoch;
+
+  // Which cycle this is, counting from the last reset(). Separate from `epoch`
+  // because that one is deliberately jumped forward on reset to invalidate
+  // stale forks, so it is a monotone token and not an index -- comparing
+  // berr_cycle against it silently never matches.
+  int  cycle_index;
+
   logic selected;
 
   assign selected = !as_n && ((a & MASK) == (BASE & MASK));
@@ -106,7 +122,9 @@ module rd68011_slave_ac #(
     berr_assert_ns  =  -1.0;
     berr_after_ns   =  -1.0;
     berr_negate_ns  =   0.0;
+    berr_cycle      =  -1;
     epoch           =   0;
+    cycle_index     =   0;
     ack_epoch       =   0;
     dtack_n         = 1'b1;
     vpa_n           = 1'b1;
@@ -133,10 +151,20 @@ module rd68011_slave_ac #(
   // long before the edge comes round again.
 
   always @(negedge as_n) begin : cycle_start
-    int my;
+    int my, my_index;
     if ((a & MASK) == (BASE & MASK)) begin
-      epoch = epoch + 1;
-      my    = epoch;
+      epoch       = epoch + 1;
+      cycle_index = cycle_index + 1;
+      my          = epoch;
+      my_index    = cycle_index;
+
+      // A slave drives BERR for its own cycle and lets go for the next one.
+      // Saying so explicitly matters for the late-bus-error measurement: a BERR
+      // asserted so late that it lands after this cycle's negation has already
+      // been scheduled would otherwise stay asserted for ever and fault the
+      // *next* cycle, which makes the answer non-monotonic and the bisection
+      // meaningless.
+      berr_n = 1'b1;
 
       // Read data: specifications 27 and 31 measure from here.
       if (rw) fork
@@ -166,7 +194,8 @@ module rd68011_slave_ac #(
               // The MC68010's late bus error: specification 48* measures from
               // DTACK asserted to BERR asserted, and it is the only line in
               // the whole table that names this part alone (UM 5.4.1).
-              if (berr_after_ns >= 0.0) begin
+              if ((berr_after_ns >= 0.0) &&
+                  ((berr_cycle < 0) || (my_index == berr_cycle))) begin
                 #(berr_after_ns);
                 if (epoch == my) berr_n = 1'b0;
               end
@@ -239,8 +268,9 @@ module rd68011_slave_ac #(
   // waiting, because each one checks the epoch it was born with.
   task automatic reset();
     begin
-      epoch     = epoch + 1000000;
-      ack_epoch = epoch;
+      epoch       = epoch + 1000000;
+      ack_epoch   = epoch;
+      cycle_index = 0;
       dtack_n   = 1'b1;
       vpa_n     = 1'b1;
       berr_n    = 1'b1;

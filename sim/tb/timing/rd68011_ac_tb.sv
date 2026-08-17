@@ -56,6 +56,9 @@ module rd68011_ac_tb #(
   );
 
   string image;
+  real   berr_after;
+  real   berr_hold;
+  int    berr_cycle;
 
   initial begin
     timing_config();
@@ -73,6 +76,16 @@ module rd68011_ac_tb #(
     u_slave.data_valid_ns   = 25.0;
     u_slave.data_invalid_ns =  5.0;
     u_slave.data_hiz_ns     = 10.0;
+
+    // Optional late bus error, so the event log can be inspected directly when
+    // the setup/hold bisection reports something surprising about it.
+    if ($value$plusargs("berr_after=%f", berr_after)) begin
+      u_slave.berr_after_ns  = berr_after;
+      if (!$value$plusargs("berr_hold=%f", berr_hold)) berr_hold = 62.5;
+      u_slave.berr_negate_ns = berr_hold;
+      if ($value$plusargs("berr_cycle=%d", berr_cycle))
+        u_slave.berr_cycle = berr_cycle;
+    end
 
     timing_reset();
     timing_run("rd68011", "see -P options");

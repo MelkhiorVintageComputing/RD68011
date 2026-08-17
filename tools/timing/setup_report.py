@@ -61,6 +61,16 @@ JUDGED = {
     '28': ('tol',   'ge', 'max', 'stale DTACK it tolerates'),
 }
 
+# Measured and reported, deliberately not judged. See doc/ac-timing.md: the
+# number this produces contradicts sim/tb/bus_error_tb.sv, which drives the bus
+# unit directly and sees a late bus error recognised where this, driving the
+# whole processor, does not. Until that is settled a pass/fail gate would be
+# asserting one of two disagreeing measurements, which is worse than none.
+REPORTED = {
+    '48*':     'late BERR window, DTACK early',
+    '48*late': 'late BERR window, DTACK late',
+}
+
 LINE = re.compile(r'^MEASURE\s+(\S+)\s+(\S+)\s+(.*)$')
 HDR = re.compile(r'^#\s+design=(\S+).*period=([0-9.]+)')
 
@@ -86,6 +96,9 @@ def parse(path):
                 row['hold'] = float(rest[1])
             elif rest and rest[0] == 'needs':
                 row['hold'] = float(rest[1])
+            elif rest and rest[0] == 'recognises':
+                row['window'] = float(rest[1])
+                row['fromas'] = float(rest[3])
             elif rest and rest[0] == 'tolerates':
                 row['tol'] = float(rest[1])
                 row['open'] = len(rest) > 2
@@ -125,6 +138,8 @@ def main(argv=None):
 
         for row in rows:
             spec = row['spec']
+            if spec in REPORTED:
+                continue
             if spec not in JUDGED:
                 continue
             key, sense, side, desc = JUDGED[spec]
@@ -150,6 +165,19 @@ def main(argv=None):
         # The sampling instants, which are the comparable numbers rather than
         # the verdicts: where in the cycle each input is acted on, in ns from AS
         # asserting. This is what can be put beside another processor's.
+        note = [r for r in rows if r['spec'] in REPORTED]
+        if note:
+            print()
+            print('measured, not judged:')
+            for r in note:
+                if 'thresh' in r or r['kind'] == 'recognises':
+                    print('  %-9s %-30s %8.3f ns after DTACK, %8.3f after AS'
+                          % (r['spec'], REPORTED[r['spec']],
+                             r.get('window', 0.0), r.get('fromas', 0.0)))
+                else:
+                    print('  %-9s %-30s not measurable' % (r['spec'],
+                                                           REPORTED[r['spec']]))
+
         edges = [(r['spec'], r['what'], r['edge'])
                  for r in rows if 'edge' in r]
         if edges:
