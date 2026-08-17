@@ -181,6 +181,36 @@ because the manual's own figure draws AS at 0.8 of a state into S2 rather than
 at either boundary, this design keeps its S2 rising edge and the finding is
 recorded rather than acted on.
 
+## The clock is not necessarily symmetric
+
+Specification 1 fixes the cycle time at 125 ns for the 8 MHz part and
+specifications 2 and 3 the pulse width at 55 to 125 ns, so each half may be
+anywhere from 55 to 70 ns: a duty cycle of 44 to 56 per cent. This design puts
+one bus state in each half period, so an asymmetric clock moves half of its
+state boundaries — and no other testbench here can express that, since they all
+index observations by half-clock tick and a tick is not a fixed length.
+
+```sh
+vvp ac.vvp +image=bus_probe.hex +period=125 +clk_hi=55   # 44 per cent
+```
+
+At 8 MHz, across the whole legal range:
+
+| Duty | Binding constraint | Address may lag AS by |
+|---|---|---|
+| 44 % (hi 55, lo 70) | spec 14 min, 35.0 ns of room | 40.0 ns |
+| 50 % (hi 62.5, lo 62.5) | spec 14 min, 42.5 ns of room | 32.5 ns |
+| 56 % (hi 70, lo 55) | spec 14 min, 50.0 ns of room | 25.0 ns |
+
+Conformant throughout, and the two constraints move in opposite directions,
+which is what one would want to be able to check. S1 occupies the low half, so
+the address-to-AS gap *is* `clk_lo` and the envelope is exactly `clk_lo` minus
+specification 11's 30 ns. AS is asserted across S2 to S6, three high halves and
+two low ones, so its width is `3·hi + 2·lo` — 320 ns at the high-duty end and
+305 at the low. A skewed clock therefore costs margin on specification 11 at one
+end and on specification 14 at the other, and the symmetric clock is not the
+worst case for either.
+
 ## The Suska WF68K10, measured on the same instrument
 
 `doc/suska-crosscheck.md` records that the timing of that core could not be
@@ -266,9 +296,7 @@ same code as ours.
   nanoseconds and `sim/tb/bus_arb_tb.sv` and `sim/tb/bus_m6800_tb.sv` already
   check them; the anchor table is arranged so adding figures 10-6 to 10-11 is a
   table entry rather than new code.
-- The duty-cycle corner. Specifications 1 and 2/3 together permit 44 to 56 per
-  cent at 8 MHz, and this design uses both clock edges, so an asymmetric clock
-  moves half its state boundaries. The harness takes `+clk_hi` and `+clk_lo`
-  independently; the sweep is not yet run.
+- Real pad models, in the sense of numbers from a process rather than free
+  variables bounded by the manual.
 - Real pad models. Every delay here is a free variable bounded by the manual,
   not a number from a process.

@@ -38,7 +38,7 @@ XPART    ?= xc7a100tcsg324-1
 .PHONY: all lint lint-iverilog lint-verilator lint-yosys synth sim check clean dirs \
         ucode ucode-check model-check harte harte-all \
         audit impl programs suska cosim \
-        timing timing-events timing-check xsim-smoke xsim-timing
+        timing timing-events timing-check timing-duty xsim-smoke xsim-timing
 
 all: lint
 
@@ -390,7 +390,25 @@ timing-check: timing-events
 	@echo "== AC timing: transition delays independent (the loosest reading) =="
 	@python3 tools/timing/analyse.py --brief $(TIMDIR)/ours-*.events
 
-timing: timing-check
+# Specifications 1 and 2/3 together permit a duty cycle of 44 to 56 per cent at
+# 8 MHz. One bus state sits in each half period here, so a skewed clock moves
+# half of them -- and it costs margin at both ends, on specification 11 when the
+# high half is long and on specification 14 when it is short. No other testbench
+# can express this, because they all index by half-clock tick and a tick is not
+# a fixed length when the clock is asymmetric.
+timing-duty: timing-events
+	@echo "== AC timing: the duty cycle across its legal range at 8 MHz =="
+	@cd $(TIMDIR) && for hi in 55 62.5 70; do \
+	    vvp ac.vvp +image=bus_probe.hex +period=125 +clk_hi=$$hi \
+	        +cycles=$(TIMCYCLES) > duty-$$hi.events 2>&1; done
+	@for hi in 55 62.5 70; do \
+	    echo "-- clk_hi=$$hi"; \
+	    python3 tools/timing/analyse.py --brief --pad-skew $(PADSKEW) \
+	        $(TIMDIR)/duty-$$hi.events | tail -1; \
+	    python3 tools/timing/analyse.py --pad-skew $(PADSKEW) \
+	        $(TIMDIR)/duty-$$hi.events | grep 'address may lag'; done
+
+timing: timing-check timing-duty
 
 # --- Vivado xsim ------------------------------------------------------------
 #
