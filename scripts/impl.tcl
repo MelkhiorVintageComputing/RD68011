@@ -43,7 +43,7 @@ puts "RD68011: at a period of $period ns, so the design runs at\
 puts "RD68011: cells: LUT [llength [get_cells -hier -filter {PRIMITIVE_GROUP == LUT}]] \
      FF [llength [get_cells -hier -filter {PRIMITIVE_GROUP == FLOP_LATCH}]] \
      CARRY [llength [get_cells -hier -filter {PRIMITIVE_GROUP == CARRY}]] \
-     DSP [llength [get_cells -hier -filter {PRIMITIVE_GROUP == DSP}]] \
+     DSP [llength [get_cells -hier -filter {REF_NAME =~ DSP*}]] \
      BRAM [llength [get_cells -hier -filter {PRIMITIVE_GROUP == BLOCKRAM}]]"
 
 if {$wns < 0 || $whs < 0} {
