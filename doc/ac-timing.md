@@ -300,66 +300,69 @@ negate DTACK after the strobes; Suska tolerates 250.0 ns, a margin of 10 ns,
 where ours has 135. A slave that took the 240 ns the manual explicitly allows
 would come within ten nanoseconds of breaking that core.
 
-### The late bus error, and an unresolved contradiction
+### The late bus error, and the bug it found
 
 Specification 48\* is the only line in the whole AC table that names the MC68010
 alone: *DTACK Asserted to BERR Asserted*, **maximum 80 ns at 8 MHz**. It is the
 timing side of UM 5.4.1's late bus error — table 5-1 cases 4 and 6, where a BERR
-arriving within one clock *after* the acknowledge still faults the cycle, which
-an MC68000 would have completed normally. Being a maximum on the system, it
-obliges the processor to accept a window of at least that much.
+arriving within a clock *after* the acknowledge still faults the cycle, which an
+MC68000 would have completed normally. Being a maximum on the system, it obliges
+the processor to accept a window at least that wide.
 
-Measured, with the fault confined to one access so it cannot spill into the next:
+Measured, with the fault confined to a single access, this design accepted 7.5 ns
+against the required 80 — and the recognition instant did not move when the
+acknowledge did, which is the signature of there being no late window at all.
+`sim/tb/bus_error_tb.sv` case 4 nevertheless passed. Probing the interface
+between the two units settled it in one line:
 
-| DTACK asserted | Window after DTACK | Recognised at |
-|---|---|---|
-| 20 ns after AS | 167.5 ns | 187.5 ns after AS |
-| 180 ns after AS (still in time) | **7.5 ns** | 187.5 ns after AS |
+```
+EV    5845.001 BERR assert
+PROBE 6000.000 req_end=2          <- CE_BERR: the bus unit saw it
+                                  <- req_fault never asserted
+```
 
-Both recognise at the *same absolute instant* — 187.5 ns after AS, which is the
-falling edge ending S4, the edge that samples DTACK. Read straight, that says
-there is no late window at all: BERR has to be present at the acknowledge's own
-edge, and the 167.5 ns in the first row is an artifact of the acknowledge having
-arrived early. With a late but perfectly legal acknowledge the window collapses
-to 7.5 ns against a required 80.
+**The bus unit recognised every late bus error and told nobody.** `req_end` is a
+report; `rd68011_biu.sv`'s own port comment says it arrives a clock later than a
+microword can act on, which is why the sequencer keys off `req_fault` instead.
+The early-BERR path set `term_berr`, which drives `req_fault`. The late path set
+`end_code` and nothing else. So `req_fault` never rose, the sequencer never
+faulted, and cases 4 and 6 were effectively unimplemented — while the directed
+test passed, because it checked `req_end`, which *was* set.
 
-**That contradicts `sim/tb/bus_error_tb.sv`**, which drives the bus unit
-directly, asserts BERR at the boundary beginning S7 — 312.5 ns after AS, well
-past the edge above — and sees the cycle end with `CE_BERR`. Case 4 passes
-today. Two measurements of the same design disagree, and the difference is what
-each one drives: one the bus unit alone through its request port, the other the
-whole processor running a program.
+The fix could not simply set `term_berr`: that signal also sends the state
+machine on to S9, and a late bus error must still end in S7 because the transfer
+already completed (figure 5-26). It needed its own `term_berr_late`, feeding
+`req_fault` and nothing else.
 
-**The other core behaves differently, and that is evidence.** The identical
-measurement against the Suska WF68K10:
+| | Before | After | Required |
+|---|---|---|---|
+| Window, acknowledge early | 167.5 ns | 292.5 ns | — |
+| Window, acknowledge late | **7.5 ns** | **132.5 ns** | ≥ 80 |
+| Recognised at | 187.5 ns (the DTACK edge) | 312.5 ns (the S6 edge) | — |
 
-| DTACK asserted | RD68011 window / recognised at | Suska window / recognised at |
-|---|---|---|
-| 20 ns after AS | 167.5 ns / **187.5** | 105.0 ns / **125.0** |
-| 180 ns after AS | 7.5 ns / **187.5** | 70.0 ns / **250.0** |
+Both cases now recognise at the falling edge ending S6, which is exactly where
+UM 5.4.1 and `doc/bus-timing-compliance.md` say the late window is. The measured
+132.5 ns clears specification 48\* with 52.5 ns to spare, so this row is now
+judged rather than merely reported.
 
-Suska's recognition point *moves* — 125 ns when the acknowledge is early, 250 ns
-when it is late, which is a second, later edge. Ours does not move at all. An
-independent implementation, built by somebody else from the same manual, having
-a second recognition instant exactly where a late bus error would need one is
-the strongest evidence available that the mechanism is real and that ours is
-missing it. Suska's 70 ns is itself under specification 48\*'s 80 ns, so on this
-reading neither core is conformant — but only one of them has the mechanism at
-all.
+`sim/tb/bus_error_tb.sv` gained the assertion it was missing — that the fault
+reached the sequencer, and not merely that it was recorded. Reverting the
+one-line fix makes it fail, which is the only evidence worth having that a
+regression test tests anything.
 
-So one of three things is true, and this document will not guess which:
+**What is worth taking from this.** The bug survived the reference vectors, the
+directed bus tests, real programs and co-simulation against Musashi. None of
+them could have caught it: the vectors are an MC68000 and have no late bus
+error, Musashi has no bus at all, and the directed test checked the signal that
+was set instead of the one that mattered. It took a measurement that asked the
+specification's own question — *how late may this arrive and still work* — and
+then took disagreement between two of this project's own testbenches seriously
+enough to go and look.
 
-- the bus unit reports the late fault and the sequencer does not act on it;
-- the directed test's stimulus does not exercise what its comment describes;
-- or the whole-processor measurement misses a fault it should observe.
-
-Until that is settled the numbers are **reported and not judged** —
-`tools/timing/setup_report.py` prints them under "measured, not judged" and
-`make check` does not gate on them. A gate built on one of two disagreeing
-measurements is worse than no gate. This is the next thing to resolve, and it is
-worth resolving: if the first reading is the right one, the MC68010's own
-signature bus behaviour is not conformant, and neither the reference vectors nor
-the directed tests would have caught it.
+The other core, measured identically, had a recognition instant that moved with
+the acknowledge where ours did not. That was the clue that the mechanism was
+real and ours was missing it, and it is the most useful thing the Suska
+cross-check has produced.
 
 ### What is asserted, and what is not
 

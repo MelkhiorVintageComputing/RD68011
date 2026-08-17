@@ -116,6 +116,13 @@ after the falling edge ending S4 that recognised DTACK.
 | 5 | BERR + HALT, no DTACK | buses released, cycle rerun when HALT is negated |
 | 6 | BERR + HALT one clock after DTACK | as case 5 |
 
+Cases 4 and 6 are also where this design was wrong until the AC-timing work
+measured it: the bus unit recognised the late bus error and set `end_code`, but
+only the *early* path raised `req_fault`, which is the signal the sequencer acts
+on. The late exception was therefore never taken. `doc/ac-timing.md` has the
+measurement and `doc/divergences.md` the entry; the window is now 132.5 ns at
+8 MHz against specification 48*'s required 80.
+
 A retry is invisible to the sequencer: the bus unit reruns the cycle itself with
 the same function code, address and data, and does not acknowledge the attempt
 that failed (UM 5.4.2). A read-modify-write is never retried — UM 5.4.2's note

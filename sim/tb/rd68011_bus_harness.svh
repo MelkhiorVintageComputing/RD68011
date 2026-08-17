@@ -72,6 +72,16 @@
   logic        req_ack;
   logic [15:0] req_rdata;
   logic  [2:0] req_end;
+  // The signal the sequencer actually acts on. req_end is a clock later and so
+  // is only a report; a cycle that sets req_end to CE_BERR without ever raising
+  // req_fault faults nothing at all. This harness used to bring out only
+  // req_end, which is why the late bus error could be broken for eight phases
+  // with case 4 below passing.
+  logic        req_fault;
+  logic        req_fault_wr;
+  // Sticky, because req_fault is asserted for one falling edge inside the cycle
+  // and a test looks at it after bus_finish() has returned.
+  logic        req_fault_seen;
   logic        reset_req;
   logic        reset_busy;
   logic  [2:0] ipl_sync_n;
@@ -106,6 +116,7 @@
       .req_addr (req_addr), .req_uds (req_uds), .req_lds (req_lds),
       .req_wdata (req_wdata), .req_ack (req_ack), .req_last (req_last),
       .req_rdata (req_rdata), .req_end (req_end),
+      .req_fault (req_fault), .req_fault_wr (req_fault_wr),
       .reset_req (reset_req), .reset_busy (reset_busy),
       .ipl_sync_n (ipl_sync_n), .reset_sync_n (reset_sync_n),
       .halt_sync_n (halt_sync_n), .bus_idle (bus_idle), .dbf (dbf),
@@ -167,6 +178,12 @@
     $display("FAIL: timeout after %0d clocks", 20000);
     $finish;
   end
+
+  // req_fault is asserted for one falling edge inside the cycle, so a test that
+  // looks at it after bus_finish() would always see zero. Latched here, cleared
+  // by bus_start.
+  initial req_fault_seen = 1'b0;
+  always @(posedge req_fault) req_fault_seen = 1'b1;
 
   // -- Observation ------------------------------------------------------------
   int          etick;
@@ -272,6 +289,7 @@
                            input logic [15:0] wdata,
                            output int t0);
     begin
+      req_fault_seen = 1'b0;
       @(negedge clk);
       req_kind    = kind;
       req_fc      = fc;

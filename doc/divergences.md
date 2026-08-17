@@ -167,21 +167,36 @@ would have thrown away with the rest.
 | **The order the four words of a format $0 frame are written in.** They go out from the top of the frame down: the format word, the low half of the program counter, its high half, then the status register. | No available reference records the order for an MC68010 -- the vectors are an MC68000 with a different frame -- so this one was chosen rather than measured. The resulting memory is exactly what UM figure 6-6 specifies, which is what software sees; only a bus analyser could tell the difference. |
 | **CHK's Z, V and C flags.** PRM section 4 leaves all three undefined and defines N only for the two trapping cases. This takes the flags from the first bound test and leaves the second alone. | Undefined is undefined, but matching something real is better than matching nothing: this is what the reference does, and it is what the sweep checks against. |
 
-## An open question
+## A bug the AC-timing work found
 
-**The MC68010's late bus error may not be implemented.** Specification 48\* --
-the only line in section 10 that names this part alone -- lets the system assert
-BERR up to 80 ns *after* DTACK at 8 MHz and requires the processor to fault the
-cycle anyway (UM 5.4.1, table 5-1 cases 4 and 6). Measured on the whole
-processor, this design recognises BERR only at the edge that samples DTACK, so
-with a late but legal acknowledge the window is 7.5 ns rather than 80.
+**The MC68010's late bus error was detected and never delivered.** Specification
+48\* -- the only line in section 10 that names this part alone -- lets the system
+assert BERR up to 80 ns *after* DTACK at 8 MHz and requires the processor to
+fault the cycle anyway (UM 5.4.1, table 5-1 cases 4 and 6). Measured on the whole
+processor, this design accepted 7.5 ns of that 80.
 
-That contradicts `sim/tb/bus_error_tb.sv` case 4, which drives the bus unit
-directly and does see a late BERR recognised. The Suska core, measured the same
-way, has a second recognition instant that moves with the acknowledge where ours
-does not -- which is evidence the mechanism is real. `doc/ac-timing.md` sets out
-the measurements and the three possible explanations. Unresolved, reported
-rather than judged, and not gated on.
+The bus unit recognised every late bus error and told nobody. It set `end_code`
+to `CE_BERR`, which reaches the sequencer through `req_end` -- a clock later than
+a microword can act on, as `rd68011_biu.sv`'s own port comment says. The signal
+the sequencer keys off, `req_fault`, was driven only by the early-BERR path. So
+`req_fault` never rose and no late bus error was ever taken.
+
+`sim/tb/bus_error_tb.sv` case 4 passed throughout, because it checked `req_end`
+-- which was set -- and not `req_fault`. It now checks both, and reverting the
+fix makes it fail.
+
+Fixed with a `term_berr_late` of its own rather than by setting `term_berr`,
+which would also have sent the state machine on to S9; a late bus error must
+still end in S7, the transfer having already completed. The window is now
+132.5 ns at 8 MHz against the 80 required. `doc/ac-timing.md` has the
+measurements.
+
+Worth recording *how* it was found, because none of the four existing pressures
+could have: the reference vectors are an MC68000 and have no late bus error,
+Musashi has no bus, real programs never provoke one, and the directed test
+checked the wrong signal. It took asking the specification's own question --
+how late may this arrive and still work -- and then taking a disagreement
+between two of this project's own testbenches seriously.
 
 ## Not yet implemented
 

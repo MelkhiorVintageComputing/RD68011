@@ -59,7 +59,15 @@ JUDGED = {
     '27': ('setup', 'le', 'min', 'read-data setup it needs'),
     '29': ('hold',  'le', 'min', 'read-data hold it needs'),
     '28': ('tol',   'ge', 'max', 'stale DTACK it tolerates'),
+    # The worst case for the late bus error is a *late* acknowledge, since 48*
+    # is a maximum the system is allowed to take: the window has to be at least
+    # that wide however late DTACK was. Measured with an early acknowledge too,
+    # and that one is reported for context rather than judged.
+    '48*late': ('window', 'ge', 'max', 'late BERR window it accepts'),
 }
+
+# Rows whose limit lives in the CSV under a different number.
+CSV_SPEC = {'48*late': '48*'}
 
 # Measured and reported, deliberately not judged. See doc/ac-timing.md: the
 # number this produces contradicts sim/tb/bus_error_tb.sv, which drives the bus
@@ -67,8 +75,7 @@ JUDGED = {
 # whole processor, does not. Until that is settled a pass/fail gate would be
 # asserting one of two disagreeing measurements, which is worse than none.
 REPORTED = {
-    '48*':     'late BERR window, DTACK early',
-    '48*late': 'late BERR window, DTACK late',
+    '48*': 'late BERR window with an early acknowledge',
 }
 
 LINE = re.compile(r'^MEASURE\s+(\S+)\s+(\S+)\s+(.*)$')
@@ -148,7 +155,7 @@ def main(argv=None):
                       % (spec, desc, '-', '-', 'not measurable here'))
                 continue
             got = row[key]
-            lo, hi = sp.limits('read-write', spec, g)
+            lo, hi = sp.limits('read-write', CSV_SPEC.get(spec, spec), g)
             lim = lo if side == 'min' else hi
             if lim is None:
                 print('%-5s %-26s %10.3f %10s  %s'

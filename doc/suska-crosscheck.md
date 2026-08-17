@@ -81,6 +81,19 @@ all:
 Both are conformant, and one of them barely: specification 28 allows the system
 240 ns to negate DTACK after the strobes, and this core tolerates 250.
 
+**And it found a bug in ours.** Measuring how late a bus error may arrive and
+still be recognised, this core's answer *moved* with the acknowledge -- 125 ns
+after AS when DTACK was early, 250 ns when it was late, which is a second and
+later recognition edge. Ours did not move, which is the signature of having no
+late window at all. That was the clue that sent us to look, and what we found
+was that our bus unit recognised every late bus error and never told the
+sequencer. `doc/ac-timing.md` has the account.
+
+This is the most useful thing the cross-check has produced, and it is worth
+noting what kind of use it was: not agreement, which confirms little, but a
+*difference in shape* that made one design's behaviour look odd beside the
+other's.
+
 ## What it can and does answer
 
 The *transaction list* is protocol-independent: which addresses, in which

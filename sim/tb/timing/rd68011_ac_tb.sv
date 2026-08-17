@@ -55,6 +55,23 @@ module rd68011_ac_tb #(
       .fc_o (fc_o), .fc_oe (fc_oe)
   );
 
+  // White-box probe on the interface between the bus unit and the sequencer,
+  // for settling what the late-bus-error measurement could not: whether the bus
+  // unit reports a fault the sequencer then ignores. `req_fault` is the one
+  // that matters -- rd68011_biu.sv says req_end is a clock later and therefore
+  // too late for the microword to act on -- so both are logged.
+  //
+  // Ours only. The other core is measured black-box, which is the whole reason
+  // the rest of this harness never looks inside anything.
+  always @(dut.req_fault)
+    if (dut.req_fault === 1'b1)
+      $display("PROBE %0.3f req_fault=1 req_last=%0d wr=%0d",
+               $realtime, dut.req_last, dut.req_fault_wr);
+
+  always @(dut.req_end)
+    if (dut.req_end !== 3'd0)
+      $display("PROBE %0.3f req_end=%0d", $realtime, dut.req_end);
+
   string image;
   real   berr_after;
   real   berr_hold;

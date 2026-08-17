@@ -81,6 +81,14 @@ module bus_error_tb;
     t1 = etick;
     tb_berr_n = 1'b1;
     expect_val("case 4 end code", {29'd0, req_end}, {29'd0, rd68011_pkg::CE_BERR});
+    // And that the sequencer was told. req_end alone is a report a microword
+    // cannot act on -- it arrives a clock later -- so a late bus error that
+    // sets it without raising req_fault faults nothing at all. That is exactly
+    // what this design did until the AC-timing measurement caught it: the bus
+    // unit recognised every late bus error and the processor took none of them,
+    // and this test passed throughout because it only ever checked req_end.
+    expect_val("case 4 fault reported to the sequencer",
+               {31'd0, req_fault_seen}, 32'd1);
     // Figure 5-26 shows the transfer itself completing normally, in eight
     // states, with the stacking beginning after it.
     expect_eq("case 4 cycle length, in states", t1 - t0 - 1, 8);

@@ -170,6 +170,11 @@ module rd68011_biu #(
 
   // Termination state, captured on falling edges.
   logic        term_berr;    // BERR seen without DTACK: run on to S9 / S21
+  // The MC68010's late bus error is a fault too, but not the same fault: the
+  // transfer has already terminated normally and must still end in S7, so this
+  // cannot share term_berr, which sends the state machine on to S9. It feeds
+  // req_fault and nothing else.
+  logic        term_berr_late;
   logic        term_halt;    // HALT seen with DTACK: halt after this cycle
   logic        term_retry;   // BERR+HALT: release buses and rerun
   logic        term_vpa;     // VPA seen: this is an M6800 cycle
@@ -369,7 +374,7 @@ module rd68011_biu #(
   //
   // A read-modify-write runs its read in S0-S7 and its write in S8-S19, so
   // which half faulted is which of the two bus-error exits it takes (UM 5.4.1).
-  assign req_fault    = term_berr;
+  assign req_fault    = term_berr || term_berr_late;
   assign req_fault_wr = cyc_is_write ||
                         (cyc_is_rmw && (st_n == rd68011_pkg::ST_BE21));
 
@@ -424,8 +429,9 @@ module rd68011_biu #(
 
   always_ff @(negedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      st_n         <= rd68011_pkg::ST_IDLE;
-      term_berr    <= 1'b0;
+      st_n           <= rd68011_pkg::ST_IDLE;
+      term_berr      <= 1'b0;
+      term_berr_late <= 1'b0;
       term_halt    <= 1'b0;
       term_retry   <= 1'b0;
       term_vpa     <= 1'b0;
@@ -437,7 +443,8 @@ module rd68011_biu #(
 
       // Clear the per-cycle flags as the cycle begins (S0 -> S1).
       if (st_p == rd68011_pkg::ST_S0) begin
-        term_berr    <= 1'b0;
+        term_berr      <= 1'b0;
+        term_berr_late <= 1'b0;
         term_halt    <= 1'b0;
         term_retry   <= 1'b0;
         term_vpa     <= 1'b0;
@@ -481,10 +488,17 @@ module rd68011_biu #(
             term_retry <= 1'b1;
             end_code   <= rd68011_pkg::CE_RERUN;
           end else begin
-            end_code   <= rd68011_pkg::CE_BERR;
+            end_code       <= rd68011_pkg::CE_BERR;
+            // The sequencer acts on req_fault and never on req_end, which is a
+            // clock later than the microword can use -- so recording the fault
+            // in end_code alone reports it to nobody. That is what this line
+            // was missing: the bus unit detected every late bus error and the
+            // sequencer took none of them, and sim/tb/bus_error_tb.sv did not
+            // notice because it checked req_end, which was set.
+            term_berr_late <= 1'b1;
             // Late BERR does not extend the cycle to S9: the transfer already
             // terminated normally, and figure 5-26 shows stacking beginning
-            // straight after S7.
+            // straight after S7. That is why this is not term_berr.
           end
         end
       end
