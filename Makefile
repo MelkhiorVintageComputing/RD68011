@@ -129,6 +129,19 @@ impl: dirs
 	    $(CURDIR)/scripts/vivado.sh -mode batch -nojournal -nolog \
 	    -source ../scripts/impl.tcl -tclargs $(XPART) $(XTOP) $(CURDIR)
 
+# What actually limits the frequency. `make impl` reports the worst path static
+# timing analysis can find, which for this design is one the microcode cannot
+# take; this reports what is left when the unreachable routes are excluded, and
+# groups the rest into families. Runs on the checkpoint `make impl` left behind,
+# so it costs a minute. doc/critical-path.md is written from it.
+paths: dirs
+	@echo "== vivado: what limits $(XTOP) =="
+	@cd $(BUILD) && VIVADO_SETTINGS=$(VIVADO_SETTINGS) \
+	    $(CURDIR)/scripts/vivado.sh -mode batch -nojournal -nolog \
+	    -source ../scripts/paths.tcl -tclargs $(CURDIR) | \
+	    grep -E '^RD68011-PATHS'
+	@python3 tools/timing/paths.py $(BUILD)/paths_activatable.rpt
+
 # ---------------------------------------------------------------------------
 # Reference vectors. `make harte OP=NOP` runs one opcode file; N limits how
 # many of its ~2500 tests are run, which is what you want while developing.

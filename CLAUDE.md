@@ -110,6 +110,7 @@ make ucode    # regenerate the microcode ROMs from tools/ucode/
 make audit    # prove no register initialises outside reset
 make synth    # Vivado synthesis + timing report
 make impl     # place and route, for the timing number that means something
+make paths    # what actually limits the frequency, with the unreachable routes excluded
 make check    # ucode-check, lint, audit, sim, programs and the timing gates
 ```
 
