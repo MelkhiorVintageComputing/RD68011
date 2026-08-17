@@ -46,19 +46,28 @@ proc mhz {period slack} {
 # so does read data reaching the next bus request. It is doing both in one
 # microword that never happens.
 # ---------------------------------------------------------------------------
-# The micro-address is reached from the ALU by exactly one route -- the
+# The request preview is reached from the ALU by exactly one route -- the
 # condition multiplexer -- and only by three of its seventeen conditions:
 # ZERO and N read the flags, CNT reads the result bus as `y[15:0] == 16'hFFFF`.
 # Counting build/ucode.lst, the conditions that ever share a microword with a
 # bus cycle are MASK 56, XWDR 21, FMT0 1, FMT8 1 and VERSION 1; none of those
-# three is among them. Everything else reaching the request address does so
-# through n_addr, which does not pass the store's address pins, so pairing with
-# them cuts the concatenation and nothing else.
+# three is among them. Everything else the ALU reaches in the request goes
+# through n_addr, not through the preview, so pairing the two ends cuts the
+# concatenation and nothing else.
+#
+# The "from" end names the ALU's and shifter's *module output pins*, not the
+# sequencer nets they drive. Nets get merged: `z_flag` and `n_flag` are a
+# multiplexer over `z_flag_alu`/`n_flag_alu` and the shifter's, and synthesis
+# folds that multiplexer into the logic downstream, so a route can reach the
+# preview without the net `u_seq/n_flag` existing anywhere on it. Hierarchical
+# pins survive, because scripts/synth.tcl passes -flatten_hierarchy none.
+# Naming the nets is how this script first got a wrong answer.
 set exclusions {
     {alu-to-request
      "no microword both branches on an ALU result or flag and issues a bus cycle"
-     {u_seq/z_flag u_seq/n_flag u_seq/y[*] u_seq/alu_y[*] u_seq/sh_out[*]}
-     {u_seq/u_ureq_nxt/addr[*]}}
+     {u_seq/u_alu/y[*] u_seq/u_alu/n_out u_seq/u_alu/z_out
+      u_seq/u_shifter/dout[*]}
+     {u_seq/rq_nxt[*]}}
 }
 
 # ---------------------------------------------------------------------------
@@ -87,20 +96,24 @@ report_timing -delay_type max -max_paths 400 -unique_pins -nworst 1 \
 foreach e $exclusions {
     lassign $e name why frm to
 
-    set fobj [get_nets -quiet $frm]
-    set tobj [get_pins -quiet $to]
+    set fobj [get_pins -quiet $frm]
+    set tobj [get_nets -quiet $to]
     if {[llength $fobj] == 0 || [llength $tobj] == 0} {
         puts "RD68011-PATHS: exclusion $name names nothing\
-              ([llength $fobj] nets, [llength $tobj] pins) -- ABORT"
+              ([llength $fobj] pins, [llength $tobj] nets) -- ABORT"
         exit 1
     }
 
-    # It has to be cutting something, or the premise is wrong.
+    # Whether it cuts anything is the interesting part. A route that is not
+    # there is the stronger result -- it means the design no longer contains
+    # the structure the exclusion was written to describe, and the reported
+    # number needs no exception to be believed.
     set before [get_timing_paths -delay_type max -max_paths 1 \
                     -through $fobj -through $tobj]
     if {[llength $before] == 0} {
-        puts "RD68011-PATHS: exclusion $name matches no timing path -- ABORT"
-        exit 1
+        puts "RD68011-PATHS: $name is not in the design at all -- $why,\
+              and now nothing wires it either"
+        continue
     }
     puts "RD68011-PATHS: $name cuts a path of slack\
           [get_property SLACK $before] ns; $why"
@@ -124,18 +137,11 @@ report_timing -delay_type max -max_paths 400 -unique_pins -nworst 1 \
 # ---------------------------------------------------------------------------
 # Headroom
 #
-# The activatable worst path spends over half its time turning a signal that
-# arrives late into a store address and reading two stores with it: the decode
-# ROM at an opcode the retiring cycle has only just selected, then the request
-# preview store at the entry that produced. Neither address has to be late --
-# both stores could be read at every candidate in advance and the late signal
-# left choosing between the answers.
-#
-# Cutting the preview store's address pins says what would be left if that were
-# done. It is an upper bound and not a promise: a real fix replaces the store
-# with a multiplexer rather than with nothing.
+# Cutting everything into the request preview says what would be left if the
+# preview cost nothing at all to select. It is an upper bound and not a
+# promise: a real fix replaces a lookup with a multiplexer, not with nothing.
 # ---------------------------------------------------------------------------
-set_false_path -through [get_pins u_seq/u_ureq_nxt/addr[*]]
+set_false_path -through [get_nets u_seq/rq_nxt[*]]
 
 set head [worst]
 puts "RD68011-PATHS: headroom slack [lindex $head 0] ns\

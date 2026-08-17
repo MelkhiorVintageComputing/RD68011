@@ -646,6 +646,30 @@ def req_width():
     return sum(w for _, w, _ in REQ_FIELDS)
 
 
+# The successors' previews, carried in the microword itself.
+#
+# The bus request has to be presented from the microword that will be current
+# after the coming edge, and the sequencer only knows which that is at the end
+# of the current one -- when the bus cycle terminates, the condition resolves
+# and any fault is known. Reading a store at an address computed from all that
+# is what used to happen, and doc/critical-path.md measures what it cost: the
+# store's address net alone carried 1.241 ns of routing to 1189 loads.
+#
+# But the *candidates* are all known a whole clock in advance. A microword has
+# at most two successors of its own -- `next`, and `next|1` when the condition
+# holds -- so it can simply carry both of their previews. What is left for the
+# late signals is choosing between answers already in hand.
+#
+# Appended here rather than written into FIELDS above because the width is
+# req_width(), which is not known until REQ_FIELDS has been read.
+FIELDS += [
+    ('rq0', req_width(), None),   # the preview of `next`
+    ('rq1', req_width(), None),   # ... and of `next|1`, for a COND microword
+]
+DEFAULTS['rq0'] = 0
+DEFAULTS['rq1'] = 0
+
+
 def req_lsb(name):
     p = 0
     for n, w, _ in REQ_FIELDS:

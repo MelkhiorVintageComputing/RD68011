@@ -38,6 +38,8 @@ WAYPOINTS = [
     ('u_seq/dec_entry', 'dec_entry'),
     ('u_seq/z_flag', 'z_flag'),
     ('u_seq/n_flag', 'n_flag'),
+    ('u_seq/z_flag_alu', 'z_flag_alu'),
+    ('u_seq/n_flag_alu', 'n_flag_alu'),
     ('u_seq/alu_y', 'alu_y'),
     ('u_biu/req_valid', 'req_valid'),
     ('u_biu/start_new', 'start_new'),
@@ -87,8 +89,16 @@ def parse(text):
             continue
         # The path detail. Record the first time each unit or waypoint appears,
         # in order, which is what makes the family name.
-        for pfx, name in UNITS + WAYPOINTS:
+        for pfx, name in UNITS:
             if pfx in line and name not in cur.marks:
+                cur.marks.append(name)
+        for pfx, name in WAYPOINTS:
+            # Anchored, because `u_seq/n_flag` is a prefix of
+            # `u_seq/n_flag_alu` and they are different signals -- one of them
+            # was excluded from a report and the other was not, which is
+            # exactly the confusion this would have caused.
+            if re.search(re.escape(pfx) + r'(?!\w)', line) \
+                    and name not in cur.marks:
                 cur.marks.append(name)
     return paths
 

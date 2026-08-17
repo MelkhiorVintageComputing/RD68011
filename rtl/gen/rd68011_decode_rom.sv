@@ -2,1427 +2,1436 @@
 // Source: tools/ucode/isa.py and tools/ucode/program.py.
 
 
-// Opcode to microcode entry point.
+// Opcode to microcode entry point, and that entry point's
+// request preview.
 //
 // Ordered: the first matching pattern wins, which is how forms
 // distinguished only by a field value -- BRA.W is BRA.B with a
 // displacement byte of zero -- are separated here rather than by
 // a run-time test in the microcode.
 //
+// The preview comes out of here rather than out of a second store
+// read at `entry`, which is what used to happen and what made the
+// decoder and that store a chain of two lookups inside half a
+// clock. It is nearly free: across all the patterns there are only
+// 40 distinct preview values.
+//
 // `illegal` is asserted for anything with no pattern.
 
 module rd68011_decode_rom (
     input  logic                 [15:0] op,
     output logic [rd68011_ucode_pkg::UADDR-1:0] entry,
+    output logic [rd68011_ucode_pkg::RQW-1:0]   prev,
     output logic                        illegal
 );
 
   always_comb begin
     illegal = 1'b0;
     casez (op)
-      16'b0100111001110001: entry = 13'd10 ;  // NOP
-      16'b0110000000000000: entry = 13'd13 ;  // BRA.W
-      16'b01100000????????: entry = 13'd11 ;  // BRA.B
-      16'b0111???0????????: entry = 13'd17 ;  // MOVEQ
-      16'b0001???000000???: entry = 13'd18 ;  // MOVE.B Dn,Dn
-      16'b0011???000000???: entry = 13'd19 ;  // MOVE.W Dn,Dn
-      16'b0011???000001???: entry = 13'd19 ;  // MOVE.W An,Dn
-      16'b0010???000000???: entry = 13'd20 ;  // MOVE.L Dn,Dn
-      16'b0010???000001???: entry = 13'd20 ;  // MOVE.L An,Dn
-      16'b0001???010000???: entry = 13'd21 ;  // MOVE.B reg,aind
-      16'b0001???011000???: entry = 13'd23 ;  // MOVE.B reg,apost
-      16'b0001???100000???: entry = 13'd25 ;  // MOVE.B reg,-(An)
-      16'b0001???101000???: entry = 13'd27 ;  // MOVE.B reg,adisp
-      16'b0001???110000???: entry = 13'd30 ;  // MOVE.B reg,aidx
-      16'b0001000111000???: entry = 13'd35 ;  // MOVE.B reg,absw
-      16'b0001001111000???: entry = 13'd38 ;  // MOVE.B reg,absl
-      16'b0001???000010???: entry = 13'd42 ;  // MOVE.B aind,dn
-      16'b0001???010010???: entry = 13'd44 ;  // MOVE.B aind,aind
-      16'b0001???011010???: entry = 13'd47 ;  // MOVE.B aind,apost
-      16'b0001???100010???: entry = 13'd50 ;  // MOVE.B aind,apre
-      16'b0001???101010???: entry = 13'd53 ;  // MOVE.B aind,adisp
-      16'b0001???110010???: entry = 13'd57 ;  // MOVE.B aind,aidx
-      16'b0001000111010???: entry = 13'd63 ;  // MOVE.B aind,absw
-      16'b0001001111010???: entry = 13'd67 ;  // MOVE.B aind,absl
-      16'b0001???000011???: entry = 13'd72 ;  // MOVE.B apost,dn
-      16'b0001???010011???: entry = 13'd74 ;  // MOVE.B apost,aind
-      16'b0001???011011???: entry = 13'd77 ;  // MOVE.B apost,apost
-      16'b0001???100011???: entry = 13'd80 ;  // MOVE.B apost,apre
-      16'b0001???101011???: entry = 13'd83 ;  // MOVE.B apost,adisp
-      16'b0001???110011???: entry = 13'd87 ;  // MOVE.B apost,aidx
-      16'b0001000111011???: entry = 13'd93 ;  // MOVE.B apost,absw
-      16'b0001001111011???: entry = 13'd97 ;  // MOVE.B apost,absl
-      16'b0001???000100???: entry = 13'd102;  // MOVE.B apre,dn
-      16'b0001???010100???: entry = 13'd104;  // MOVE.B apre,aind
-      16'b0001???011100???: entry = 13'd107;  // MOVE.B apre,apost
-      16'b0001???100100???: entry = 13'd110;  // MOVE.B apre,apre
-      16'b0001???101100???: entry = 13'd113;  // MOVE.B apre,adisp
-      16'b0001???110100???: entry = 13'd117;  // MOVE.B apre,aidx
-      16'b0001000111100???: entry = 13'd123;  // MOVE.B apre,absw
-      16'b0001001111100???: entry = 13'd127;  // MOVE.B apre,absl
-      16'b0001???000101???: entry = 13'd132;  // MOVE.B adisp,dn
-      16'b0001???010101???: entry = 13'd135;  // MOVE.B adisp,aind
-      16'b0001???011101???: entry = 13'd139;  // MOVE.B adisp,apost
-      16'b0001???100101???: entry = 13'd143;  // MOVE.B adisp,apre
-      16'b0001???101101???: entry = 13'd147;  // MOVE.B adisp,adisp
-      16'b0001???110101???: entry = 13'd152;  // MOVE.B adisp,aidx
-      16'b0001000111101???: entry = 13'd159;  // MOVE.B adisp,absw
-      16'b0001001111101???: entry = 13'd164;  // MOVE.B adisp,absl
-      16'b0001???000110???: entry = 13'd170;  // MOVE.B aidx,dn
-      16'b0001???010110???: entry = 13'd175;  // MOVE.B aidx,aind
-      16'b0001???011110???: entry = 13'd181;  // MOVE.B aidx,apost
-      16'b0001???100110???: entry = 13'd187;  // MOVE.B aidx,apre
-      16'b0001???101110???: entry = 13'd193;  // MOVE.B aidx,adisp
-      16'b0001???110110???: entry = 13'd200;  // MOVE.B aidx,aidx
-      16'b0001000111110???: entry = 13'd209;  // MOVE.B aidx,absw
-      16'b0001001111110???: entry = 13'd216;  // MOVE.B aidx,absl
-      16'b0001???000111000: entry = 13'd224;  // MOVE.B absw,dn
-      16'b0001???010111000: entry = 13'd227;  // MOVE.B absw,aind
-      16'b0001???011111000: entry = 13'd231;  // MOVE.B absw,apost
-      16'b0001???100111000: entry = 13'd235;  // MOVE.B absw,apre
-      16'b0001???101111000: entry = 13'd239;  // MOVE.B absw,adisp
-      16'b0001???110111000: entry = 13'd244;  // MOVE.B absw,aidx
-      16'b0001000111111000: entry = 13'd251;  // MOVE.B absw,absw
-      16'b0001001111111000: entry = 13'd256;  // MOVE.B absw,absl
-      16'b0001???000111001: entry = 13'd262;  // MOVE.B absl,dn
-      16'b0001???010111001: entry = 13'd266;  // MOVE.B absl,aind
-      16'b0001???011111001: entry = 13'd271;  // MOVE.B absl,apost
-      16'b0001???100111001: entry = 13'd276;  // MOVE.B absl,apre
-      16'b0001???101111001: entry = 13'd281;  // MOVE.B absl,adisp
-      16'b0001???110111001: entry = 13'd287;  // MOVE.B absl,aidx
-      16'b0001000111111001: entry = 13'd295;  // MOVE.B absl,absw
-      16'b0001001111111001: entry = 13'd301;  // MOVE.B absl,absl
-      16'b0001???000111010: entry = 13'd308;  // MOVE.B pcdisp,dn
-      16'b0001???010111010: entry = 13'd311;  // MOVE.B pcdisp,aind
-      16'b0001???011111010: entry = 13'd315;  // MOVE.B pcdisp,apost
-      16'b0001???100111010: entry = 13'd319;  // MOVE.B pcdisp,apre
-      16'b0001???101111010: entry = 13'd323;  // MOVE.B pcdisp,adisp
-      16'b0001???110111010: entry = 13'd328;  // MOVE.B pcdisp,aidx
-      16'b0001000111111010: entry = 13'd335;  // MOVE.B pcdisp,absw
-      16'b0001001111111010: entry = 13'd340;  // MOVE.B pcdisp,absl
-      16'b0001???000111011: entry = 13'd346;  // MOVE.B pcidx,dn
-      16'b0001???010111011: entry = 13'd351;  // MOVE.B pcidx,aind
-      16'b0001???011111011: entry = 13'd357;  // MOVE.B pcidx,apost
-      16'b0001???100111011: entry = 13'd363;  // MOVE.B pcidx,apre
-      16'b0001???101111011: entry = 13'd369;  // MOVE.B pcidx,adisp
-      16'b0001???110111011: entry = 13'd376;  // MOVE.B pcidx,aidx
-      16'b0001000111111011: entry = 13'd385;  // MOVE.B pcidx,absw
-      16'b0001001111111011: entry = 13'd392;  // MOVE.B pcidx,absl
-      16'b0001???000111100: entry = 13'd400;  // MOVE.B imm,dn
-      16'b0001???010111100: entry = 13'd402;  // MOVE.B imm,aind
-      16'b0001???011111100: entry = 13'd405;  // MOVE.B imm,apost
-      16'b0001???100111100: entry = 13'd408;  // MOVE.B imm,apre
-      16'b0001???101111100: entry = 13'd411;  // MOVE.B imm,adisp
-      16'b0001???110111100: entry = 13'd415;  // MOVE.B imm,aidx
-      16'b0001000111111100: entry = 13'd421;  // MOVE.B imm,absw
-      16'b0001001111111100: entry = 13'd425;  // MOVE.B imm,absl
-      16'b0011???010000???: entry = 13'd430;  // MOVE.W reg,aind
-      16'b0011???010001???: entry = 13'd430;  // MOVE.W reg,aind
-      16'b0011???011000???: entry = 13'd432;  // MOVE.W reg,apost
-      16'b0011???011001???: entry = 13'd432;  // MOVE.W reg,apost
-      16'b0011???100000???: entry = 13'd434;  // MOVE.W reg,-(An)
-      16'b0011???100001???: entry = 13'd434;  // MOVE.W reg,-(An)
-      16'b0011???101000???: entry = 13'd436;  // MOVE.W reg,adisp
-      16'b0011???101001???: entry = 13'd436;  // MOVE.W reg,adisp
-      16'b0011???110000???: entry = 13'd439;  // MOVE.W reg,aidx
-      16'b0011???110001???: entry = 13'd439;  // MOVE.W reg,aidx
-      16'b0011000111000???: entry = 13'd444;  // MOVE.W reg,absw
-      16'b0011000111001???: entry = 13'd444;  // MOVE.W reg,absw
-      16'b0011001111000???: entry = 13'd447;  // MOVE.W reg,absl
-      16'b0011001111001???: entry = 13'd447;  // MOVE.W reg,absl
-      16'b0011???000010???: entry = 13'd451;  // MOVE.W aind,dn
-      16'b0011???010010???: entry = 13'd453;  // MOVE.W aind,aind
-      16'b0011???011010???: entry = 13'd456;  // MOVE.W aind,apost
-      16'b0011???100010???: entry = 13'd459;  // MOVE.W aind,apre
-      16'b0011???101010???: entry = 13'd462;  // MOVE.W aind,adisp
-      16'b0011???110010???: entry = 13'd466;  // MOVE.W aind,aidx
-      16'b0011000111010???: entry = 13'd472;  // MOVE.W aind,absw
-      16'b0011001111010???: entry = 13'd476;  // MOVE.W aind,absl
-      16'b0011???000011???: entry = 13'd481;  // MOVE.W apost,dn
-      16'b0011???010011???: entry = 13'd483;  // MOVE.W apost,aind
-      16'b0011???011011???: entry = 13'd486;  // MOVE.W apost,apost
-      16'b0011???100011???: entry = 13'd489;  // MOVE.W apost,apre
-      16'b0011???101011???: entry = 13'd492;  // MOVE.W apost,adisp
-      16'b0011???110011???: entry = 13'd496;  // MOVE.W apost,aidx
-      16'b0011000111011???: entry = 13'd502;  // MOVE.W apost,absw
-      16'b0011001111011???: entry = 13'd506;  // MOVE.W apost,absl
-      16'b0011???000100???: entry = 13'd511;  // MOVE.W apre,dn
-      16'b0011???010100???: entry = 13'd513;  // MOVE.W apre,aind
-      16'b0011???011100???: entry = 13'd516;  // MOVE.W apre,apost
-      16'b0011???100100???: entry = 13'd519;  // MOVE.W apre,apre
-      16'b0011???101100???: entry = 13'd522;  // MOVE.W apre,adisp
-      16'b0011???110100???: entry = 13'd526;  // MOVE.W apre,aidx
-      16'b0011000111100???: entry = 13'd532;  // MOVE.W apre,absw
-      16'b0011001111100???: entry = 13'd536;  // MOVE.W apre,absl
-      16'b0011???000101???: entry = 13'd541;  // MOVE.W adisp,dn
-      16'b0011???010101???: entry = 13'd544;  // MOVE.W adisp,aind
-      16'b0011???011101???: entry = 13'd548;  // MOVE.W adisp,apost
-      16'b0011???100101???: entry = 13'd552;  // MOVE.W adisp,apre
-      16'b0011???101101???: entry = 13'd556;  // MOVE.W adisp,adisp
-      16'b0011???110101???: entry = 13'd561;  // MOVE.W adisp,aidx
-      16'b0011000111101???: entry = 13'd568;  // MOVE.W adisp,absw
-      16'b0011001111101???: entry = 13'd573;  // MOVE.W adisp,absl
-      16'b0011???000110???: entry = 13'd579;  // MOVE.W aidx,dn
-      16'b0011???010110???: entry = 13'd584;  // MOVE.W aidx,aind
-      16'b0011???011110???: entry = 13'd590;  // MOVE.W aidx,apost
-      16'b0011???100110???: entry = 13'd596;  // MOVE.W aidx,apre
-      16'b0011???101110???: entry = 13'd602;  // MOVE.W aidx,adisp
-      16'b0011???110110???: entry = 13'd609;  // MOVE.W aidx,aidx
-      16'b0011000111110???: entry = 13'd618;  // MOVE.W aidx,absw
-      16'b0011001111110???: entry = 13'd625;  // MOVE.W aidx,absl
-      16'b0011???000111000: entry = 13'd633;  // MOVE.W absw,dn
-      16'b0011???010111000: entry = 13'd636;  // MOVE.W absw,aind
-      16'b0011???011111000: entry = 13'd640;  // MOVE.W absw,apost
-      16'b0011???100111000: entry = 13'd644;  // MOVE.W absw,apre
-      16'b0011???101111000: entry = 13'd648;  // MOVE.W absw,adisp
-      16'b0011???110111000: entry = 13'd653;  // MOVE.W absw,aidx
-      16'b0011000111111000: entry = 13'd660;  // MOVE.W absw,absw
-      16'b0011001111111000: entry = 13'd665;  // MOVE.W absw,absl
-      16'b0011???000111001: entry = 13'd671;  // MOVE.W absl,dn
-      16'b0011???010111001: entry = 13'd675;  // MOVE.W absl,aind
-      16'b0011???011111001: entry = 13'd680;  // MOVE.W absl,apost
-      16'b0011???100111001: entry = 13'd685;  // MOVE.W absl,apre
-      16'b0011???101111001: entry = 13'd690;  // MOVE.W absl,adisp
-      16'b0011???110111001: entry = 13'd696;  // MOVE.W absl,aidx
-      16'b0011000111111001: entry = 13'd704;  // MOVE.W absl,absw
-      16'b0011001111111001: entry = 13'd710;  // MOVE.W absl,absl
-      16'b0011???000111010: entry = 13'd717;  // MOVE.W pcdisp,dn
-      16'b0011???010111010: entry = 13'd720;  // MOVE.W pcdisp,aind
-      16'b0011???011111010: entry = 13'd724;  // MOVE.W pcdisp,apost
-      16'b0011???100111010: entry = 13'd728;  // MOVE.W pcdisp,apre
-      16'b0011???101111010: entry = 13'd732;  // MOVE.W pcdisp,adisp
-      16'b0011???110111010: entry = 13'd737;  // MOVE.W pcdisp,aidx
-      16'b0011000111111010: entry = 13'd744;  // MOVE.W pcdisp,absw
-      16'b0011001111111010: entry = 13'd749;  // MOVE.W pcdisp,absl
-      16'b0011???000111011: entry = 13'd755;  // MOVE.W pcidx,dn
-      16'b0011???010111011: entry = 13'd760;  // MOVE.W pcidx,aind
-      16'b0011???011111011: entry = 13'd766;  // MOVE.W pcidx,apost
-      16'b0011???100111011: entry = 13'd772;  // MOVE.W pcidx,apre
-      16'b0011???101111011: entry = 13'd778;  // MOVE.W pcidx,adisp
-      16'b0011???110111011: entry = 13'd785;  // MOVE.W pcidx,aidx
-      16'b0011000111111011: entry = 13'd794;  // MOVE.W pcidx,absw
-      16'b0011001111111011: entry = 13'd801;  // MOVE.W pcidx,absl
-      16'b0011???000111100: entry = 13'd809;  // MOVE.W imm,dn
-      16'b0011???010111100: entry = 13'd811;  // MOVE.W imm,aind
-      16'b0011???011111100: entry = 13'd814;  // MOVE.W imm,apost
-      16'b0011???100111100: entry = 13'd817;  // MOVE.W imm,apre
-      16'b0011???101111100: entry = 13'd820;  // MOVE.W imm,adisp
-      16'b0011???110111100: entry = 13'd824;  // MOVE.W imm,aidx
-      16'b0011000111111100: entry = 13'd830;  // MOVE.W imm,absw
-      16'b0011001111111100: entry = 13'd834;  // MOVE.W imm,absl
-      16'b0010???010000???: entry = 13'd839;  // MOVE.L reg,aind
-      16'b0010???010001???: entry = 13'd839;  // MOVE.L reg,aind
-      16'b0010???011000???: entry = 13'd842;  // MOVE.L reg,apost
-      16'b0010???011001???: entry = 13'd842;  // MOVE.L reg,apost
-      16'b0010???100000???: entry = 13'd845;  // MOVE.L reg,-(An)
-      16'b0010???100001???: entry = 13'd845;  // MOVE.L reg,-(An)
-      16'b0010???101000???: entry = 13'd848;  // MOVE.L reg,adisp
-      16'b0010???101001???: entry = 13'd848;  // MOVE.L reg,adisp
-      16'b0010???110000???: entry = 13'd852;  // MOVE.L reg,aidx
-      16'b0010???110001???: entry = 13'd852;  // MOVE.L reg,aidx
-      16'b0010000111000???: entry = 13'd858;  // MOVE.L reg,absw
-      16'b0010000111001???: entry = 13'd858;  // MOVE.L reg,absw
-      16'b0010001111000???: entry = 13'd862;  // MOVE.L reg,absl
-      16'b0010001111001???: entry = 13'd862;  // MOVE.L reg,absl
-      16'b0010???000010???: entry = 13'd867;  // MOVE.L aind,dn
-      16'b0010???010010???: entry = 13'd870;  // MOVE.L aind,aind
-      16'b0010???011010???: entry = 13'd875;  // MOVE.L aind,apost
-      16'b0010???100010???: entry = 13'd880;  // MOVE.L aind,apre
-      16'b0010???101010???: entry = 13'd885;  // MOVE.L aind,adisp
-      16'b0010???110010???: entry = 13'd891;  // MOVE.L aind,aidx
-      16'b0010000111010???: entry = 13'd899;  // MOVE.L aind,absw
-      16'b0010001111010???: entry = 13'd905;  // MOVE.L aind,absl
-      16'b0010???000011???: entry = 13'd912;  // MOVE.L apost,dn
-      16'b0010???010011???: entry = 13'd915;  // MOVE.L apost,aind
-      16'b0010???011011???: entry = 13'd920;  // MOVE.L apost,apost
-      16'b0010???100011???: entry = 13'd925;  // MOVE.L apost,apre
-      16'b0010???101011???: entry = 13'd930;  // MOVE.L apost,adisp
-      16'b0010???110011???: entry = 13'd936;  // MOVE.L apost,aidx
-      16'b0010000111011???: entry = 13'd944;  // MOVE.L apost,absw
-      16'b0010001111011???: entry = 13'd950;  // MOVE.L apost,absl
-      16'b0010???000100???: entry = 13'd957;  // MOVE.L apre,dn
-      16'b0010???010100???: entry = 13'd960;  // MOVE.L apre,aind
-      16'b0010???011100???: entry = 13'd965;  // MOVE.L apre,apost
-      16'b0010???100100???: entry = 13'd970;  // MOVE.L apre,apre
-      16'b0010???101100???: entry = 13'd975;  // MOVE.L apre,adisp
-      16'b0010???110100???: entry = 13'd981;  // MOVE.L apre,aidx
-      16'b0010000111100???: entry = 13'd989;  // MOVE.L apre,absw
-      16'b0010001111100???: entry = 13'd995;  // MOVE.L apre,absl
-      16'b0010???000101???: entry = 13'd1002;  // MOVE.L adisp,dn
-      16'b0010???010101???: entry = 13'd1006;  // MOVE.L adisp,aind
-      16'b0010???011101???: entry = 13'd1012;  // MOVE.L adisp,apost
-      16'b0010???100101???: entry = 13'd1018;  // MOVE.L adisp,apre
-      16'b0010???101101???: entry = 13'd1024;  // MOVE.L adisp,adisp
-      16'b0010???110101???: entry = 13'd1031;  // MOVE.L adisp,aidx
-      16'b0010000111101???: entry = 13'd1040;  // MOVE.L adisp,absw
-      16'b0010001111101???: entry = 13'd1047;  // MOVE.L adisp,absl
-      16'b0010???000110???: entry = 13'd1055;  // MOVE.L aidx,dn
-      16'b0010???010110???: entry = 13'd1061;  // MOVE.L aidx,aind
-      16'b0010???011110???: entry = 13'd1069;  // MOVE.L aidx,apost
-      16'b0010???100110???: entry = 13'd1077;  // MOVE.L aidx,apre
-      16'b0010???101110???: entry = 13'd1085;  // MOVE.L aidx,adisp
-      16'b0010???110110???: entry = 13'd1094;  // MOVE.L aidx,aidx
-      16'b0010000111110???: entry = 13'd1105;  // MOVE.L aidx,absw
-      16'b0010001111110???: entry = 13'd1114;  // MOVE.L aidx,absl
-      16'b0010???000111000: entry = 13'd1124;  // MOVE.L absw,dn
-      16'b0010???010111000: entry = 13'd1128;  // MOVE.L absw,aind
-      16'b0010???011111000: entry = 13'd1134;  // MOVE.L absw,apost
-      16'b0010???100111000: entry = 13'd1140;  // MOVE.L absw,apre
-      16'b0010???101111000: entry = 13'd1146;  // MOVE.L absw,adisp
-      16'b0010???110111000: entry = 13'd1153;  // MOVE.L absw,aidx
-      16'b0010000111111000: entry = 13'd1162;  // MOVE.L absw,absw
-      16'b0010001111111000: entry = 13'd1169;  // MOVE.L absw,absl
-      16'b0010???000111001: entry = 13'd1177;  // MOVE.L absl,dn
-      16'b0010???010111001: entry = 13'd1182;  // MOVE.L absl,aind
-      16'b0010???011111001: entry = 13'd1189;  // MOVE.L absl,apost
-      16'b0010???100111001: entry = 13'd1196;  // MOVE.L absl,apre
-      16'b0010???101111001: entry = 13'd1203;  // MOVE.L absl,adisp
-      16'b0010???110111001: entry = 13'd1211;  // MOVE.L absl,aidx
-      16'b0010000111111001: entry = 13'd1221;  // MOVE.L absl,absw
-      16'b0010001111111001: entry = 13'd1229;  // MOVE.L absl,absl
-      16'b0010???000111010: entry = 13'd1238;  // MOVE.L pcdisp,dn
-      16'b0010???010111010: entry = 13'd1242;  // MOVE.L pcdisp,aind
-      16'b0010???011111010: entry = 13'd1248;  // MOVE.L pcdisp,apost
-      16'b0010???100111010: entry = 13'd1254;  // MOVE.L pcdisp,apre
-      16'b0010???101111010: entry = 13'd1260;  // MOVE.L pcdisp,adisp
-      16'b0010???110111010: entry = 13'd1267;  // MOVE.L pcdisp,aidx
-      16'b0010000111111010: entry = 13'd1276;  // MOVE.L pcdisp,absw
-      16'b0010001111111010: entry = 13'd1283;  // MOVE.L pcdisp,absl
-      16'b0010???000111011: entry = 13'd1291;  // MOVE.L pcidx,dn
-      16'b0010???010111011: entry = 13'd1297;  // MOVE.L pcidx,aind
-      16'b0010???011111011: entry = 13'd1305;  // MOVE.L pcidx,apost
-      16'b0010???100111011: entry = 13'd1313;  // MOVE.L pcidx,apre
-      16'b0010???101111011: entry = 13'd1321;  // MOVE.L pcidx,adisp
-      16'b0010???110111011: entry = 13'd1330;  // MOVE.L pcidx,aidx
-      16'b0010000111111011: entry = 13'd1341;  // MOVE.L pcidx,absw
-      16'b0010001111111011: entry = 13'd1350;  // MOVE.L pcidx,absl
-      16'b0010???000111100: entry = 13'd1360;  // MOVE.L imm,dn
-      16'b0010???010111100: entry = 13'd1363;  // MOVE.L imm,aind
-      16'b0010???011111100: entry = 13'd1368;  // MOVE.L imm,apost
-      16'b0010???100111100: entry = 13'd1373;  // MOVE.L imm,apre
-      16'b0010???101111100: entry = 13'd1378;  // MOVE.L imm,adisp
-      16'b0010???110111100: entry = 13'd1384;  // MOVE.L imm,aidx
-      16'b0010000111111100: entry = 13'd1392;  // MOVE.L imm,absw
-      16'b0010001111111100: entry = 13'd1398;  // MOVE.L imm,absl
-      16'b0011???001000???: entry = 13'd1405;  // MOVEA.W dn
-      16'b0011???001001???: entry = 13'd1406;  // MOVEA.W an
-      16'b0011???001010???: entry = 13'd1407;  // MOVEA.W aind
-      16'b0011???001011???: entry = 13'd1409;  // MOVEA.W apost
-      16'b0011???001100???: entry = 13'd1411;  // MOVEA.W apre
-      16'b0011???001101???: entry = 13'd1413;  // MOVEA.W adisp
-      16'b0011???001110???: entry = 13'd1416;  // MOVEA.W aidx
-      16'b0011???001111000: entry = 13'd1421;  // MOVEA.W absw
-      16'b0011???001111001: entry = 13'd1424;  // MOVEA.W absl
-      16'b0011???001111010: entry = 13'd1428;  // MOVEA.W pcdisp
-      16'b0011???001111011: entry = 13'd1431;  // MOVEA.W pcidx
-      16'b0011???001111100: entry = 13'd1436;  // MOVEA.W imm
-      16'b0010???001000???: entry = 13'd1438;  // MOVEA.L dn
-      16'b0010???001001???: entry = 13'd1439;  // MOVEA.L an
-      16'b0010???001010???: entry = 13'd1440;  // MOVEA.L aind
-      16'b0010???001011???: entry = 13'd1443;  // MOVEA.L apost
-      16'b0010???001100???: entry = 13'd1446;  // MOVEA.L apre
-      16'b0010???001101???: entry = 13'd1449;  // MOVEA.L adisp
-      16'b0010???001110???: entry = 13'd1453;  // MOVEA.L aidx
-      16'b0010???001111000: entry = 13'd1459;  // MOVEA.L absw
-      16'b0010???001111001: entry = 13'd1463;  // MOVEA.L absl
-      16'b0010???001111010: entry = 13'd1468;  // MOVEA.L pcdisp
-      16'b0010???001111011: entry = 13'd1472;  // MOVEA.L pcidx
-      16'b0010???001111100: entry = 13'd1478;  // MOVEA.L imm
-      16'b0100101000000???: entry = 13'd1481;  // TST.B dn
-      16'b0100101000010???: entry = 13'd1482;  // TST.B aind
-      16'b0100101000011???: entry = 13'd1484;  // TST.B apost
-      16'b0100101000100???: entry = 13'd1486;  // TST.B apre
-      16'b0100101000101???: entry = 13'd1488;  // TST.B adisp
-      16'b0100101000110???: entry = 13'd1491;  // TST.B aidx
-      16'b0100101000111000: entry = 13'd1496;  // TST.B absw
-      16'b0100101000111001: entry = 13'd1499;  // TST.B absl
-      16'b0100101001000???: entry = 13'd1503;  // TST.W dn
-      16'b0100101001010???: entry = 13'd1504;  // TST.W aind
-      16'b0100101001011???: entry = 13'd1506;  // TST.W apost
-      16'b0100101001100???: entry = 13'd1508;  // TST.W apre
-      16'b0100101001101???: entry = 13'd1510;  // TST.W adisp
-      16'b0100101001110???: entry = 13'd1513;  // TST.W aidx
-      16'b0100101001111000: entry = 13'd1518;  // TST.W absw
-      16'b0100101001111001: entry = 13'd1521;  // TST.W absl
-      16'b0100101010000???: entry = 13'd1525;  // TST.L dn
-      16'b0100101010010???: entry = 13'd1526;  // TST.L aind
-      16'b0100101010011???: entry = 13'd1529;  // TST.L apost
-      16'b0100101010100???: entry = 13'd1532;  // TST.L apre
-      16'b0100101010101???: entry = 13'd1535;  // TST.L adisp
-      16'b0100101010110???: entry = 13'd1539;  // TST.L aidx
-      16'b0100101010111000: entry = 13'd1545;  // TST.L absw
-      16'b0100101010111001: entry = 13'd1549;  // TST.L absl
-      16'b0100010000000???: entry = 13'd1554;  // NEG.B dn
-      16'b0100010000010???: entry = 13'd1555;  // NEG.B aind
-      16'b0100010000011???: entry = 13'd1558;  // NEG.B apost
-      16'b0100010000100???: entry = 13'd1561;  // NEG.B apre
-      16'b0100010000101???: entry = 13'd1564;  // NEG.B adisp
-      16'b0100010000110???: entry = 13'd1568;  // NEG.B aidx
-      16'b0100010000111000: entry = 13'd1574;  // NEG.B absw
-      16'b0100010000111001: entry = 13'd1578;  // NEG.B absl
-      16'b0100010001000???: entry = 13'd1583;  // NEG.W dn
-      16'b0100010001010???: entry = 13'd1584;  // NEG.W aind
-      16'b0100010001011???: entry = 13'd1587;  // NEG.W apost
-      16'b0100010001100???: entry = 13'd1590;  // NEG.W apre
-      16'b0100010001101???: entry = 13'd1593;  // NEG.W adisp
-      16'b0100010001110???: entry = 13'd1597;  // NEG.W aidx
-      16'b0100010001111000: entry = 13'd1603;  // NEG.W absw
-      16'b0100010001111001: entry = 13'd1607;  // NEG.W absl
-      16'b0100010010000???: entry = 13'd1612;  // NEG.L dn
-      16'b0100010010010???: entry = 13'd1613;  // NEG.L aind
-      16'b0100010010011???: entry = 13'd1618;  // NEG.L apost
-      16'b0100010010100???: entry = 13'd1623;  // NEG.L apre
-      16'b0100010010101???: entry = 13'd1628;  // NEG.L adisp
-      16'b0100010010110???: entry = 13'd1634;  // NEG.L aidx
-      16'b0100010010111000: entry = 13'd1642;  // NEG.L absw
-      16'b0100010010111001: entry = 13'd1648;  // NEG.L absl
-      16'b0100011000000???: entry = 13'd1655;  // NOT.B dn
-      16'b0100011000010???: entry = 13'd1656;  // NOT.B aind
-      16'b0100011000011???: entry = 13'd1659;  // NOT.B apost
-      16'b0100011000100???: entry = 13'd1662;  // NOT.B apre
-      16'b0100011000101???: entry = 13'd1665;  // NOT.B adisp
-      16'b0100011000110???: entry = 13'd1669;  // NOT.B aidx
-      16'b0100011000111000: entry = 13'd1675;  // NOT.B absw
-      16'b0100011000111001: entry = 13'd1679;  // NOT.B absl
-      16'b0100011001000???: entry = 13'd1684;  // NOT.W dn
-      16'b0100011001010???: entry = 13'd1685;  // NOT.W aind
-      16'b0100011001011???: entry = 13'd1688;  // NOT.W apost
-      16'b0100011001100???: entry = 13'd1691;  // NOT.W apre
-      16'b0100011001101???: entry = 13'd1694;  // NOT.W adisp
-      16'b0100011001110???: entry = 13'd1698;  // NOT.W aidx
-      16'b0100011001111000: entry = 13'd1704;  // NOT.W absw
-      16'b0100011001111001: entry = 13'd1708;  // NOT.W absl
-      16'b0100011010000???: entry = 13'd1713;  // NOT.L dn
-      16'b0100011010010???: entry = 13'd1714;  // NOT.L aind
-      16'b0100011010011???: entry = 13'd1719;  // NOT.L apost
-      16'b0100011010100???: entry = 13'd1724;  // NOT.L apre
-      16'b0100011010101???: entry = 13'd1729;  // NOT.L adisp
-      16'b0100011010110???: entry = 13'd1735;  // NOT.L aidx
-      16'b0100011010111000: entry = 13'd1743;  // NOT.L absw
-      16'b0100011010111001: entry = 13'd1749;  // NOT.L absl
-      16'b0100001000000???: entry = 13'd1756;  // CLR.B dn
-      16'b0100001000010???: entry = 13'd1757;  // CLR.B aind
-      16'b0100001000011???: entry = 13'd1759;  // CLR.B apost
-      16'b0100001000100???: entry = 13'd1761;  // CLR.B apre
-      16'b0100001000101???: entry = 13'd1763;  // CLR.B adisp
-      16'b0100001000110???: entry = 13'd1766;  // CLR.B aidx
-      16'b0100001000111000: entry = 13'd1771;  // CLR.B absw
-      16'b0100001000111001: entry = 13'd1774;  // CLR.B absl
-      16'b0100001001000???: entry = 13'd1778;  // CLR.W dn
-      16'b0100001001010???: entry = 13'd1779;  // CLR.W aind
-      16'b0100001001011???: entry = 13'd1781;  // CLR.W apost
-      16'b0100001001100???: entry = 13'd1783;  // CLR.W apre
-      16'b0100001001101???: entry = 13'd1785;  // CLR.W adisp
-      16'b0100001001110???: entry = 13'd1788;  // CLR.W aidx
-      16'b0100001001111000: entry = 13'd1793;  // CLR.W absw
-      16'b0100001001111001: entry = 13'd1796;  // CLR.W absl
-      16'b0100001010000???: entry = 13'd1800;  // CLR.L dn
-      16'b0100001010010???: entry = 13'd1801;  // CLR.L aind
-      16'b0100001010011???: entry = 13'd1804;  // CLR.L apost
-      16'b0100001010100???: entry = 13'd1807;  // CLR.L apre
-      16'b0100001010101???: entry = 13'd1810;  // CLR.L adisp
-      16'b0100001010110???: entry = 13'd1814;  // CLR.L aidx
-      16'b0100001010111000: entry = 13'd1820;  // CLR.L absw
-      16'b0100001010111001: entry = 13'd1824;  // CLR.L absl
-      16'b1101???000000???: entry = 13'd1829;  // ADD.B dn,Dn
-      16'b1101???000010???: entry = 13'd1830;  // ADD.B aind,Dn
-      16'b1101???000011???: entry = 13'd1832;  // ADD.B apost,Dn
-      16'b1101???000100???: entry = 13'd1834;  // ADD.B apre,Dn
-      16'b1101???000101???: entry = 13'd1836;  // ADD.B adisp,Dn
-      16'b1101???000110???: entry = 13'd1839;  // ADD.B aidx,Dn
-      16'b1101???000111000: entry = 13'd1844;  // ADD.B absw,Dn
-      16'b1101???000111001: entry = 13'd1847;  // ADD.B absl,Dn
-      16'b1101???000111010: entry = 13'd1851;  // ADD.B pcdisp,Dn
-      16'b1101???000111011: entry = 13'd1854;  // ADD.B pcidx,Dn
-      16'b1101???000111100: entry = 13'd1859;  // ADD.B imm,Dn
-      16'b1101???100010???: entry = 13'd1861;  // ADD.B Dn,aind
-      16'b1101???100011???: entry = 13'd1864;  // ADD.B Dn,apost
-      16'b1101???100100???: entry = 13'd1867;  // ADD.B Dn,apre
-      16'b1101???100101???: entry = 13'd1870;  // ADD.B Dn,adisp
-      16'b1101???100110???: entry = 13'd1874;  // ADD.B Dn,aidx
-      16'b1101???100111000: entry = 13'd1880;  // ADD.B Dn,absw
-      16'b1101???100111001: entry = 13'd1884;  // ADD.B Dn,absl
-      16'b1101???001000???: entry = 13'd1889;  // ADD.W dn,Dn
-      16'b1101???001001???: entry = 13'd1890;  // ADD.W an,Dn
-      16'b1101???001010???: entry = 13'd1891;  // ADD.W aind,Dn
-      16'b1101???001011???: entry = 13'd1893;  // ADD.W apost,Dn
-      16'b1101???001100???: entry = 13'd1895;  // ADD.W apre,Dn
-      16'b1101???001101???: entry = 13'd1897;  // ADD.W adisp,Dn
-      16'b1101???001110???: entry = 13'd1900;  // ADD.W aidx,Dn
-      16'b1101???001111000: entry = 13'd1905;  // ADD.W absw,Dn
-      16'b1101???001111001: entry = 13'd1908;  // ADD.W absl,Dn
-      16'b1101???001111010: entry = 13'd1912;  // ADD.W pcdisp,Dn
-      16'b1101???001111011: entry = 13'd1915;  // ADD.W pcidx,Dn
-      16'b1101???001111100: entry = 13'd1920;  // ADD.W imm,Dn
-      16'b1101???101010???: entry = 13'd1922;  // ADD.W Dn,aind
-      16'b1101???101011???: entry = 13'd1925;  // ADD.W Dn,apost
-      16'b1101???101100???: entry = 13'd1928;  // ADD.W Dn,apre
-      16'b1101???101101???: entry = 13'd1931;  // ADD.W Dn,adisp
-      16'b1101???101110???: entry = 13'd1935;  // ADD.W Dn,aidx
-      16'b1101???101111000: entry = 13'd1941;  // ADD.W Dn,absw
-      16'b1101???101111001: entry = 13'd1945;  // ADD.W Dn,absl
-      16'b1101???010000???: entry = 13'd1950;  // ADD.L dn,Dn
-      16'b1101???010001???: entry = 13'd1951;  // ADD.L an,Dn
-      16'b1101???010010???: entry = 13'd1952;  // ADD.L aind,Dn
-      16'b1101???010011???: entry = 13'd1955;  // ADD.L apost,Dn
-      16'b1101???010100???: entry = 13'd1958;  // ADD.L apre,Dn
-      16'b1101???010101???: entry = 13'd1961;  // ADD.L adisp,Dn
-      16'b1101???010110???: entry = 13'd1965;  // ADD.L aidx,Dn
-      16'b1101???010111000: entry = 13'd1971;  // ADD.L absw,Dn
-      16'b1101???010111001: entry = 13'd1975;  // ADD.L absl,Dn
-      16'b1101???010111010: entry = 13'd1980;  // ADD.L pcdisp,Dn
-      16'b1101???010111011: entry = 13'd1984;  // ADD.L pcidx,Dn
-      16'b1101???010111100: entry = 13'd1990;  // ADD.L imm,Dn
-      16'b1101???110010???: entry = 13'd1993;  // ADD.L Dn,aind
-      16'b1101???110011???: entry = 13'd1998;  // ADD.L Dn,apost
-      16'b1101???110100???: entry = 13'd2003;  // ADD.L Dn,apre
-      16'b1101???110101???: entry = 13'd2008;  // ADD.L Dn,adisp
-      16'b1101???110110???: entry = 13'd2014;  // ADD.L Dn,aidx
-      16'b1101???110111000: entry = 13'd2022;  // ADD.L Dn,absw
-      16'b1101???110111001: entry = 13'd2028;  // ADD.L Dn,absl
-      16'b1001???000000???: entry = 13'd2035;  // SUB.B dn,Dn
-      16'b1001???000010???: entry = 13'd2036;  // SUB.B aind,Dn
-      16'b1001???000011???: entry = 13'd2038;  // SUB.B apost,Dn
-      16'b1001???000100???: entry = 13'd2040;  // SUB.B apre,Dn
-      16'b1001???000101???: entry = 13'd2042;  // SUB.B adisp,Dn
-      16'b1001???000110???: entry = 13'd2045;  // SUB.B aidx,Dn
-      16'b1001???000111000: entry = 13'd2050;  // SUB.B absw,Dn
-      16'b1001???000111001: entry = 13'd2053;  // SUB.B absl,Dn
-      16'b1001???000111010: entry = 13'd2057;  // SUB.B pcdisp,Dn
-      16'b1001???000111011: entry = 13'd2060;  // SUB.B pcidx,Dn
-      16'b1001???000111100: entry = 13'd2065;  // SUB.B imm,Dn
-      16'b1001???100010???: entry = 13'd2067;  // SUB.B Dn,aind
-      16'b1001???100011???: entry = 13'd2070;  // SUB.B Dn,apost
-      16'b1001???100100???: entry = 13'd2073;  // SUB.B Dn,apre
-      16'b1001???100101???: entry = 13'd2076;  // SUB.B Dn,adisp
-      16'b1001???100110???: entry = 13'd2080;  // SUB.B Dn,aidx
-      16'b1001???100111000: entry = 13'd2086;  // SUB.B Dn,absw
-      16'b1001???100111001: entry = 13'd2090;  // SUB.B Dn,absl
-      16'b1001???001000???: entry = 13'd2095;  // SUB.W dn,Dn
-      16'b1001???001001???: entry = 13'd2096;  // SUB.W an,Dn
-      16'b1001???001010???: entry = 13'd2097;  // SUB.W aind,Dn
-      16'b1001???001011???: entry = 13'd2099;  // SUB.W apost,Dn
-      16'b1001???001100???: entry = 13'd2101;  // SUB.W apre,Dn
-      16'b1001???001101???: entry = 13'd2103;  // SUB.W adisp,Dn
-      16'b1001???001110???: entry = 13'd2106;  // SUB.W aidx,Dn
-      16'b1001???001111000: entry = 13'd2111;  // SUB.W absw,Dn
-      16'b1001???001111001: entry = 13'd2114;  // SUB.W absl,Dn
-      16'b1001???001111010: entry = 13'd2118;  // SUB.W pcdisp,Dn
-      16'b1001???001111011: entry = 13'd2121;  // SUB.W pcidx,Dn
-      16'b1001???001111100: entry = 13'd2126;  // SUB.W imm,Dn
-      16'b1001???101010???: entry = 13'd2128;  // SUB.W Dn,aind
-      16'b1001???101011???: entry = 13'd2131;  // SUB.W Dn,apost
-      16'b1001???101100???: entry = 13'd2134;  // SUB.W Dn,apre
-      16'b1001???101101???: entry = 13'd2137;  // SUB.W Dn,adisp
-      16'b1001???101110???: entry = 13'd2141;  // SUB.W Dn,aidx
-      16'b1001???101111000: entry = 13'd2147;  // SUB.W Dn,absw
-      16'b1001???101111001: entry = 13'd2151;  // SUB.W Dn,absl
-      16'b1001???010000???: entry = 13'd2156;  // SUB.L dn,Dn
-      16'b1001???010001???: entry = 13'd2157;  // SUB.L an,Dn
-      16'b1001???010010???: entry = 13'd2158;  // SUB.L aind,Dn
-      16'b1001???010011???: entry = 13'd2161;  // SUB.L apost,Dn
-      16'b1001???010100???: entry = 13'd2164;  // SUB.L apre,Dn
-      16'b1001???010101???: entry = 13'd2167;  // SUB.L adisp,Dn
-      16'b1001???010110???: entry = 13'd2171;  // SUB.L aidx,Dn
-      16'b1001???010111000: entry = 13'd2177;  // SUB.L absw,Dn
-      16'b1001???010111001: entry = 13'd2181;  // SUB.L absl,Dn
-      16'b1001???010111010: entry = 13'd2186;  // SUB.L pcdisp,Dn
-      16'b1001???010111011: entry = 13'd2190;  // SUB.L pcidx,Dn
-      16'b1001???010111100: entry = 13'd2196;  // SUB.L imm,Dn
-      16'b1001???110010???: entry = 13'd2199;  // SUB.L Dn,aind
-      16'b1001???110011???: entry = 13'd2204;  // SUB.L Dn,apost
-      16'b1001???110100???: entry = 13'd2209;  // SUB.L Dn,apre
-      16'b1001???110101???: entry = 13'd2214;  // SUB.L Dn,adisp
-      16'b1001???110110???: entry = 13'd2220;  // SUB.L Dn,aidx
-      16'b1001???110111000: entry = 13'd2228;  // SUB.L Dn,absw
-      16'b1001???110111001: entry = 13'd2234;  // SUB.L Dn,absl
-      16'b1100???000000???: entry = 13'd2241;  // AND.B dn,Dn
-      16'b1100???000010???: entry = 13'd2242;  // AND.B aind,Dn
-      16'b1100???000011???: entry = 13'd2244;  // AND.B apost,Dn
-      16'b1100???000100???: entry = 13'd2246;  // AND.B apre,Dn
-      16'b1100???000101???: entry = 13'd2248;  // AND.B adisp,Dn
-      16'b1100???000110???: entry = 13'd2251;  // AND.B aidx,Dn
-      16'b1100???000111000: entry = 13'd2256;  // AND.B absw,Dn
-      16'b1100???000111001: entry = 13'd2259;  // AND.B absl,Dn
-      16'b1100???000111010: entry = 13'd2263;  // AND.B pcdisp,Dn
-      16'b1100???000111011: entry = 13'd2266;  // AND.B pcidx,Dn
-      16'b1100???000111100: entry = 13'd2271;  // AND.B imm,Dn
-      16'b1100???100010???: entry = 13'd2273;  // AND.B Dn,aind
-      16'b1100???100011???: entry = 13'd2276;  // AND.B Dn,apost
-      16'b1100???100100???: entry = 13'd2279;  // AND.B Dn,apre
-      16'b1100???100101???: entry = 13'd2282;  // AND.B Dn,adisp
-      16'b1100???100110???: entry = 13'd2286;  // AND.B Dn,aidx
-      16'b1100???100111000: entry = 13'd2292;  // AND.B Dn,absw
-      16'b1100???100111001: entry = 13'd2296;  // AND.B Dn,absl
-      16'b1100???001000???: entry = 13'd2301;  // AND.W dn,Dn
-      16'b1100???001010???: entry = 13'd2302;  // AND.W aind,Dn
-      16'b1100???001011???: entry = 13'd2304;  // AND.W apost,Dn
-      16'b1100???001100???: entry = 13'd2306;  // AND.W apre,Dn
-      16'b1100???001101???: entry = 13'd2308;  // AND.W adisp,Dn
-      16'b1100???001110???: entry = 13'd2311;  // AND.W aidx,Dn
-      16'b1100???001111000: entry = 13'd2316;  // AND.W absw,Dn
-      16'b1100???001111001: entry = 13'd2319;  // AND.W absl,Dn
-      16'b1100???001111010: entry = 13'd2323;  // AND.W pcdisp,Dn
-      16'b1100???001111011: entry = 13'd2326;  // AND.W pcidx,Dn
-      16'b1100???001111100: entry = 13'd2331;  // AND.W imm,Dn
-      16'b1100???101010???: entry = 13'd2333;  // AND.W Dn,aind
-      16'b1100???101011???: entry = 13'd2336;  // AND.W Dn,apost
-      16'b1100???101100???: entry = 13'd2339;  // AND.W Dn,apre
-      16'b1100???101101???: entry = 13'd2342;  // AND.W Dn,adisp
-      16'b1100???101110???: entry = 13'd2346;  // AND.W Dn,aidx
-      16'b1100???101111000: entry = 13'd2352;  // AND.W Dn,absw
-      16'b1100???101111001: entry = 13'd2356;  // AND.W Dn,absl
-      16'b1100???010000???: entry = 13'd2361;  // AND.L dn,Dn
-      16'b1100???010010???: entry = 13'd2362;  // AND.L aind,Dn
-      16'b1100???010011???: entry = 13'd2365;  // AND.L apost,Dn
-      16'b1100???010100???: entry = 13'd2368;  // AND.L apre,Dn
-      16'b1100???010101???: entry = 13'd2371;  // AND.L adisp,Dn
-      16'b1100???010110???: entry = 13'd2375;  // AND.L aidx,Dn
-      16'b1100???010111000: entry = 13'd2381;  // AND.L absw,Dn
-      16'b1100???010111001: entry = 13'd2385;  // AND.L absl,Dn
-      16'b1100???010111010: entry = 13'd2390;  // AND.L pcdisp,Dn
-      16'b1100???010111011: entry = 13'd2394;  // AND.L pcidx,Dn
-      16'b1100???010111100: entry = 13'd2400;  // AND.L imm,Dn
-      16'b1100???110010???: entry = 13'd2403;  // AND.L Dn,aind
-      16'b1100???110011???: entry = 13'd2408;  // AND.L Dn,apost
-      16'b1100???110100???: entry = 13'd2413;  // AND.L Dn,apre
-      16'b1100???110101???: entry = 13'd2418;  // AND.L Dn,adisp
-      16'b1100???110110???: entry = 13'd2424;  // AND.L Dn,aidx
-      16'b1100???110111000: entry = 13'd2432;  // AND.L Dn,absw
-      16'b1100???110111001: entry = 13'd2438;  // AND.L Dn,absl
-      16'b1000???000000???: entry = 13'd2445;  // OR.B dn,Dn
-      16'b1000???000010???: entry = 13'd2446;  // OR.B aind,Dn
-      16'b1000???000011???: entry = 13'd2448;  // OR.B apost,Dn
-      16'b1000???000100???: entry = 13'd2450;  // OR.B apre,Dn
-      16'b1000???000101???: entry = 13'd2452;  // OR.B adisp,Dn
-      16'b1000???000110???: entry = 13'd2455;  // OR.B aidx,Dn
-      16'b1000???000111000: entry = 13'd2460;  // OR.B absw,Dn
-      16'b1000???000111001: entry = 13'd2463;  // OR.B absl,Dn
-      16'b1000???000111010: entry = 13'd2467;  // OR.B pcdisp,Dn
-      16'b1000???000111011: entry = 13'd2470;  // OR.B pcidx,Dn
-      16'b1000???000111100: entry = 13'd2475;  // OR.B imm,Dn
-      16'b1000???100010???: entry = 13'd2477;  // OR.B Dn,aind
-      16'b1000???100011???: entry = 13'd2480;  // OR.B Dn,apost
-      16'b1000???100100???: entry = 13'd2483;  // OR.B Dn,apre
-      16'b1000???100101???: entry = 13'd2486;  // OR.B Dn,adisp
-      16'b1000???100110???: entry = 13'd2490;  // OR.B Dn,aidx
-      16'b1000???100111000: entry = 13'd2496;  // OR.B Dn,absw
-      16'b1000???100111001: entry = 13'd2500;  // OR.B Dn,absl
-      16'b1000???001000???: entry = 13'd2505;  // OR.W dn,Dn
-      16'b1000???001010???: entry = 13'd2506;  // OR.W aind,Dn
-      16'b1000???001011???: entry = 13'd2508;  // OR.W apost,Dn
-      16'b1000???001100???: entry = 13'd2510;  // OR.W apre,Dn
-      16'b1000???001101???: entry = 13'd2512;  // OR.W adisp,Dn
-      16'b1000???001110???: entry = 13'd2515;  // OR.W aidx,Dn
-      16'b1000???001111000: entry = 13'd2520;  // OR.W absw,Dn
-      16'b1000???001111001: entry = 13'd2523;  // OR.W absl,Dn
-      16'b1000???001111010: entry = 13'd2527;  // OR.W pcdisp,Dn
-      16'b1000???001111011: entry = 13'd2530;  // OR.W pcidx,Dn
-      16'b1000???001111100: entry = 13'd2535;  // OR.W imm,Dn
-      16'b1000???101010???: entry = 13'd2537;  // OR.W Dn,aind
-      16'b1000???101011???: entry = 13'd2540;  // OR.W Dn,apost
-      16'b1000???101100???: entry = 13'd2543;  // OR.W Dn,apre
-      16'b1000???101101???: entry = 13'd2546;  // OR.W Dn,adisp
-      16'b1000???101110???: entry = 13'd2550;  // OR.W Dn,aidx
-      16'b1000???101111000: entry = 13'd2556;  // OR.W Dn,absw
-      16'b1000???101111001: entry = 13'd2560;  // OR.W Dn,absl
-      16'b1000???010000???: entry = 13'd2565;  // OR.L dn,Dn
-      16'b1000???010010???: entry = 13'd2566;  // OR.L aind,Dn
-      16'b1000???010011???: entry = 13'd2569;  // OR.L apost,Dn
-      16'b1000???010100???: entry = 13'd2572;  // OR.L apre,Dn
-      16'b1000???010101???: entry = 13'd2575;  // OR.L adisp,Dn
-      16'b1000???010110???: entry = 13'd2579;  // OR.L aidx,Dn
-      16'b1000???010111000: entry = 13'd2585;  // OR.L absw,Dn
-      16'b1000???010111001: entry = 13'd2589;  // OR.L absl,Dn
-      16'b1000???010111010: entry = 13'd2594;  // OR.L pcdisp,Dn
-      16'b1000???010111011: entry = 13'd2598;  // OR.L pcidx,Dn
-      16'b1000???010111100: entry = 13'd2604;  // OR.L imm,Dn
-      16'b1000???110010???: entry = 13'd2607;  // OR.L Dn,aind
-      16'b1000???110011???: entry = 13'd2612;  // OR.L Dn,apost
-      16'b1000???110100???: entry = 13'd2617;  // OR.L Dn,apre
-      16'b1000???110101???: entry = 13'd2622;  // OR.L Dn,adisp
-      16'b1000???110110???: entry = 13'd2628;  // OR.L Dn,aidx
-      16'b1000???110111000: entry = 13'd2636;  // OR.L Dn,absw
-      16'b1000???110111001: entry = 13'd2642;  // OR.L Dn,absl
-      16'b1011???000000???: entry = 13'd2649;  // CMP.B dn
-      16'b1011???000010???: entry = 13'd2650;  // CMP.B aind
-      16'b1011???000011???: entry = 13'd2652;  // CMP.B apost
-      16'b1011???000100???: entry = 13'd2654;  // CMP.B apre
-      16'b1011???000101???: entry = 13'd2656;  // CMP.B adisp
-      16'b1011???000110???: entry = 13'd2659;  // CMP.B aidx
-      16'b1011???000111000: entry = 13'd2664;  // CMP.B absw
-      16'b1011???000111001: entry = 13'd2667;  // CMP.B absl
-      16'b1011???000111010: entry = 13'd2671;  // CMP.B pcdisp
-      16'b1011???000111011: entry = 13'd2674;  // CMP.B pcidx
-      16'b1011???000111100: entry = 13'd2679;  // CMP.B imm
-      16'b1011???100000???: entry = 13'd2681;  // EOR.B Dn,dn
-      16'b1011???100010???: entry = 13'd2682;  // EOR.B Dn,aind
-      16'b1011???100011???: entry = 13'd2685;  // EOR.B Dn,apost
-      16'b1011???100100???: entry = 13'd2688;  // EOR.B Dn,apre
-      16'b1011???100101???: entry = 13'd2691;  // EOR.B Dn,adisp
-      16'b1011???100110???: entry = 13'd2695;  // EOR.B Dn,aidx
-      16'b1011???100111000: entry = 13'd2701;  // EOR.B Dn,absw
-      16'b1011???100111001: entry = 13'd2705;  // EOR.B Dn,absl
-      16'b1011???001000???: entry = 13'd2710;  // CMP.W dn
-      16'b1011???001001???: entry = 13'd2711;  // CMP.W an
-      16'b1011???001010???: entry = 13'd2712;  // CMP.W aind
-      16'b1011???001011???: entry = 13'd2714;  // CMP.W apost
-      16'b1011???001100???: entry = 13'd2716;  // CMP.W apre
-      16'b1011???001101???: entry = 13'd2718;  // CMP.W adisp
-      16'b1011???001110???: entry = 13'd2721;  // CMP.W aidx
-      16'b1011???001111000: entry = 13'd2726;  // CMP.W absw
-      16'b1011???001111001: entry = 13'd2729;  // CMP.W absl
-      16'b1011???001111010: entry = 13'd2733;  // CMP.W pcdisp
-      16'b1011???001111011: entry = 13'd2736;  // CMP.W pcidx
-      16'b1011???001111100: entry = 13'd2741;  // CMP.W imm
-      16'b1011???101000???: entry = 13'd2743;  // EOR.W Dn,dn
-      16'b1011???101010???: entry = 13'd2744;  // EOR.W Dn,aind
-      16'b1011???101011???: entry = 13'd2747;  // EOR.W Dn,apost
-      16'b1011???101100???: entry = 13'd2750;  // EOR.W Dn,apre
-      16'b1011???101101???: entry = 13'd2753;  // EOR.W Dn,adisp
-      16'b1011???101110???: entry = 13'd2757;  // EOR.W Dn,aidx
-      16'b1011???101111000: entry = 13'd2763;  // EOR.W Dn,absw
-      16'b1011???101111001: entry = 13'd2767;  // EOR.W Dn,absl
-      16'b1011???010000???: entry = 13'd2772;  // CMP.L dn
-      16'b1011???010001???: entry = 13'd2773;  // CMP.L an
-      16'b1011???010010???: entry = 13'd2774;  // CMP.L aind
-      16'b1011???010011???: entry = 13'd2777;  // CMP.L apost
-      16'b1011???010100???: entry = 13'd2780;  // CMP.L apre
-      16'b1011???010101???: entry = 13'd2783;  // CMP.L adisp
-      16'b1011???010110???: entry = 13'd2787;  // CMP.L aidx
-      16'b1011???010111000: entry = 13'd2793;  // CMP.L absw
-      16'b1011???010111001: entry = 13'd2797;  // CMP.L absl
-      16'b1011???010111010: entry = 13'd2802;  // CMP.L pcdisp
-      16'b1011???010111011: entry = 13'd2806;  // CMP.L pcidx
-      16'b1011???010111100: entry = 13'd2812;  // CMP.L imm
-      16'b1011???110000???: entry = 13'd2815;  // EOR.L Dn,dn
-      16'b1011???110010???: entry = 13'd2816;  // EOR.L Dn,aind
-      16'b1011???110011???: entry = 13'd2821;  // EOR.L Dn,apost
-      16'b1011???110100???: entry = 13'd2826;  // EOR.L Dn,apre
-      16'b1011???110101???: entry = 13'd2831;  // EOR.L Dn,adisp
-      16'b1011???110110???: entry = 13'd2837;  // EOR.L Dn,aidx
-      16'b1011???110111000: entry = 13'd2845;  // EOR.L Dn,absw
-      16'b1011???110111001: entry = 13'd2851;  // EOR.L Dn,absl
-      16'b1101???011000???: entry = 13'd2858;  // ADDA.W dn
-      16'b1101???011001???: entry = 13'd2860;  // ADDA.W an
-      16'b1101???011010???: entry = 13'd2862;  // ADDA.W aind
-      16'b1101???011011???: entry = 13'd2865;  // ADDA.W apost
-      16'b1101???011100???: entry = 13'd2868;  // ADDA.W apre
-      16'b1101???011101???: entry = 13'd2871;  // ADDA.W adisp
-      16'b1101???011110???: entry = 13'd2875;  // ADDA.W aidx
-      16'b1101???011111000: entry = 13'd2881;  // ADDA.W absw
-      16'b1101???011111001: entry = 13'd2885;  // ADDA.W absl
-      16'b1101???011111010: entry = 13'd2890;  // ADDA.W pcdisp
-      16'b1101???011111011: entry = 13'd2894;  // ADDA.W pcidx
-      16'b1101???011111100: entry = 13'd2900;  // ADDA.W imm
-      16'b1101???111000???: entry = 13'd2903;  // ADDA.L dn
-      16'b1101???111001???: entry = 13'd2905;  // ADDA.L an
-      16'b1101???111010???: entry = 13'd2907;  // ADDA.L aind
-      16'b1101???111011???: entry = 13'd2910;  // ADDA.L apost
-      16'b1101???111100???: entry = 13'd2913;  // ADDA.L apre
-      16'b1101???111101???: entry = 13'd2916;  // ADDA.L adisp
-      16'b1101???111110???: entry = 13'd2920;  // ADDA.L aidx
-      16'b1101???111111000: entry = 13'd2926;  // ADDA.L absw
-      16'b1101???111111001: entry = 13'd2930;  // ADDA.L absl
-      16'b1101???111111010: entry = 13'd2935;  // ADDA.L pcdisp
-      16'b1101???111111011: entry = 13'd2939;  // ADDA.L pcidx
-      16'b1101???111111100: entry = 13'd2945;  // ADDA.L imm
-      16'b1001???011000???: entry = 13'd2948;  // SUBA.W dn
-      16'b1001???011001???: entry = 13'd2950;  // SUBA.W an
-      16'b1001???011010???: entry = 13'd2952;  // SUBA.W aind
-      16'b1001???011011???: entry = 13'd2955;  // SUBA.W apost
-      16'b1001???011100???: entry = 13'd2958;  // SUBA.W apre
-      16'b1001???011101???: entry = 13'd2961;  // SUBA.W adisp
-      16'b1001???011110???: entry = 13'd2965;  // SUBA.W aidx
-      16'b1001???011111000: entry = 13'd2971;  // SUBA.W absw
-      16'b1001???011111001: entry = 13'd2975;  // SUBA.W absl
-      16'b1001???011111010: entry = 13'd2980;  // SUBA.W pcdisp
-      16'b1001???011111011: entry = 13'd2984;  // SUBA.W pcidx
-      16'b1001???011111100: entry = 13'd2990;  // SUBA.W imm
-      16'b1001???111000???: entry = 13'd2993;  // SUBA.L dn
-      16'b1001???111001???: entry = 13'd2995;  // SUBA.L an
-      16'b1001???111010???: entry = 13'd2997;  // SUBA.L aind
-      16'b1001???111011???: entry = 13'd3000;  // SUBA.L apost
-      16'b1001???111100???: entry = 13'd3003;  // SUBA.L apre
-      16'b1001???111101???: entry = 13'd3006;  // SUBA.L adisp
-      16'b1001???111110???: entry = 13'd3010;  // SUBA.L aidx
-      16'b1001???111111000: entry = 13'd3016;  // SUBA.L absw
-      16'b1001???111111001: entry = 13'd3020;  // SUBA.L absl
-      16'b1001???111111010: entry = 13'd3025;  // SUBA.L pcdisp
-      16'b1001???111111011: entry = 13'd3029;  // SUBA.L pcidx
-      16'b1001???111111100: entry = 13'd3035;  // SUBA.L imm
-      16'b1011???011000???: entry = 13'd3038;  // CMPA.W dn
-      16'b1011???011001???: entry = 13'd3040;  // CMPA.W an
-      16'b1011???011010???: entry = 13'd3042;  // CMPA.W aind
-      16'b1011???011011???: entry = 13'd3045;  // CMPA.W apost
-      16'b1011???011100???: entry = 13'd3048;  // CMPA.W apre
-      16'b1011???011101???: entry = 13'd3051;  // CMPA.W adisp
-      16'b1011???011110???: entry = 13'd3055;  // CMPA.W aidx
-      16'b1011???011111000: entry = 13'd3061;  // CMPA.W absw
-      16'b1011???011111001: entry = 13'd3065;  // CMPA.W absl
-      16'b1011???011111010: entry = 13'd3070;  // CMPA.W pcdisp
-      16'b1011???011111011: entry = 13'd3074;  // CMPA.W pcidx
-      16'b1011???011111100: entry = 13'd3080;  // CMPA.W imm
-      16'b1011???111000???: entry = 13'd3083;  // CMPA.L dn
-      16'b1011???111001???: entry = 13'd3085;  // CMPA.L an
-      16'b1011???111010???: entry = 13'd3087;  // CMPA.L aind
-      16'b1011???111011???: entry = 13'd3090;  // CMPA.L apost
-      16'b1011???111100???: entry = 13'd3093;  // CMPA.L apre
-      16'b1011???111101???: entry = 13'd3096;  // CMPA.L adisp
-      16'b1011???111110???: entry = 13'd3100;  // CMPA.L aidx
-      16'b1011???111111000: entry = 13'd3106;  // CMPA.L absw
-      16'b1011???111111001: entry = 13'd3110;  // CMPA.L absl
-      16'b1011???111111010: entry = 13'd3115;  // CMPA.L pcdisp
-      16'b1011???111111011: entry = 13'd3119;  // CMPA.L pcidx
-      16'b1011???111111100: entry = 13'd3125;  // CMPA.L imm
-      16'b0000000000000???: entry = 13'd3128;  // ORI.B dn
-      16'b0000000000010???: entry = 13'd3130;  // ORI.B aind
-      16'b0000000000011???: entry = 13'd3134;  // ORI.B apost
-      16'b0000000000100???: entry = 13'd3138;  // ORI.B apre
-      16'b0000000000101???: entry = 13'd3142;  // ORI.B adisp
-      16'b0000000000110???: entry = 13'd3147;  // ORI.B aidx
-      16'b0000000000111000: entry = 13'd3154;  // ORI.B absw
-      16'b0000000000111001: entry = 13'd3159;  // ORI.B absl
-      16'b0000000001000???: entry = 13'd3165;  // ORI.W dn
-      16'b0000000001010???: entry = 13'd3167;  // ORI.W aind
-      16'b0000000001011???: entry = 13'd3171;  // ORI.W apost
-      16'b0000000001100???: entry = 13'd3175;  // ORI.W apre
-      16'b0000000001101???: entry = 13'd3179;  // ORI.W adisp
-      16'b0000000001110???: entry = 13'd3184;  // ORI.W aidx
-      16'b0000000001111000: entry = 13'd3191;  // ORI.W absw
-      16'b0000000001111001: entry = 13'd3196;  // ORI.W absl
-      16'b0000000010000???: entry = 13'd3202;  // ORI.L dn
-      16'b0000000010010???: entry = 13'd3205;  // ORI.L aind
-      16'b0000000010011???: entry = 13'd3212;  // ORI.L apost
-      16'b0000000010100???: entry = 13'd3219;  // ORI.L apre
-      16'b0000000010101???: entry = 13'd3226;  // ORI.L adisp
-      16'b0000000010110???: entry = 13'd3234;  // ORI.L aidx
-      16'b0000000010111000: entry = 13'd3244;  // ORI.L absw
-      16'b0000000010111001: entry = 13'd3252;  // ORI.L absl
-      16'b0000001000000???: entry = 13'd3261;  // ANDI.B dn
-      16'b0000001000010???: entry = 13'd3263;  // ANDI.B aind
-      16'b0000001000011???: entry = 13'd3267;  // ANDI.B apost
-      16'b0000001000100???: entry = 13'd3271;  // ANDI.B apre
-      16'b0000001000101???: entry = 13'd3275;  // ANDI.B adisp
-      16'b0000001000110???: entry = 13'd3280;  // ANDI.B aidx
-      16'b0000001000111000: entry = 13'd3287;  // ANDI.B absw
-      16'b0000001000111001: entry = 13'd3292;  // ANDI.B absl
-      16'b0000001001000???: entry = 13'd3298;  // ANDI.W dn
-      16'b0000001001010???: entry = 13'd3300;  // ANDI.W aind
-      16'b0000001001011???: entry = 13'd3304;  // ANDI.W apost
-      16'b0000001001100???: entry = 13'd3308;  // ANDI.W apre
-      16'b0000001001101???: entry = 13'd3312;  // ANDI.W adisp
-      16'b0000001001110???: entry = 13'd3317;  // ANDI.W aidx
-      16'b0000001001111000: entry = 13'd3324;  // ANDI.W absw
-      16'b0000001001111001: entry = 13'd3329;  // ANDI.W absl
-      16'b0000001010000???: entry = 13'd3335;  // ANDI.L dn
-      16'b0000001010010???: entry = 13'd3338;  // ANDI.L aind
-      16'b0000001010011???: entry = 13'd3345;  // ANDI.L apost
-      16'b0000001010100???: entry = 13'd3352;  // ANDI.L apre
-      16'b0000001010101???: entry = 13'd3359;  // ANDI.L adisp
-      16'b0000001010110???: entry = 13'd3367;  // ANDI.L aidx
-      16'b0000001010111000: entry = 13'd3377;  // ANDI.L absw
-      16'b0000001010111001: entry = 13'd3385;  // ANDI.L absl
-      16'b0000010000000???: entry = 13'd3394;  // SUBI.B dn
-      16'b0000010000010???: entry = 13'd3396;  // SUBI.B aind
-      16'b0000010000011???: entry = 13'd3400;  // SUBI.B apost
-      16'b0000010000100???: entry = 13'd3404;  // SUBI.B apre
-      16'b0000010000101???: entry = 13'd3408;  // SUBI.B adisp
-      16'b0000010000110???: entry = 13'd3413;  // SUBI.B aidx
-      16'b0000010000111000: entry = 13'd3420;  // SUBI.B absw
-      16'b0000010000111001: entry = 13'd3425;  // SUBI.B absl
-      16'b0000010001000???: entry = 13'd3431;  // SUBI.W dn
-      16'b0000010001010???: entry = 13'd3433;  // SUBI.W aind
-      16'b0000010001011???: entry = 13'd3437;  // SUBI.W apost
-      16'b0000010001100???: entry = 13'd3441;  // SUBI.W apre
-      16'b0000010001101???: entry = 13'd3445;  // SUBI.W adisp
-      16'b0000010001110???: entry = 13'd3450;  // SUBI.W aidx
-      16'b0000010001111000: entry = 13'd3457;  // SUBI.W absw
-      16'b0000010001111001: entry = 13'd3462;  // SUBI.W absl
-      16'b0000010010000???: entry = 13'd3468;  // SUBI.L dn
-      16'b0000010010010???: entry = 13'd3471;  // SUBI.L aind
-      16'b0000010010011???: entry = 13'd3478;  // SUBI.L apost
-      16'b0000010010100???: entry = 13'd3485;  // SUBI.L apre
-      16'b0000010010101???: entry = 13'd3492;  // SUBI.L adisp
-      16'b0000010010110???: entry = 13'd3500;  // SUBI.L aidx
-      16'b0000010010111000: entry = 13'd3510;  // SUBI.L absw
-      16'b0000010010111001: entry = 13'd3518;  // SUBI.L absl
-      16'b0000011000000???: entry = 13'd3527;  // ADDI.B dn
-      16'b0000011000010???: entry = 13'd3529;  // ADDI.B aind
-      16'b0000011000011???: entry = 13'd3533;  // ADDI.B apost
-      16'b0000011000100???: entry = 13'd3537;  // ADDI.B apre
-      16'b0000011000101???: entry = 13'd3541;  // ADDI.B adisp
-      16'b0000011000110???: entry = 13'd3546;  // ADDI.B aidx
-      16'b0000011000111000: entry = 13'd3553;  // ADDI.B absw
-      16'b0000011000111001: entry = 13'd3558;  // ADDI.B absl
-      16'b0000011001000???: entry = 13'd3564;  // ADDI.W dn
-      16'b0000011001010???: entry = 13'd3566;  // ADDI.W aind
-      16'b0000011001011???: entry = 13'd3570;  // ADDI.W apost
-      16'b0000011001100???: entry = 13'd3574;  // ADDI.W apre
-      16'b0000011001101???: entry = 13'd3578;  // ADDI.W adisp
-      16'b0000011001110???: entry = 13'd3583;  // ADDI.W aidx
-      16'b0000011001111000: entry = 13'd3590;  // ADDI.W absw
-      16'b0000011001111001: entry = 13'd3595;  // ADDI.W absl
-      16'b0000011010000???: entry = 13'd3601;  // ADDI.L dn
-      16'b0000011010010???: entry = 13'd3604;  // ADDI.L aind
-      16'b0000011010011???: entry = 13'd3611;  // ADDI.L apost
-      16'b0000011010100???: entry = 13'd3618;  // ADDI.L apre
-      16'b0000011010101???: entry = 13'd3625;  // ADDI.L adisp
-      16'b0000011010110???: entry = 13'd3633;  // ADDI.L aidx
-      16'b0000011010111000: entry = 13'd3643;  // ADDI.L absw
-      16'b0000011010111001: entry = 13'd3651;  // ADDI.L absl
-      16'b0000101000000???: entry = 13'd3660;  // EORI.B dn
-      16'b0000101000010???: entry = 13'd3662;  // EORI.B aind
-      16'b0000101000011???: entry = 13'd3666;  // EORI.B apost
-      16'b0000101000100???: entry = 13'd3670;  // EORI.B apre
-      16'b0000101000101???: entry = 13'd3674;  // EORI.B adisp
-      16'b0000101000110???: entry = 13'd3679;  // EORI.B aidx
-      16'b0000101000111000: entry = 13'd3686;  // EORI.B absw
-      16'b0000101000111001: entry = 13'd3691;  // EORI.B absl
-      16'b0000101001000???: entry = 13'd3697;  // EORI.W dn
-      16'b0000101001010???: entry = 13'd3699;  // EORI.W aind
-      16'b0000101001011???: entry = 13'd3703;  // EORI.W apost
-      16'b0000101001100???: entry = 13'd3707;  // EORI.W apre
-      16'b0000101001101???: entry = 13'd3711;  // EORI.W adisp
-      16'b0000101001110???: entry = 13'd3716;  // EORI.W aidx
-      16'b0000101001111000: entry = 13'd3723;  // EORI.W absw
-      16'b0000101001111001: entry = 13'd3728;  // EORI.W absl
-      16'b0000101010000???: entry = 13'd3734;  // EORI.L dn
-      16'b0000101010010???: entry = 13'd3737;  // EORI.L aind
-      16'b0000101010011???: entry = 13'd3744;  // EORI.L apost
-      16'b0000101010100???: entry = 13'd3751;  // EORI.L apre
-      16'b0000101010101???: entry = 13'd3758;  // EORI.L adisp
-      16'b0000101010110???: entry = 13'd3766;  // EORI.L aidx
-      16'b0000101010111000: entry = 13'd3776;  // EORI.L absw
-      16'b0000101010111001: entry = 13'd3784;  // EORI.L absl
-      16'b0000110000000???: entry = 13'd3793;  // CMPI.B dn
-      16'b0000110000010???: entry = 13'd3795;  // CMPI.B aind
-      16'b0000110000011???: entry = 13'd3798;  // CMPI.B apost
-      16'b0000110000100???: entry = 13'd3801;  // CMPI.B apre
-      16'b0000110000101???: entry = 13'd3804;  // CMPI.B adisp
-      16'b0000110000110???: entry = 13'd3808;  // CMPI.B aidx
-      16'b0000110000111000: entry = 13'd3814;  // CMPI.B absw
-      16'b0000110000111001: entry = 13'd3818;  // CMPI.B absl
-      16'b0000110001000???: entry = 13'd3823;  // CMPI.W dn
-      16'b0000110001010???: entry = 13'd3825;  // CMPI.W aind
-      16'b0000110001011???: entry = 13'd3828;  // CMPI.W apost
-      16'b0000110001100???: entry = 13'd3831;  // CMPI.W apre
-      16'b0000110001101???: entry = 13'd3834;  // CMPI.W adisp
-      16'b0000110001110???: entry = 13'd3838;  // CMPI.W aidx
-      16'b0000110001111000: entry = 13'd3844;  // CMPI.W absw
-      16'b0000110001111001: entry = 13'd3848;  // CMPI.W absl
-      16'b0000110010000???: entry = 13'd3853;  // CMPI.L dn
-      16'b0000110010010???: entry = 13'd3856;  // CMPI.L aind
-      16'b0000110010011???: entry = 13'd3861;  // CMPI.L apost
-      16'b0000110010100???: entry = 13'd3866;  // CMPI.L apre
-      16'b0000110010101???: entry = 13'd3871;  // CMPI.L adisp
-      16'b0000110010110???: entry = 13'd3877;  // CMPI.L aidx
-      16'b0000110010111000: entry = 13'd3885;  // CMPI.L absw
-      16'b0000110010111001: entry = 13'd3891;  // CMPI.L absl
-      16'b0101???000000???: entry = 13'd3898;  // ADDQ.B dn
-      16'b0101???000010???: entry = 13'd3899;  // ADDQ.B aind
-      16'b0101???000011???: entry = 13'd3902;  // ADDQ.B apost
-      16'b0101???000100???: entry = 13'd3905;  // ADDQ.B apre
-      16'b0101???000101???: entry = 13'd3908;  // ADDQ.B adisp
-      16'b0101???000110???: entry = 13'd3912;  // ADDQ.B aidx
-      16'b0101???000111000: entry = 13'd3918;  // ADDQ.B absw
-      16'b0101???000111001: entry = 13'd3922;  // ADDQ.B absl
-      16'b0101???001000???: entry = 13'd3927;  // ADDQ.W dn
-      16'b0101???001001???: entry = 13'd3928;  // ADDQ.W an
-      16'b0101???001010???: entry = 13'd3929;  // ADDQ.W aind
-      16'b0101???001011???: entry = 13'd3932;  // ADDQ.W apost
-      16'b0101???001100???: entry = 13'd3935;  // ADDQ.W apre
-      16'b0101???001101???: entry = 13'd3938;  // ADDQ.W adisp
-      16'b0101???001110???: entry = 13'd3942;  // ADDQ.W aidx
-      16'b0101???001111000: entry = 13'd3948;  // ADDQ.W absw
-      16'b0101???001111001: entry = 13'd3952;  // ADDQ.W absl
-      16'b0101???010000???: entry = 13'd3957;  // ADDQ.L dn
-      16'b0101???010001???: entry = 13'd3958;  // ADDQ.L an
-      16'b0101???010010???: entry = 13'd3959;  // ADDQ.L aind
-      16'b0101???010011???: entry = 13'd3964;  // ADDQ.L apost
-      16'b0101???010100???: entry = 13'd3969;  // ADDQ.L apre
-      16'b0101???010101???: entry = 13'd3974;  // ADDQ.L adisp
-      16'b0101???010110???: entry = 13'd3980;  // ADDQ.L aidx
-      16'b0101???010111000: entry = 13'd3988;  // ADDQ.L absw
-      16'b0101???010111001: entry = 13'd3994;  // ADDQ.L absl
-      16'b0101???100000???: entry = 13'd4001;  // SUBQ.B dn
-      16'b0101???100010???: entry = 13'd4002;  // SUBQ.B aind
-      16'b0101???100011???: entry = 13'd4005;  // SUBQ.B apost
-      16'b0101???100100???: entry = 13'd4008;  // SUBQ.B apre
-      16'b0101???100101???: entry = 13'd4011;  // SUBQ.B adisp
-      16'b0101???100110???: entry = 13'd4015;  // SUBQ.B aidx
-      16'b0101???100111000: entry = 13'd4021;  // SUBQ.B absw
-      16'b0101???100111001: entry = 13'd4025;  // SUBQ.B absl
-      16'b0101???101000???: entry = 13'd4030;  // SUBQ.W dn
-      16'b0101???101001???: entry = 13'd4031;  // SUBQ.W an
-      16'b0101???101010???: entry = 13'd4032;  // SUBQ.W aind
-      16'b0101???101011???: entry = 13'd4035;  // SUBQ.W apost
-      16'b0101???101100???: entry = 13'd4038;  // SUBQ.W apre
-      16'b0101???101101???: entry = 13'd4041;  // SUBQ.W adisp
-      16'b0101???101110???: entry = 13'd4045;  // SUBQ.W aidx
-      16'b0101???101111000: entry = 13'd4051;  // SUBQ.W absw
-      16'b0101???101111001: entry = 13'd4055;  // SUBQ.W absl
-      16'b0101???110000???: entry = 13'd4060;  // SUBQ.L dn
-      16'b0101???110001???: entry = 13'd4061;  // SUBQ.L an
-      16'b0101???110010???: entry = 13'd4062;  // SUBQ.L aind
-      16'b0101???110011???: entry = 13'd4067;  // SUBQ.L apost
-      16'b0101???110100???: entry = 13'd4072;  // SUBQ.L apre
-      16'b0101???110101???: entry = 13'd4077;  // SUBQ.L adisp
-      16'b0101???110110???: entry = 13'd4083;  // SUBQ.L aidx
-      16'b0101???110111000: entry = 13'd4091;  // SUBQ.L absw
-      16'b0101???110111001: entry = 13'd4097;  // SUBQ.L absl
-      16'b0100100010000???: entry = 13'd4104;  // EXT.W
-      16'b0100100011000???: entry = 13'd4105;  // EXT.L
-      16'b0100100001000???: entry = 13'd4106;  // SWAP
-      16'b0100???111010???: entry = 13'd4107;  // LEA aind
-      16'b0100???111101???: entry = 13'd4108;  // LEA adisp
-      16'b0100???111110???: entry = 13'd4110;  // LEA aidx
-      16'b0100???111111000: entry = 13'd4114;  // LEA absw
-      16'b0100???111111001: entry = 13'd4116;  // LEA absl
-      16'b0100???111111010: entry = 13'd4119;  // LEA pcdisp
-      16'b0100???111111011: entry = 13'd4121;  // LEA pcidx
-      16'b0100100001010???: entry = 13'd4125;  // PEA aind
-      16'b0100100001101???: entry = 13'd4128;  // PEA adisp
-      16'b0100100001110???: entry = 13'd4132;  // PEA aidx
-      16'b0100100001111000: entry = 13'd4138;  // PEA absw
-      16'b0100100001111001: entry = 13'd4142;  // PEA absl
-      16'b0100100001111010: entry = 13'd4147;  // PEA pcdisp
-      16'b0100100001111011: entry = 13'd4151;  // PEA pcidx
-      16'b1110???000000???: entry = 13'd4157;  // ASR.B
-      16'b1110???000100???: entry = 13'd4158;  // ASR.B
-      16'b1110???001000???: entry = 13'd4159;  // ASR.W
-      16'b1110???001100???: entry = 13'd4160;  // ASR.W
-      16'b1110???010000???: entry = 13'd4161;  // ASR.L
-      16'b1110???010100???: entry = 13'd4162;  // ASR.L
-      16'b1110???100000???: entry = 13'd4163;  // ASL.B
-      16'b1110???100100???: entry = 13'd4164;  // ASL.B
-      16'b1110???101000???: entry = 13'd4165;  // ASL.W
-      16'b1110???101100???: entry = 13'd4166;  // ASL.W
-      16'b1110???110000???: entry = 13'd4167;  // ASL.L
-      16'b1110???110100???: entry = 13'd4168;  // ASL.L
-      16'b1110???000001???: entry = 13'd4169;  // LSR.B
-      16'b1110???000101???: entry = 13'd4170;  // LSR.B
-      16'b1110???001001???: entry = 13'd4171;  // LSR.W
-      16'b1110???001101???: entry = 13'd4172;  // LSR.W
-      16'b1110???010001???: entry = 13'd4173;  // LSR.L
-      16'b1110???010101???: entry = 13'd4174;  // LSR.L
-      16'b1110???100001???: entry = 13'd4175;  // LSL.B
-      16'b1110???100101???: entry = 13'd4176;  // LSL.B
-      16'b1110???101001???: entry = 13'd4177;  // LSL.W
-      16'b1110???101101???: entry = 13'd4178;  // LSL.W
-      16'b1110???110001???: entry = 13'd4179;  // LSL.L
-      16'b1110???110101???: entry = 13'd4180;  // LSL.L
-      16'b1110???000010???: entry = 13'd4181;  // ROXR.B
-      16'b1110???000110???: entry = 13'd4182;  // ROXR.B
-      16'b1110???001010???: entry = 13'd4183;  // ROXR.W
-      16'b1110???001110???: entry = 13'd4184;  // ROXR.W
-      16'b1110???010010???: entry = 13'd4185;  // ROXR.L
-      16'b1110???010110???: entry = 13'd4186;  // ROXR.L
-      16'b1110???100010???: entry = 13'd4187;  // ROXL.B
-      16'b1110???100110???: entry = 13'd4188;  // ROXL.B
-      16'b1110???101010???: entry = 13'd4189;  // ROXL.W
-      16'b1110???101110???: entry = 13'd4190;  // ROXL.W
-      16'b1110???110010???: entry = 13'd4191;  // ROXL.L
-      16'b1110???110110???: entry = 13'd4192;  // ROXL.L
-      16'b1110???000011???: entry = 13'd4193;  // ROR.B
-      16'b1110???000111???: entry = 13'd4194;  // ROR.B
-      16'b1110???001011???: entry = 13'd4195;  // ROR.W
-      16'b1110???001111???: entry = 13'd4196;  // ROR.W
-      16'b1110???010011???: entry = 13'd4197;  // ROR.L
-      16'b1110???010111???: entry = 13'd4198;  // ROR.L
-      16'b1110???100011???: entry = 13'd4199;  // ROL.B
-      16'b1110???100111???: entry = 13'd4200;  // ROL.B
-      16'b1110???101011???: entry = 13'd4201;  // ROL.W
-      16'b1110???101111???: entry = 13'd4202;  // ROL.W
-      16'b1110???110011???: entry = 13'd4203;  // ROL.L
-      16'b1110???110111???: entry = 13'd4204;  // ROL.L
-      16'b1110000011010???: entry = 13'd4205;  // ASR <memory>
-      16'b1110000011011???: entry = 13'd4208;  // ASR <memory>
-      16'b1110000011100???: entry = 13'd4211;  // ASR <memory>
-      16'b1110000011101???: entry = 13'd4214;  // ASR <memory>
-      16'b1110000011110???: entry = 13'd4218;  // ASR <memory>
-      16'b1110000011111000: entry = 13'd4224;  // ASR <memory>
-      16'b1110000011111001: entry = 13'd4228;  // ASR <memory>
-      16'b1110000111010???: entry = 13'd4233;  // ASL <memory>
-      16'b1110000111011???: entry = 13'd4236;  // ASL <memory>
-      16'b1110000111100???: entry = 13'd4239;  // ASL <memory>
-      16'b1110000111101???: entry = 13'd4242;  // ASL <memory>
-      16'b1110000111110???: entry = 13'd4246;  // ASL <memory>
-      16'b1110000111111000: entry = 13'd4252;  // ASL <memory>
-      16'b1110000111111001: entry = 13'd4256;  // ASL <memory>
-      16'b1110001011010???: entry = 13'd4261;  // LSR <memory>
-      16'b1110001011011???: entry = 13'd4264;  // LSR <memory>
-      16'b1110001011100???: entry = 13'd4267;  // LSR <memory>
-      16'b1110001011101???: entry = 13'd4270;  // LSR <memory>
-      16'b1110001011110???: entry = 13'd4274;  // LSR <memory>
-      16'b1110001011111000: entry = 13'd4280;  // LSR <memory>
-      16'b1110001011111001: entry = 13'd4284;  // LSR <memory>
-      16'b1110001111010???: entry = 13'd4289;  // LSL <memory>
-      16'b1110001111011???: entry = 13'd4292;  // LSL <memory>
-      16'b1110001111100???: entry = 13'd4295;  // LSL <memory>
-      16'b1110001111101???: entry = 13'd4298;  // LSL <memory>
-      16'b1110001111110???: entry = 13'd4302;  // LSL <memory>
-      16'b1110001111111000: entry = 13'd4308;  // LSL <memory>
-      16'b1110001111111001: entry = 13'd4312;  // LSL <memory>
-      16'b1110010011010???: entry = 13'd4317;  // ROXR <memory>
-      16'b1110010011011???: entry = 13'd4320;  // ROXR <memory>
-      16'b1110010011100???: entry = 13'd4323;  // ROXR <memory>
-      16'b1110010011101???: entry = 13'd4326;  // ROXR <memory>
-      16'b1110010011110???: entry = 13'd4330;  // ROXR <memory>
-      16'b1110010011111000: entry = 13'd4336;  // ROXR <memory>
-      16'b1110010011111001: entry = 13'd4340;  // ROXR <memory>
-      16'b1110010111010???: entry = 13'd4345;  // ROXL <memory>
-      16'b1110010111011???: entry = 13'd4348;  // ROXL <memory>
-      16'b1110010111100???: entry = 13'd4351;  // ROXL <memory>
-      16'b1110010111101???: entry = 13'd4354;  // ROXL <memory>
-      16'b1110010111110???: entry = 13'd4358;  // ROXL <memory>
-      16'b1110010111111000: entry = 13'd4364;  // ROXL <memory>
-      16'b1110010111111001: entry = 13'd4368;  // ROXL <memory>
-      16'b1110011011010???: entry = 13'd4373;  // ROR <memory>
-      16'b1110011011011???: entry = 13'd4376;  // ROR <memory>
-      16'b1110011011100???: entry = 13'd4379;  // ROR <memory>
-      16'b1110011011101???: entry = 13'd4382;  // ROR <memory>
-      16'b1110011011110???: entry = 13'd4386;  // ROR <memory>
-      16'b1110011011111000: entry = 13'd4392;  // ROR <memory>
-      16'b1110011011111001: entry = 13'd4396;  // ROR <memory>
-      16'b1110011111010???: entry = 13'd4401;  // ROL <memory>
-      16'b1110011111011???: entry = 13'd4404;  // ROL <memory>
-      16'b1110011111100???: entry = 13'd4407;  // ROL <memory>
-      16'b1110011111101???: entry = 13'd4410;  // ROL <memory>
-      16'b1110011111110???: entry = 13'd4414;  // ROL <memory>
-      16'b1110011111111000: entry = 13'd4420;  // ROL <memory>
-      16'b1110011111111001: entry = 13'd4424;  // ROL <memory>
-      16'b0000???100000???: entry = 13'd4429;  // BTST Dn,dn
-      16'b0000???100010???: entry = 13'd4430;  // BTST Dn,aind
-      16'b0000???100011???: entry = 13'd4432;  // BTST Dn,apost
-      16'b0000???100100???: entry = 13'd4434;  // BTST Dn,apre
-      16'b0000???100101???: entry = 13'd4436;  // BTST Dn,adisp
-      16'b0000???100110???: entry = 13'd4439;  // BTST Dn,aidx
-      16'b0000???100111000: entry = 13'd4444;  // BTST Dn,absw
-      16'b0000???100111001: entry = 13'd4447;  // BTST Dn,absl
-      16'b0000???100111010: entry = 13'd4451;  // BTST Dn,pcdisp
-      16'b0000???100111011: entry = 13'd4454;  // BTST Dn,pcidx
-      16'b0000???100111100: entry = 13'd4459;  // BTST Dn,imm
-      16'b0000100000000???: entry = 13'd4461;  // BTST #,dn
-      16'b0000100000010???: entry = 13'd4463;  // BTST #,aind
-      16'b0000100000011???: entry = 13'd4466;  // BTST #,apost
-      16'b0000100000100???: entry = 13'd4469;  // BTST #,apre
-      16'b0000100000101???: entry = 13'd4472;  // BTST #,adisp
-      16'b0000100000110???: entry = 13'd4476;  // BTST #,aidx
-      16'b0000100000111000: entry = 13'd4482;  // BTST #,absw
-      16'b0000100000111001: entry = 13'd4486;  // BTST #,absl
-      16'b0000100000111010: entry = 13'd4491;  // BTST #,pcdisp
-      16'b0000100000111011: entry = 13'd4495;  // BTST #,pcidx
-      16'b0000100000111100: entry = 13'd4501;  // BTST #,imm
-      16'b0000???101000???: entry = 13'd4504;  // BCHG Dn,dn
-      16'b0000???101010???: entry = 13'd4505;  // BCHG Dn,aind
-      16'b0000???101011???: entry = 13'd4508;  // BCHG Dn,apost
-      16'b0000???101100???: entry = 13'd4511;  // BCHG Dn,apre
-      16'b0000???101101???: entry = 13'd4514;  // BCHG Dn,adisp
-      16'b0000???101110???: entry = 13'd4518;  // BCHG Dn,aidx
-      16'b0000???101111000: entry = 13'd4524;  // BCHG Dn,absw
-      16'b0000???101111001: entry = 13'd4528;  // BCHG Dn,absl
-      16'b0000100001000???: entry = 13'd4533;  // BCHG #,dn
-      16'b0000100001010???: entry = 13'd4535;  // BCHG #,aind
-      16'b0000100001011???: entry = 13'd4539;  // BCHG #,apost
-      16'b0000100001100???: entry = 13'd4543;  // BCHG #,apre
-      16'b0000100001101???: entry = 13'd4547;  // BCHG #,adisp
-      16'b0000100001110???: entry = 13'd4552;  // BCHG #,aidx
-      16'b0000100001111000: entry = 13'd4559;  // BCHG #,absw
-      16'b0000100001111001: entry = 13'd4564;  // BCHG #,absl
-      16'b0000???110000???: entry = 13'd4570;  // BCLR Dn,dn
-      16'b0000???110010???: entry = 13'd4571;  // BCLR Dn,aind
-      16'b0000???110011???: entry = 13'd4574;  // BCLR Dn,apost
-      16'b0000???110100???: entry = 13'd4577;  // BCLR Dn,apre
-      16'b0000???110101???: entry = 13'd4580;  // BCLR Dn,adisp
-      16'b0000???110110???: entry = 13'd4584;  // BCLR Dn,aidx
-      16'b0000???110111000: entry = 13'd4590;  // BCLR Dn,absw
-      16'b0000???110111001: entry = 13'd4594;  // BCLR Dn,absl
-      16'b0000100010000???: entry = 13'd4599;  // BCLR #,dn
-      16'b0000100010010???: entry = 13'd4601;  // BCLR #,aind
-      16'b0000100010011???: entry = 13'd4605;  // BCLR #,apost
-      16'b0000100010100???: entry = 13'd4609;  // BCLR #,apre
-      16'b0000100010101???: entry = 13'd4613;  // BCLR #,adisp
-      16'b0000100010110???: entry = 13'd4618;  // BCLR #,aidx
-      16'b0000100010111000: entry = 13'd4625;  // BCLR #,absw
-      16'b0000100010111001: entry = 13'd4630;  // BCLR #,absl
-      16'b0000???111000???: entry = 13'd4636;  // BSET Dn,dn
-      16'b0000???111010???: entry = 13'd4637;  // BSET Dn,aind
-      16'b0000???111011???: entry = 13'd4640;  // BSET Dn,apost
-      16'b0000???111100???: entry = 13'd4643;  // BSET Dn,apre
-      16'b0000???111101???: entry = 13'd4646;  // BSET Dn,adisp
-      16'b0000???111110???: entry = 13'd4650;  // BSET Dn,aidx
-      16'b0000???111111000: entry = 13'd4656;  // BSET Dn,absw
-      16'b0000???111111001: entry = 13'd4660;  // BSET Dn,absl
-      16'b0000100011000???: entry = 13'd4665;  // BSET #,dn
-      16'b0000100011010???: entry = 13'd4667;  // BSET #,aind
-      16'b0000100011011???: entry = 13'd4671;  // BSET #,apost
-      16'b0000100011100???: entry = 13'd4675;  // BSET #,apre
-      16'b0000100011101???: entry = 13'd4679;  // BSET #,adisp
-      16'b0000100011110???: entry = 13'd4684;  // BSET #,aidx
-      16'b0000100011111000: entry = 13'd4691;  // BSET #,absw
-      16'b0000100011111001: entry = 13'd4696;  // BSET #,absl
-      16'b0101????11000???: entry = 13'd4702;  // Scc dn
-      16'b0101????11010???: entry = 13'd4703;  // Scc aind
-      16'b0101????11011???: entry = 13'd4706;  // Scc apost
-      16'b0101????11100???: entry = 13'd4709;  // Scc apre
-      16'b0101????11101???: entry = 13'd4712;  // Scc adisp
-      16'b0101????11110???: entry = 13'd4716;  // Scc aidx
-      16'b0101????11111000: entry = 13'd4722;  // Scc absw
-      16'b0101????11111001: entry = 13'd4726;  // Scc absl
-      16'b0100000000000???: entry = 13'd4731;  // NEGX.B dn
-      16'b0100000000010???: entry = 13'd4732;  // NEGX.B aind
-      16'b0100000000011???: entry = 13'd4735;  // NEGX.B apost
-      16'b0100000000100???: entry = 13'd4738;  // NEGX.B apre
-      16'b0100000000101???: entry = 13'd4741;  // NEGX.B adisp
-      16'b0100000000110???: entry = 13'd4745;  // NEGX.B aidx
-      16'b0100000000111000: entry = 13'd4751;  // NEGX.B absw
-      16'b0100000000111001: entry = 13'd4755;  // NEGX.B absl
-      16'b0100000001000???: entry = 13'd4760;  // NEGX.W dn
-      16'b0100000001010???: entry = 13'd4761;  // NEGX.W aind
-      16'b0100000001011???: entry = 13'd4764;  // NEGX.W apost
-      16'b0100000001100???: entry = 13'd4767;  // NEGX.W apre
-      16'b0100000001101???: entry = 13'd4770;  // NEGX.W adisp
-      16'b0100000001110???: entry = 13'd4774;  // NEGX.W aidx
-      16'b0100000001111000: entry = 13'd4780;  // NEGX.W absw
-      16'b0100000001111001: entry = 13'd4784;  // NEGX.W absl
-      16'b0100000010000???: entry = 13'd4789;  // NEGX.L dn
-      16'b0100000010010???: entry = 13'd4790;  // NEGX.L aind
-      16'b0100000010011???: entry = 13'd4795;  // NEGX.L apost
-      16'b0100000010100???: entry = 13'd4800;  // NEGX.L apre
-      16'b0100000010101???: entry = 13'd4805;  // NEGX.L adisp
-      16'b0100000010110???: entry = 13'd4811;  // NEGX.L aidx
-      16'b0100000010111000: entry = 13'd4819;  // NEGX.L absw
-      16'b0100000010111001: entry = 13'd4825;  // NEGX.L absl
-      16'b0100101011000???: entry = 13'd4832;  // TAS dn
-      16'b0100101011010???: entry = 13'd4833;  // TAS aind
-      16'b0100101011011???: entry = 13'd4835;  // TAS apost
-      16'b0100101011100???: entry = 13'd4837;  // TAS apre
-      16'b0100101011101???: entry = 13'd4839;  // TAS adisp
-      16'b0100101011110???: entry = 13'd4842;  // TAS aidx
-      16'b0100101011111000: entry = 13'd4847;  // TAS absw
-      16'b0100101011111001: entry = 13'd4850;  // TAS absl
-      16'b0110000100000000: entry = 13'd4861;  // BSR.W
-      16'b01100001????????: entry = 13'd4854;  // BSR.B
-      16'b0101????11001???: entry = 13'd4868;  // DBcc
-      16'b0110????00000000: entry = 13'd4900;  // Bcc.W
-      16'b0110????????????: entry = 13'd4892;  // Bcc.B
-      16'b0100111011010???: entry = 13'd4909;  // JMP aind
-      16'b0100111011101???: entry = 13'd4912;  // JMP adisp
-      16'b0100111011110???: entry = 13'd4916;  // JMP aidx
-      16'b0100111011111000: entry = 13'd4921;  // JMP absw
-      16'b0100111011111001: entry = 13'd4925;  // JMP absl
-      16'b0100111011111010: entry = 13'd4929;  // JMP pcdisp
-      16'b0100111011111011: entry = 13'd4933;  // JMP pcidx
-      16'b0100111010010???: entry = 13'd4938;  // JSR aind
-      16'b0100111010101???: entry = 13'd4944;  // JSR adisp
-      16'b0100111010110???: entry = 13'd4951;  // JSR aidx
-      16'b0100111010111000: entry = 13'd4959;  // JSR absw
-      16'b0100111010111001: entry = 13'd4966;  // JSR absl
-      16'b0100111010111010: entry = 13'd4973;  // JSR pcdisp
-      16'b0100111010111011: entry = 13'd4980;  // JSR pcidx
-      16'b0100111001110101: entry = 13'd4988;  // RTS
-      16'b0100111001110111: entry = 13'd4993;  // RTR
-      16'b0100111001010???: entry = 13'd4999;  // LINK
-      16'b0100111001011???: entry = 13'd5003;  // UNLK
-      16'b0100101011111100: entry = 13'd5018;  // ILLEGAL
-      16'b1010????????????: entry = 13'd5021;  // line A
-      16'b1111????????????: entry = 13'd5024;  // line F
-      16'b010011100100????: entry = 13'd5027;  // TRAP
-      16'b0100111001110110: entry = 13'd5030;  // TRAPV
-      16'b0100111001110011: entry = 13'd5041;  // RTE
-      16'b0100000011000???: entry = 13'd5097;  // MOVE SR,dn
-      16'b0100000011010???: entry = 13'd5101;  // MOVE SR,aind
-      16'b0100000011011???: entry = 13'd5107;  // MOVE SR,apost
-      16'b0100000011100???: entry = 13'd5113;  // MOVE SR,apre
-      16'b0100000011101???: entry = 13'd5119;  // MOVE SR,adisp
-      16'b0100000011110???: entry = 13'd5126;  // MOVE SR,aidx
-      16'b0100000011111000: entry = 13'd5136;  // MOVE SR,absw
-      16'b0100000011111001: entry = 13'd5144;  // MOVE SR,absl
-      16'b0100001011000???: entry = 13'd5153;  // MOVE CCR,dn
-      16'b0100001011010???: entry = 13'd5154;  // MOVE CCR,aind
-      16'b0100001011011???: entry = 13'd5157;  // MOVE CCR,apost
-      16'b0100001011100???: entry = 13'd5160;  // MOVE CCR,apre
-      16'b0100001011101???: entry = 13'd5163;  // MOVE CCR,adisp
-      16'b0100001011110???: entry = 13'd5167;  // MOVE CCR,aidx
-      16'b0100001011111000: entry = 13'd5173;  // MOVE CCR,absw
-      16'b0100001011111001: entry = 13'd5177;  // MOVE CCR,absl
-      16'b0100010011000???: entry = 13'd5182;  // MOVE dn,CCR
-      16'b0100010011010???: entry = 13'd5186;  // MOVE aind,CCR
-      16'b0100010011011???: entry = 13'd5190;  // MOVE apost,CCR
-      16'b0100010011100???: entry = 13'd5194;  // MOVE apre,CCR
-      16'b0100010011101???: entry = 13'd5198;  // MOVE adisp,CCR
-      16'b0100010011110???: entry = 13'd5203;  // MOVE aidx,CCR
-      16'b0100010011111000: entry = 13'd5210;  // MOVE absw,CCR
-      16'b0100010011111001: entry = 13'd5215;  // MOVE absl,CCR
-      16'b0100010011111010: entry = 13'd5221;  // MOVE pcdisp,CCR
-      16'b0100010011111011: entry = 13'd5226;  // MOVE pcidx,CCR
-      16'b0100010011111100: entry = 13'd5233;  // MOVE imm,CCR
-      16'b0100011011000???: entry = 13'd5237;  // MOVE dn,SR
-      16'b0100011011010???: entry = 13'd5244;  // MOVE aind,SR
-      16'b0100011011011???: entry = 13'd5252;  // MOVE apost,SR
-      16'b0100011011100???: entry = 13'd5260;  // MOVE apre,SR
-      16'b0100011011101???: entry = 13'd5268;  // MOVE adisp,SR
-      16'b0100011011110???: entry = 13'd5277;  // MOVE aidx,SR
-      16'b0100011011111000: entry = 13'd5287;  // MOVE absw,SR
-      16'b0100011011111001: entry = 13'd5295;  // MOVE absl,SR
-      16'b0100011011111010: entry = 13'd5304;  // MOVE pcdisp,SR
-      16'b0100011011111011: entry = 13'd5313;  // MOVE pcidx,SR
-      16'b0100011011111100: entry = 13'd5323;  // MOVE imm,SR
-      16'b0000000000111100: entry = 13'd5330;  // ORI to CCR
-      16'b0000000001111100: entry = 13'd5333;  // ORI to SR
-      16'b0000001000111100: entry = 13'd5339;  // ANDI to CCR
-      16'b0000001001111100: entry = 13'd5342;  // ANDI to SR
-      16'b0000101000111100: entry = 13'd5349;  // EORI to CCR
-      16'b0000101001111100: entry = 13'd5352;  // EORI to SR
-      16'b0100111001100???: entry = 13'd5359;  // MOVE An,USP
-      16'b0100111001101???: entry = 13'd5363;  // MOVE USP,An
-      16'b0100111001110000: entry = 13'd5367;  // RESET
-      16'b0100111001110010: entry = 13'd5377;  // STOP
-      16'b0100???110000???: entry = 13'd5382;  // CHK dn
-      16'b0100???110010???: entry = 13'd5391;  // CHK aind
-      16'b0100???110011???: entry = 13'd5401;  // CHK apost
-      16'b0100???110100???: entry = 13'd5411;  // CHK apre
-      16'b0100???110101???: entry = 13'd5421;  // CHK adisp
-      16'b0100???110110???: entry = 13'd5431;  // CHK aidx
-      16'b0100???110111000: entry = 13'd5443;  // CHK absw
-      16'b0100???110111001: entry = 13'd5453;  // CHK absl
-      16'b0100???110111010: entry = 13'd5465;  // CHK pcdisp
-      16'b0100???110111011: entry = 13'd5475;  // CHK pcidx
-      16'b0100???110111100: entry = 13'd5487;  // CHK imm
-      16'b1100???101000???: entry = 13'd5510;  // EXG dd
-      16'b1100???101001???: entry = 13'd5513;  // EXG aa
-      16'b1100???110001???: entry = 13'd5516;  // EXG da
-      16'b1101???100000???: entry = 13'd5519;  // ADDX.B Dy,Dx
-      16'b1101???100001???: entry = 13'd5520;  // ADDX.B -(Ay),-(Ax)
-      16'b1101???101000???: entry = 13'd5524;  // ADDX.W Dy,Dx
-      16'b1101???101001???: entry = 13'd5525;  // ADDX.W -(Ay),-(Ax)
-      16'b1101???110000???: entry = 13'd5529;  // ADDX.L Dy,Dx
-      16'b1101???110001???: entry = 13'd5530;  // ADDX.L -(Ay),-(Ax)
-      16'b1001???100000???: entry = 13'd5537;  // SUBX.B Dy,Dx
-      16'b1001???100001???: entry = 13'd5538;  // SUBX.B -(Ay),-(Ax)
-      16'b1001???101000???: entry = 13'd5542;  // SUBX.W Dy,Dx
-      16'b1001???101001???: entry = 13'd5543;  // SUBX.W -(Ay),-(Ax)
-      16'b1001???110000???: entry = 13'd5547;  // SUBX.L Dy,Dx
-      16'b1001???110001???: entry = 13'd5548;  // SUBX.L -(Ay),-(Ax)
-      16'b1011???100001???: entry = 13'd5555;  // CMPM.B
-      16'b1011???101001???: entry = 13'd5558;  // CMPM.W
-      16'b1011???110001???: entry = 13'd5561;  // CMPM.L
-      16'b1100???100000???: entry = 13'd5566;  // ABCD Dy,Dx
-      16'b1100???100001???: entry = 13'd5567;  // ABCD -(Ay),-(Ax)
-      16'b1000???100000???: entry = 13'd5571;  // SBCD Dy,Dx
-      16'b1000???100001???: entry = 13'd5572;  // SBCD -(Ay),-(Ax)
-      16'b0100100000000???: entry = 13'd5576;  // NBCD dn
-      16'b0100100000010???: entry = 13'd5577;  // NBCD aind
-      16'b0100100000011???: entry = 13'd5580;  // NBCD apost
-      16'b0100100000100???: entry = 13'd5583;  // NBCD apre
-      16'b0100100000101???: entry = 13'd5586;  // NBCD adisp
-      16'b0100100000110???: entry = 13'd5590;  // NBCD aidx
-      16'b0100100000111000: entry = 13'd5596;  // NBCD absw
-      16'b0100100000111001: entry = 13'd5600;  // NBCD absl
-      16'b1100???011000???: entry = 13'd5605;  // MULU dn
-      16'b1100???011010???: entry = 13'd5607;  // MULU aind
-      16'b1100???011011???: entry = 13'd5610;  // MULU apost
-      16'b1100???011100???: entry = 13'd5613;  // MULU apre
-      16'b1100???011101???: entry = 13'd5616;  // MULU adisp
-      16'b1100???011110???: entry = 13'd5620;  // MULU aidx
-      16'b1100???011111000: entry = 13'd5626;  // MULU absw
-      16'b1100???011111001: entry = 13'd5630;  // MULU absl
-      16'b1100???011111010: entry = 13'd5635;  // MULU pcdisp
-      16'b1100???011111011: entry = 13'd5639;  // MULU pcidx
-      16'b1100???011111100: entry = 13'd5645;  // MULU imm
-      16'b1100???111000???: entry = 13'd5648;  // MULS dn
-      16'b1100???111010???: entry = 13'd5650;  // MULS aind
-      16'b1100???111011???: entry = 13'd5653;  // MULS apost
-      16'b1100???111100???: entry = 13'd5656;  // MULS apre
-      16'b1100???111101???: entry = 13'd5659;  // MULS adisp
-      16'b1100???111110???: entry = 13'd5663;  // MULS aidx
-      16'b1100???111111000: entry = 13'd5669;  // MULS absw
-      16'b1100???111111001: entry = 13'd5673;  // MULS absl
-      16'b1100???111111010: entry = 13'd5678;  // MULS pcdisp
-      16'b1100???111111011: entry = 13'd5682;  // MULS pcidx
-      16'b1100???111111100: entry = 13'd5688;  // MULS imm
-      16'b1000???011000???: entry = 13'd5691;  // DIVU dn
-      16'b1000???011010???: entry = 13'd5708;  // DIVU aind
-      16'b1000???011011???: entry = 13'd5724;  // DIVU apost
-      16'b1000???011100???: entry = 13'd5740;  // DIVU apre
-      16'b1000???011101???: entry = 13'd5756;  // DIVU adisp
-      16'b1000???011110???: entry = 13'd5774;  // DIVU aidx
-      16'b1000???011111000: entry = 13'd5794;  // DIVU absw
-      16'b1000???011111001: entry = 13'd5812;  // DIVU absl
-      16'b1000???011111010: entry = 13'd5830;  // DIVU pcdisp
-      16'b1000???011111011: entry = 13'd5848;  // DIVU pcidx
-      16'b1000???011111100: entry = 13'd5868;  // DIVU imm
-      16'b1000???111000???: entry = 13'd5884;  // DIVS dn
-      16'b1000???111010???: entry = 13'd5900;  // DIVS aind
-      16'b1000???111011???: entry = 13'd5916;  // DIVS apost
-      16'b1000???111100???: entry = 13'd5932;  // DIVS apre
-      16'b1000???111101???: entry = 13'd5948;  // DIVS adisp
-      16'b1000???111110???: entry = 13'd5966;  // DIVS aidx
-      16'b1000???111111000: entry = 13'd5986;  // DIVS absw
-      16'b1000???111111001: entry = 13'd6004;  // DIVS absl
-      16'b1000???111111010: entry = 13'd6022;  // DIVS pcdisp
-      16'b1000???111111011: entry = 13'd6040;  // DIVS pcidx
-      16'b1000???111111100: entry = 13'd6060;  // DIVS imm
-      16'b0000???100001???: entry = 13'd6079;  // MOVEP.W memory to Dx
-      16'b0000???110001???: entry = 13'd6083;  // MOVEP.W Dx to memory
-      16'b0000???101001???: entry = 13'd6087;  // MOVEP.L memory to Dx
-      16'b0000???111001???: entry = 13'd6093;  // MOVEP.L Dx to memory
-      16'b0100100010010???: entry = 13'd6099;  // MOVEM.W from aind
-      16'b0100100010100???: entry = 13'd6102;  // MOVEM.W from apre
-      16'b0100100010101???: entry = 13'd6106;  // MOVEM.W from adisp
-      16'b0100100010110???: entry = 13'd6110;  // MOVEM.W from aidx
-      16'b0100100010111000: entry = 13'd6116;  // MOVEM.W from absw
-      16'b0100100010111001: entry = 13'd6120;  // MOVEM.W from absl
-      16'b0100110010010???: entry = 13'd6126;  // MOVEM.W to aind
-      16'b0100110010011???: entry = 13'd6131;  // MOVEM.W to apost
-      16'b0100110010101???: entry = 13'd6135;  // MOVEM.W to adisp
-      16'b0100110010110???: entry = 13'd6141;  // MOVEM.W to aidx
-      16'b0100110010111000: entry = 13'd6149;  // MOVEM.W to absw
-      16'b0100110010111001: entry = 13'd6155;  // MOVEM.W to absl
-      16'b0100110010111010: entry = 13'd6161;  // MOVEM.W to pcdisp
-      16'b0100110010111011: entry = 13'd6167;  // MOVEM.W to pcidx
-      16'b0100100011010???: entry = 13'd6175;  // MOVEM.L from aind
-      16'b0100100011100???: entry = 13'd6179;  // MOVEM.L from apre
-      16'b0100100011101???: entry = 13'd6183;  // MOVEM.L from adisp
-      16'b0100100011110???: entry = 13'd6189;  // MOVEM.L from aidx
-      16'b0100100011111000: entry = 13'd6197;  // MOVEM.L from absw
-      16'b0100100011111001: entry = 13'd6203;  // MOVEM.L from absl
-      16'b0100110011010???: entry = 13'd6209;  // MOVEM.L to aind
-      16'b0100110011011???: entry = 13'd6214;  // MOVEM.L to apost
-      16'b0100110011101???: entry = 13'd6220;  // MOVEM.L to adisp
-      16'b0100110011110???: entry = 13'd6226;  // MOVEM.L to aidx
-      16'b0100110011111000: entry = 13'd6234;  // MOVEM.L to absw
-      16'b0100110011111001: entry = 13'd6240;  // MOVEM.L to absl
-      16'b0100110011111010: entry = 13'd6248;  // MOVEM.L to pcdisp
-      16'b0100110011111011: entry = 13'd6254;  // MOVEM.L to pcidx
-      16'b0100111001110100: entry = 13'd6262;  // RTD
-      16'b0100100001001???: entry = 13'd6268;  // BKPT
-      16'b0100111001111010: entry = 13'd6271;  // MOVEC Rc,Rn
-      16'b0100111001111011: entry = 13'd6280;  // MOVEC Rn,Rc
-      16'b0000111000010???: entry = 13'd6290;  // MOVES.B aind
-      16'b0000111000011???: entry = 13'd6302;  // MOVES.B apost
-      16'b0000111000100???: entry = 13'd6314;  // MOVES.B apre
-      16'b0000111000101???: entry = 13'd6326;  // MOVES.B adisp
-      16'b0000111000110???: entry = 13'd6340;  // MOVES.B aidx
-      16'b0000111000111000: entry = 13'd6358;  // MOVES.B absw
-      16'b0000111000111001: entry = 13'd6372;  // MOVES.B absl
-      16'b0000111001010???: entry = 13'd6388;  // MOVES.W aind
-      16'b0000111001011???: entry = 13'd6400;  // MOVES.W apost
-      16'b0000111001100???: entry = 13'd6412;  // MOVES.W apre
-      16'b0000111001101???: entry = 13'd6424;  // MOVES.W adisp
-      16'b0000111001110???: entry = 13'd6438;  // MOVES.W aidx
-      16'b0000111001111000: entry = 13'd6456;  // MOVES.W absw
-      16'b0000111001111001: entry = 13'd6470;  // MOVES.W absl
-      16'b0000111010010???: entry = 13'd6486;  // MOVES.L aind
-      16'b0000111010011???: entry = 13'd6500;  // MOVES.L apost
-      16'b0000111010100???: entry = 13'd6514;  // MOVES.L apre
-      16'b0000111010101???: entry = 13'd6528;  // MOVES.L adisp
-      16'b0000111010110???: entry = 13'd6544;  // MOVES.L aidx
-      16'b0000111010111000: entry = 13'd6564;  // MOVES.L absw
-      16'b0000111010111001: entry = 13'd6580;  // MOVES.L absl
+      16'b0100111001110001: begin entry = 13'd10  ; prev = 21'h100800; end  // NOP
+      16'b0110000000000000: begin entry = 13'd13  ; prev = 21'h000807; end  // BRA.W
+      16'b01100000????????: begin entry = 13'd11  ; prev = 21'h000807; end  // BRA.B
+      16'b0111???0????????: begin entry = 13'd17  ; prev = 21'h101000; end  // MOVEQ
+      16'b0001???000000???: begin entry = 13'd18  ; prev = 21'h100000; end  // MOVE.B Dn,Dn
+      16'b0011???000000???: begin entry = 13'd19  ; prev = 21'h100800; end  // MOVE.W Dn,Dn
+      16'b0011???000001???: begin entry = 13'd19  ; prev = 21'h100800; end  // MOVE.W An,Dn
+      16'b0010???000000???: begin entry = 13'd20  ; prev = 21'h101000; end  // MOVE.L Dn,Dn
+      16'b0010???000001???: begin entry = 13'd20  ; prev = 21'h101000; end  // MOVE.L An,Dn
+      16'b0001???010000???: begin entry = 13'd21  ; prev = 21'h016129; end  // MOVE.B reg,aind
+      16'b0001???011000???: begin entry = 13'd23  ; prev = 21'h012129; end  // MOVE.B reg,apost
+      16'b0001???100000???: begin entry = 13'd25  ; prev = 21'h114000; end  // MOVE.B reg,-(An)
+      16'b0001???101000???: begin entry = 13'd27  ; prev = 21'h100800; end  // MOVE.B reg,adisp
+      16'b0001???110000???: begin entry = 13'd30  ; prev = 21'h000807; end  // MOVE.B reg,aidx
+      16'b0001000111000???: begin entry = 13'd35  ; prev = 21'h100800; end  // MOVE.B reg,absw
+      16'b0001001111000???: begin entry = 13'd38  ; prev = 21'h180800; end  // MOVE.B reg,absl
+      16'b0001???000010???: begin entry = 13'd42  ; prev = 21'h086128; end  // MOVE.B aind,dn
+      16'b0001???010010???: begin entry = 13'd44  ; prev = 21'h086128; end  // MOVE.B aind,aind
+      16'b0001???011010???: begin entry = 13'd47  ; prev = 21'h086128; end  // MOVE.B aind,apost
+      16'b0001???100010???: begin entry = 13'd50  ; prev = 21'h086128; end  // MOVE.B aind,apre
+      16'b0001???101010???: begin entry = 13'd53  ; prev = 21'h086128; end  // MOVE.B aind,adisp
+      16'b0001???110010???: begin entry = 13'd57  ; prev = 21'h086128; end  // MOVE.B aind,aidx
+      16'b0001000111010???: begin entry = 13'd63  ; prev = 21'h086128; end  // MOVE.B aind,absw
+      16'b0001001111010???: begin entry = 13'd67  ; prev = 21'h086128; end  // MOVE.B aind,absl
+      16'b0001???000011???: begin entry = 13'd72  ; prev = 21'h082128; end  // MOVE.B apost,dn
+      16'b0001???010011???: begin entry = 13'd74  ; prev = 21'h082128; end  // MOVE.B apost,aind
+      16'b0001???011011???: begin entry = 13'd77  ; prev = 21'h082128; end  // MOVE.B apost,apost
+      16'b0001???100011???: begin entry = 13'd80  ; prev = 21'h082128; end  // MOVE.B apost,apre
+      16'b0001???101011???: begin entry = 13'd83  ; prev = 21'h082128; end  // MOVE.B apost,adisp
+      16'b0001???110011???: begin entry = 13'd87  ; prev = 21'h082128; end  // MOVE.B apost,aidx
+      16'b0001000111011???: begin entry = 13'd93  ; prev = 21'h082128; end  // MOVE.B apost,absw
+      16'b0001001111011???: begin entry = 13'd97  ; prev = 21'h082128; end  // MOVE.B apost,absl
+      16'b0001???000100???: begin entry = 13'd102 ; prev = 21'h084128; end  // MOVE.B apre,dn
+      16'b0001???010100???: begin entry = 13'd104 ; prev = 21'h084128; end  // MOVE.B apre,aind
+      16'b0001???011100???: begin entry = 13'd107 ; prev = 21'h084128; end  // MOVE.B apre,apost
+      16'b0001???100100???: begin entry = 13'd110 ; prev = 21'h084128; end  // MOVE.B apre,apre
+      16'b0001???101100???: begin entry = 13'd113 ; prev = 21'h084128; end  // MOVE.B apre,adisp
+      16'b0001???110100???: begin entry = 13'd117 ; prev = 21'h084128; end  // MOVE.B apre,aidx
+      16'b0001000111100???: begin entry = 13'd123 ; prev = 21'h084128; end  // MOVE.B apre,absw
+      16'b0001001111100???: begin entry = 13'd127 ; prev = 21'h084128; end  // MOVE.B apre,absl
+      16'b0001???000101???: begin entry = 13'd132 ; prev = 21'h100800; end  // MOVE.B adisp,dn
+      16'b0001???010101???: begin entry = 13'd135 ; prev = 21'h100800; end  // MOVE.B adisp,aind
+      16'b0001???011101???: begin entry = 13'd139 ; prev = 21'h100800; end  // MOVE.B adisp,apost
+      16'b0001???100101???: begin entry = 13'd143 ; prev = 21'h100800; end  // MOVE.B adisp,apre
+      16'b0001???101101???: begin entry = 13'd147 ; prev = 21'h100800; end  // MOVE.B adisp,adisp
+      16'b0001???110101???: begin entry = 13'd152 ; prev = 21'h100800; end  // MOVE.B adisp,aidx
+      16'b0001000111101???: begin entry = 13'd159 ; prev = 21'h100800; end  // MOVE.B adisp,absw
+      16'b0001001111101???: begin entry = 13'd164 ; prev = 21'h100800; end  // MOVE.B adisp,absl
+      16'b0001???000110???: begin entry = 13'd170 ; prev = 21'h000807; end  // MOVE.B aidx,dn
+      16'b0001???010110???: begin entry = 13'd175 ; prev = 21'h000807; end  // MOVE.B aidx,aind
+      16'b0001???011110???: begin entry = 13'd181 ; prev = 21'h000807; end  // MOVE.B aidx,apost
+      16'b0001???100110???: begin entry = 13'd187 ; prev = 21'h000807; end  // MOVE.B aidx,apre
+      16'b0001???101110???: begin entry = 13'd193 ; prev = 21'h000807; end  // MOVE.B aidx,adisp
+      16'b0001???110110???: begin entry = 13'd200 ; prev = 21'h000807; end  // MOVE.B aidx,aidx
+      16'b0001000111110???: begin entry = 13'd209 ; prev = 21'h000807; end  // MOVE.B aidx,absw
+      16'b0001001111110???: begin entry = 13'd216 ; prev = 21'h000807; end  // MOVE.B aidx,absl
+      16'b0001???000111000: begin entry = 13'd224 ; prev = 21'h100800; end  // MOVE.B absw,dn
+      16'b0001???010111000: begin entry = 13'd227 ; prev = 21'h100800; end  // MOVE.B absw,aind
+      16'b0001???011111000: begin entry = 13'd231 ; prev = 21'h100800; end  // MOVE.B absw,apost
+      16'b0001???100111000: begin entry = 13'd235 ; prev = 21'h100800; end  // MOVE.B absw,apre
+      16'b0001???101111000: begin entry = 13'd239 ; prev = 21'h100800; end  // MOVE.B absw,adisp
+      16'b0001???110111000: begin entry = 13'd244 ; prev = 21'h100800; end  // MOVE.B absw,aidx
+      16'b0001000111111000: begin entry = 13'd251 ; prev = 21'h100800; end  // MOVE.B absw,absw
+      16'b0001001111111000: begin entry = 13'd256 ; prev = 21'h100800; end  // MOVE.B absw,absl
+      16'b0001???000111001: begin entry = 13'd262 ; prev = 21'h180800; end  // MOVE.B absl,dn
+      16'b0001???010111001: begin entry = 13'd266 ; prev = 21'h180800; end  // MOVE.B absl,aind
+      16'b0001???011111001: begin entry = 13'd271 ; prev = 21'h180800; end  // MOVE.B absl,apost
+      16'b0001???100111001: begin entry = 13'd276 ; prev = 21'h180800; end  // MOVE.B absl,apre
+      16'b0001???101111001: begin entry = 13'd281 ; prev = 21'h180800; end  // MOVE.B absl,adisp
+      16'b0001???110111001: begin entry = 13'd287 ; prev = 21'h180800; end  // MOVE.B absl,aidx
+      16'b0001000111111001: begin entry = 13'd295 ; prev = 21'h180800; end  // MOVE.B absl,absw
+      16'b0001001111111001: begin entry = 13'd301 ; prev = 21'h180800; end  // MOVE.B absl,absl
+      16'b0001???000111010: begin entry = 13'd308 ; prev = 21'h100800; end  // MOVE.B pcdisp,dn
+      16'b0001???010111010: begin entry = 13'd311 ; prev = 21'h100800; end  // MOVE.B pcdisp,aind
+      16'b0001???011111010: begin entry = 13'd315 ; prev = 21'h100800; end  // MOVE.B pcdisp,apost
+      16'b0001???100111010: begin entry = 13'd319 ; prev = 21'h100800; end  // MOVE.B pcdisp,apre
+      16'b0001???101111010: begin entry = 13'd323 ; prev = 21'h100800; end  // MOVE.B pcdisp,adisp
+      16'b0001???110111010: begin entry = 13'd328 ; prev = 21'h100800; end  // MOVE.B pcdisp,aidx
+      16'b0001000111111010: begin entry = 13'd335 ; prev = 21'h100800; end  // MOVE.B pcdisp,absw
+      16'b0001001111111010: begin entry = 13'd340 ; prev = 21'h100800; end  // MOVE.B pcdisp,absl
+      16'b0001???000111011: begin entry = 13'd346 ; prev = 21'h000807; end  // MOVE.B pcidx,dn
+      16'b0001???010111011: begin entry = 13'd351 ; prev = 21'h000807; end  // MOVE.B pcidx,aind
+      16'b0001???011111011: begin entry = 13'd357 ; prev = 21'h000807; end  // MOVE.B pcidx,apost
+      16'b0001???100111011: begin entry = 13'd363 ; prev = 21'h000807; end  // MOVE.B pcidx,apre
+      16'b0001???101111011: begin entry = 13'd369 ; prev = 21'h000807; end  // MOVE.B pcidx,adisp
+      16'b0001???110111011: begin entry = 13'd376 ; prev = 21'h000807; end  // MOVE.B pcidx,aidx
+      16'b0001000111111011: begin entry = 13'd385 ; prev = 21'h000807; end  // MOVE.B pcidx,absw
+      16'b0001001111111011: begin entry = 13'd392 ; prev = 21'h000807; end  // MOVE.B pcidx,absl
+      16'b0001???000111100: begin entry = 13'd400 ; prev = 21'h100800; end  // MOVE.B imm,dn
+      16'b0001???010111100: begin entry = 13'd402 ; prev = 21'h100800; end  // MOVE.B imm,aind
+      16'b0001???011111100: begin entry = 13'd405 ; prev = 21'h100800; end  // MOVE.B imm,apost
+      16'b0001???100111100: begin entry = 13'd408 ; prev = 21'h100800; end  // MOVE.B imm,apre
+      16'b0001???101111100: begin entry = 13'd411 ; prev = 21'h100800; end  // MOVE.B imm,adisp
+      16'b0001???110111100: begin entry = 13'd415 ; prev = 21'h100800; end  // MOVE.B imm,aidx
+      16'b0001000111111100: begin entry = 13'd421 ; prev = 21'h100800; end  // MOVE.B imm,absw
+      16'b0001001111111100: begin entry = 13'd425 ; prev = 21'h100800; end  // MOVE.B imm,absl
+      16'b0011???010000???: begin entry = 13'd430 ; prev = 21'h016929; end  // MOVE.W reg,aind
+      16'b0011???010001???: begin entry = 13'd430 ; prev = 21'h016929; end  // MOVE.W reg,aind
+      16'b0011???011000???: begin entry = 13'd432 ; prev = 21'h012929; end  // MOVE.W reg,apost
+      16'b0011???011001???: begin entry = 13'd432 ; prev = 21'h012929; end  // MOVE.W reg,apost
+      16'b0011???100000???: begin entry = 13'd434 ; prev = 21'h114800; end  // MOVE.W reg,-(An)
+      16'b0011???100001???: begin entry = 13'd434 ; prev = 21'h114800; end  // MOVE.W reg,-(An)
+      16'b0011???101000???: begin entry = 13'd436 ; prev = 21'h100800; end  // MOVE.W reg,adisp
+      16'b0011???101001???: begin entry = 13'd436 ; prev = 21'h100800; end  // MOVE.W reg,adisp
+      16'b0011???110000???: begin entry = 13'd439 ; prev = 21'h000807; end  // MOVE.W reg,aidx
+      16'b0011???110001???: begin entry = 13'd439 ; prev = 21'h000807; end  // MOVE.W reg,aidx
+      16'b0011000111000???: begin entry = 13'd444 ; prev = 21'h100800; end  // MOVE.W reg,absw
+      16'b0011000111001???: begin entry = 13'd444 ; prev = 21'h100800; end  // MOVE.W reg,absw
+      16'b0011001111000???: begin entry = 13'd447 ; prev = 21'h180800; end  // MOVE.W reg,absl
+      16'b0011001111001???: begin entry = 13'd447 ; prev = 21'h180800; end  // MOVE.W reg,absl
+      16'b0011???000010???: begin entry = 13'd451 ; prev = 21'h086928; end  // MOVE.W aind,dn
+      16'b0011???010010???: begin entry = 13'd453 ; prev = 21'h086928; end  // MOVE.W aind,aind
+      16'b0011???011010???: begin entry = 13'd456 ; prev = 21'h086928; end  // MOVE.W aind,apost
+      16'b0011???100010???: begin entry = 13'd459 ; prev = 21'h086928; end  // MOVE.W aind,apre
+      16'b0011???101010???: begin entry = 13'd462 ; prev = 21'h086928; end  // MOVE.W aind,adisp
+      16'b0011???110010???: begin entry = 13'd466 ; prev = 21'h086928; end  // MOVE.W aind,aidx
+      16'b0011000111010???: begin entry = 13'd472 ; prev = 21'h086928; end  // MOVE.W aind,absw
+      16'b0011001111010???: begin entry = 13'd476 ; prev = 21'h086928; end  // MOVE.W aind,absl
+      16'b0011???000011???: begin entry = 13'd481 ; prev = 21'h082928; end  // MOVE.W apost,dn
+      16'b0011???010011???: begin entry = 13'd483 ; prev = 21'h082928; end  // MOVE.W apost,aind
+      16'b0011???011011???: begin entry = 13'd486 ; prev = 21'h082928; end  // MOVE.W apost,apost
+      16'b0011???100011???: begin entry = 13'd489 ; prev = 21'h082928; end  // MOVE.W apost,apre
+      16'b0011???101011???: begin entry = 13'd492 ; prev = 21'h082928; end  // MOVE.W apost,adisp
+      16'b0011???110011???: begin entry = 13'd496 ; prev = 21'h082928; end  // MOVE.W apost,aidx
+      16'b0011000111011???: begin entry = 13'd502 ; prev = 21'h082928; end  // MOVE.W apost,absw
+      16'b0011001111011???: begin entry = 13'd506 ; prev = 21'h082928; end  // MOVE.W apost,absl
+      16'b0011???000100???: begin entry = 13'd511 ; prev = 21'h084928; end  // MOVE.W apre,dn
+      16'b0011???010100???: begin entry = 13'd513 ; prev = 21'h084928; end  // MOVE.W apre,aind
+      16'b0011???011100???: begin entry = 13'd516 ; prev = 21'h084928; end  // MOVE.W apre,apost
+      16'b0011???100100???: begin entry = 13'd519 ; prev = 21'h084928; end  // MOVE.W apre,apre
+      16'b0011???101100???: begin entry = 13'd522 ; prev = 21'h084928; end  // MOVE.W apre,adisp
+      16'b0011???110100???: begin entry = 13'd526 ; prev = 21'h084928; end  // MOVE.W apre,aidx
+      16'b0011000111100???: begin entry = 13'd532 ; prev = 21'h084928; end  // MOVE.W apre,absw
+      16'b0011001111100???: begin entry = 13'd536 ; prev = 21'h084928; end  // MOVE.W apre,absl
+      16'b0011???000101???: begin entry = 13'd541 ; prev = 21'h100800; end  // MOVE.W adisp,dn
+      16'b0011???010101???: begin entry = 13'd544 ; prev = 21'h100800; end  // MOVE.W adisp,aind
+      16'b0011???011101???: begin entry = 13'd548 ; prev = 21'h100800; end  // MOVE.W adisp,apost
+      16'b0011???100101???: begin entry = 13'd552 ; prev = 21'h100800; end  // MOVE.W adisp,apre
+      16'b0011???101101???: begin entry = 13'd556 ; prev = 21'h100800; end  // MOVE.W adisp,adisp
+      16'b0011???110101???: begin entry = 13'd561 ; prev = 21'h100800; end  // MOVE.W adisp,aidx
+      16'b0011000111101???: begin entry = 13'd568 ; prev = 21'h100800; end  // MOVE.W adisp,absw
+      16'b0011001111101???: begin entry = 13'd573 ; prev = 21'h100800; end  // MOVE.W adisp,absl
+      16'b0011???000110???: begin entry = 13'd579 ; prev = 21'h000807; end  // MOVE.W aidx,dn
+      16'b0011???010110???: begin entry = 13'd584 ; prev = 21'h000807; end  // MOVE.W aidx,aind
+      16'b0011???011110???: begin entry = 13'd590 ; prev = 21'h000807; end  // MOVE.W aidx,apost
+      16'b0011???100110???: begin entry = 13'd596 ; prev = 21'h000807; end  // MOVE.W aidx,apre
+      16'b0011???101110???: begin entry = 13'd602 ; prev = 21'h000807; end  // MOVE.W aidx,adisp
+      16'b0011???110110???: begin entry = 13'd609 ; prev = 21'h000807; end  // MOVE.W aidx,aidx
+      16'b0011000111110???: begin entry = 13'd618 ; prev = 21'h000807; end  // MOVE.W aidx,absw
+      16'b0011001111110???: begin entry = 13'd625 ; prev = 21'h000807; end  // MOVE.W aidx,absl
+      16'b0011???000111000: begin entry = 13'd633 ; prev = 21'h100800; end  // MOVE.W absw,dn
+      16'b0011???010111000: begin entry = 13'd636 ; prev = 21'h100800; end  // MOVE.W absw,aind
+      16'b0011???011111000: begin entry = 13'd640 ; prev = 21'h100800; end  // MOVE.W absw,apost
+      16'b0011???100111000: begin entry = 13'd644 ; prev = 21'h100800; end  // MOVE.W absw,apre
+      16'b0011???101111000: begin entry = 13'd648 ; prev = 21'h100800; end  // MOVE.W absw,adisp
+      16'b0011???110111000: begin entry = 13'd653 ; prev = 21'h100800; end  // MOVE.W absw,aidx
+      16'b0011000111111000: begin entry = 13'd660 ; prev = 21'h100800; end  // MOVE.W absw,absw
+      16'b0011001111111000: begin entry = 13'd665 ; prev = 21'h100800; end  // MOVE.W absw,absl
+      16'b0011???000111001: begin entry = 13'd671 ; prev = 21'h180800; end  // MOVE.W absl,dn
+      16'b0011???010111001: begin entry = 13'd675 ; prev = 21'h180800; end  // MOVE.W absl,aind
+      16'b0011???011111001: begin entry = 13'd680 ; prev = 21'h180800; end  // MOVE.W absl,apost
+      16'b0011???100111001: begin entry = 13'd685 ; prev = 21'h180800; end  // MOVE.W absl,apre
+      16'b0011???101111001: begin entry = 13'd690 ; prev = 21'h180800; end  // MOVE.W absl,adisp
+      16'b0011???110111001: begin entry = 13'd696 ; prev = 21'h180800; end  // MOVE.W absl,aidx
+      16'b0011000111111001: begin entry = 13'd704 ; prev = 21'h180800; end  // MOVE.W absl,absw
+      16'b0011001111111001: begin entry = 13'd710 ; prev = 21'h180800; end  // MOVE.W absl,absl
+      16'b0011???000111010: begin entry = 13'd717 ; prev = 21'h100800; end  // MOVE.W pcdisp,dn
+      16'b0011???010111010: begin entry = 13'd720 ; prev = 21'h100800; end  // MOVE.W pcdisp,aind
+      16'b0011???011111010: begin entry = 13'd724 ; prev = 21'h100800; end  // MOVE.W pcdisp,apost
+      16'b0011???100111010: begin entry = 13'd728 ; prev = 21'h100800; end  // MOVE.W pcdisp,apre
+      16'b0011???101111010: begin entry = 13'd732 ; prev = 21'h100800; end  // MOVE.W pcdisp,adisp
+      16'b0011???110111010: begin entry = 13'd737 ; prev = 21'h100800; end  // MOVE.W pcdisp,aidx
+      16'b0011000111111010: begin entry = 13'd744 ; prev = 21'h100800; end  // MOVE.W pcdisp,absw
+      16'b0011001111111010: begin entry = 13'd749 ; prev = 21'h100800; end  // MOVE.W pcdisp,absl
+      16'b0011???000111011: begin entry = 13'd755 ; prev = 21'h000807; end  // MOVE.W pcidx,dn
+      16'b0011???010111011: begin entry = 13'd760 ; prev = 21'h000807; end  // MOVE.W pcidx,aind
+      16'b0011???011111011: begin entry = 13'd766 ; prev = 21'h000807; end  // MOVE.W pcidx,apost
+      16'b0011???100111011: begin entry = 13'd772 ; prev = 21'h000807; end  // MOVE.W pcidx,apre
+      16'b0011???101111011: begin entry = 13'd778 ; prev = 21'h000807; end  // MOVE.W pcidx,adisp
+      16'b0011???110111011: begin entry = 13'd785 ; prev = 21'h000807; end  // MOVE.W pcidx,aidx
+      16'b0011000111111011: begin entry = 13'd794 ; prev = 21'h000807; end  // MOVE.W pcidx,absw
+      16'b0011001111111011: begin entry = 13'd801 ; prev = 21'h000807; end  // MOVE.W pcidx,absl
+      16'b0011???000111100: begin entry = 13'd809 ; prev = 21'h100800; end  // MOVE.W imm,dn
+      16'b0011???010111100: begin entry = 13'd811 ; prev = 21'h100800; end  // MOVE.W imm,aind
+      16'b0011???011111100: begin entry = 13'd814 ; prev = 21'h100800; end  // MOVE.W imm,apost
+      16'b0011???100111100: begin entry = 13'd817 ; prev = 21'h100800; end  // MOVE.W imm,apre
+      16'b0011???101111100: begin entry = 13'd820 ; prev = 21'h100800; end  // MOVE.W imm,adisp
+      16'b0011???110111100: begin entry = 13'd824 ; prev = 21'h100800; end  // MOVE.W imm,aidx
+      16'b0011000111111100: begin entry = 13'd830 ; prev = 21'h100800; end  // MOVE.W imm,absw
+      16'b0011001111111100: begin entry = 13'd834 ; prev = 21'h100800; end  // MOVE.W imm,absl
+      16'b0010???010000???: begin entry = 13'd839 ; prev = 21'h017129; end  // MOVE.L reg,aind
+      16'b0010???010001???: begin entry = 13'd839 ; prev = 21'h017129; end  // MOVE.L reg,aind
+      16'b0010???011000???: begin entry = 13'd842 ; prev = 21'h011129; end  // MOVE.L reg,apost
+      16'b0010???011001???: begin entry = 13'd842 ; prev = 21'h011129; end  // MOVE.L reg,apost
+      16'b0010???100000???: begin entry = 13'd845 ; prev = 21'h115000; end  // MOVE.L reg,-(An)
+      16'b0010???100001???: begin entry = 13'd845 ; prev = 21'h115000; end  // MOVE.L reg,-(An)
+      16'b0010???101000???: begin entry = 13'd848 ; prev = 21'h100800; end  // MOVE.L reg,adisp
+      16'b0010???101001???: begin entry = 13'd848 ; prev = 21'h100800; end  // MOVE.L reg,adisp
+      16'b0010???110000???: begin entry = 13'd852 ; prev = 21'h000807; end  // MOVE.L reg,aidx
+      16'b0010???110001???: begin entry = 13'd852 ; prev = 21'h000807; end  // MOVE.L reg,aidx
+      16'b0010000111000???: begin entry = 13'd858 ; prev = 21'h100800; end  // MOVE.L reg,absw
+      16'b0010000111001???: begin entry = 13'd858 ; prev = 21'h100800; end  // MOVE.L reg,absw
+      16'b0010001111000???: begin entry = 13'd862 ; prev = 21'h180800; end  // MOVE.L reg,absl
+      16'b0010001111001???: begin entry = 13'd862 ; prev = 21'h180800; end  // MOVE.L reg,absl
+      16'b0010???000010???: begin entry = 13'd867 ; prev = 21'h087128; end  // MOVE.L aind,dn
+      16'b0010???010010???: begin entry = 13'd870 ; prev = 21'h087128; end  // MOVE.L aind,aind
+      16'b0010???011010???: begin entry = 13'd875 ; prev = 21'h087128; end  // MOVE.L aind,apost
+      16'b0010???100010???: begin entry = 13'd880 ; prev = 21'h087128; end  // MOVE.L aind,apre
+      16'b0010???101010???: begin entry = 13'd885 ; prev = 21'h087128; end  // MOVE.L aind,adisp
+      16'b0010???110010???: begin entry = 13'd891 ; prev = 21'h087128; end  // MOVE.L aind,aidx
+      16'b0010000111010???: begin entry = 13'd899 ; prev = 21'h087128; end  // MOVE.L aind,absw
+      16'b0010001111010???: begin entry = 13'd905 ; prev = 21'h087128; end  // MOVE.L aind,absl
+      16'b0010???000011???: begin entry = 13'd912 ; prev = 21'h081128; end  // MOVE.L apost,dn
+      16'b0010???010011???: begin entry = 13'd915 ; prev = 21'h081128; end  // MOVE.L apost,aind
+      16'b0010???011011???: begin entry = 13'd920 ; prev = 21'h081128; end  // MOVE.L apost,apost
+      16'b0010???100011???: begin entry = 13'd925 ; prev = 21'h081128; end  // MOVE.L apost,apre
+      16'b0010???101011???: begin entry = 13'd930 ; prev = 21'h081128; end  // MOVE.L apost,adisp
+      16'b0010???110011???: begin entry = 13'd936 ; prev = 21'h081128; end  // MOVE.L apost,aidx
+      16'b0010000111011???: begin entry = 13'd944 ; prev = 21'h081128; end  // MOVE.L apost,absw
+      16'b0010001111011???: begin entry = 13'd950 ; prev = 21'h081128; end  // MOVE.L apost,absl
+      16'b0010???000100???: begin entry = 13'd957 ; prev = 21'h085128; end  // MOVE.L apre,dn
+      16'b0010???010100???: begin entry = 13'd960 ; prev = 21'h085128; end  // MOVE.L apre,aind
+      16'b0010???011100???: begin entry = 13'd965 ; prev = 21'h085128; end  // MOVE.L apre,apost
+      16'b0010???100100???: begin entry = 13'd970 ; prev = 21'h085128; end  // MOVE.L apre,apre
+      16'b0010???101100???: begin entry = 13'd975 ; prev = 21'h085128; end  // MOVE.L apre,adisp
+      16'b0010???110100???: begin entry = 13'd981 ; prev = 21'h085128; end  // MOVE.L apre,aidx
+      16'b0010000111100???: begin entry = 13'd989 ; prev = 21'h085128; end  // MOVE.L apre,absw
+      16'b0010001111100???: begin entry = 13'd995 ; prev = 21'h085128; end  // MOVE.L apre,absl
+      16'b0010???000101???: begin entry = 13'd1002; prev = 21'h100800; end  // MOVE.L adisp,dn
+      16'b0010???010101???: begin entry = 13'd1006; prev = 21'h100800; end  // MOVE.L adisp,aind
+      16'b0010???011101???: begin entry = 13'd1012; prev = 21'h100800; end  // MOVE.L adisp,apost
+      16'b0010???100101???: begin entry = 13'd1018; prev = 21'h100800; end  // MOVE.L adisp,apre
+      16'b0010???101101???: begin entry = 13'd1024; prev = 21'h100800; end  // MOVE.L adisp,adisp
+      16'b0010???110101???: begin entry = 13'd1031; prev = 21'h100800; end  // MOVE.L adisp,aidx
+      16'b0010000111101???: begin entry = 13'd1040; prev = 21'h100800; end  // MOVE.L adisp,absw
+      16'b0010001111101???: begin entry = 13'd1047; prev = 21'h100800; end  // MOVE.L adisp,absl
+      16'b0010???000110???: begin entry = 13'd1055; prev = 21'h000807; end  // MOVE.L aidx,dn
+      16'b0010???010110???: begin entry = 13'd1061; prev = 21'h000807; end  // MOVE.L aidx,aind
+      16'b0010???011110???: begin entry = 13'd1069; prev = 21'h000807; end  // MOVE.L aidx,apost
+      16'b0010???100110???: begin entry = 13'd1077; prev = 21'h000807; end  // MOVE.L aidx,apre
+      16'b0010???101110???: begin entry = 13'd1085; prev = 21'h000807; end  // MOVE.L aidx,adisp
+      16'b0010???110110???: begin entry = 13'd1094; prev = 21'h000807; end  // MOVE.L aidx,aidx
+      16'b0010000111110???: begin entry = 13'd1105; prev = 21'h000807; end  // MOVE.L aidx,absw
+      16'b0010001111110???: begin entry = 13'd1114; prev = 21'h000807; end  // MOVE.L aidx,absl
+      16'b0010???000111000: begin entry = 13'd1124; prev = 21'h100800; end  // MOVE.L absw,dn
+      16'b0010???010111000: begin entry = 13'd1128; prev = 21'h100800; end  // MOVE.L absw,aind
+      16'b0010???011111000: begin entry = 13'd1134; prev = 21'h100800; end  // MOVE.L absw,apost
+      16'b0010???100111000: begin entry = 13'd1140; prev = 21'h100800; end  // MOVE.L absw,apre
+      16'b0010???101111000: begin entry = 13'd1146; prev = 21'h100800; end  // MOVE.L absw,adisp
+      16'b0010???110111000: begin entry = 13'd1153; prev = 21'h100800; end  // MOVE.L absw,aidx
+      16'b0010000111111000: begin entry = 13'd1162; prev = 21'h100800; end  // MOVE.L absw,absw
+      16'b0010001111111000: begin entry = 13'd1169; prev = 21'h100800; end  // MOVE.L absw,absl
+      16'b0010???000111001: begin entry = 13'd1177; prev = 21'h180800; end  // MOVE.L absl,dn
+      16'b0010???010111001: begin entry = 13'd1182; prev = 21'h180800; end  // MOVE.L absl,aind
+      16'b0010???011111001: begin entry = 13'd1189; prev = 21'h180800; end  // MOVE.L absl,apost
+      16'b0010???100111001: begin entry = 13'd1196; prev = 21'h180800; end  // MOVE.L absl,apre
+      16'b0010???101111001: begin entry = 13'd1203; prev = 21'h180800; end  // MOVE.L absl,adisp
+      16'b0010???110111001: begin entry = 13'd1211; prev = 21'h180800; end  // MOVE.L absl,aidx
+      16'b0010000111111001: begin entry = 13'd1221; prev = 21'h180800; end  // MOVE.L absl,absw
+      16'b0010001111111001: begin entry = 13'd1229; prev = 21'h180800; end  // MOVE.L absl,absl
+      16'b0010???000111010: begin entry = 13'd1238; prev = 21'h100800; end  // MOVE.L pcdisp,dn
+      16'b0010???010111010: begin entry = 13'd1242; prev = 21'h100800; end  // MOVE.L pcdisp,aind
+      16'b0010???011111010: begin entry = 13'd1248; prev = 21'h100800; end  // MOVE.L pcdisp,apost
+      16'b0010???100111010: begin entry = 13'd1254; prev = 21'h100800; end  // MOVE.L pcdisp,apre
+      16'b0010???101111010: begin entry = 13'd1260; prev = 21'h100800; end  // MOVE.L pcdisp,adisp
+      16'b0010???110111010: begin entry = 13'd1267; prev = 21'h100800; end  // MOVE.L pcdisp,aidx
+      16'b0010000111111010: begin entry = 13'd1276; prev = 21'h100800; end  // MOVE.L pcdisp,absw
+      16'b0010001111111010: begin entry = 13'd1283; prev = 21'h100800; end  // MOVE.L pcdisp,absl
+      16'b0010???000111011: begin entry = 13'd1291; prev = 21'h000807; end  // MOVE.L pcidx,dn
+      16'b0010???010111011: begin entry = 13'd1297; prev = 21'h000807; end  // MOVE.L pcidx,aind
+      16'b0010???011111011: begin entry = 13'd1305; prev = 21'h000807; end  // MOVE.L pcidx,apost
+      16'b0010???100111011: begin entry = 13'd1313; prev = 21'h000807; end  // MOVE.L pcidx,apre
+      16'b0010???101111011: begin entry = 13'd1321; prev = 21'h000807; end  // MOVE.L pcidx,adisp
+      16'b0010???110111011: begin entry = 13'd1330; prev = 21'h000807; end  // MOVE.L pcidx,aidx
+      16'b0010000111111011: begin entry = 13'd1341; prev = 21'h000807; end  // MOVE.L pcidx,absw
+      16'b0010001111111011: begin entry = 13'd1350; prev = 21'h000807; end  // MOVE.L pcidx,absl
+      16'b0010???000111100: begin entry = 13'd1360; prev = 21'h100800; end  // MOVE.L imm,dn
+      16'b0010???010111100: begin entry = 13'd1363; prev = 21'h100800; end  // MOVE.L imm,aind
+      16'b0010???011111100: begin entry = 13'd1368; prev = 21'h100800; end  // MOVE.L imm,apost
+      16'b0010???100111100: begin entry = 13'd1373; prev = 21'h100800; end  // MOVE.L imm,apre
+      16'b0010???101111100: begin entry = 13'd1378; prev = 21'h100800; end  // MOVE.L imm,adisp
+      16'b0010???110111100: begin entry = 13'd1384; prev = 21'h100800; end  // MOVE.L imm,aidx
+      16'b0010000111111100: begin entry = 13'd1392; prev = 21'h100800; end  // MOVE.L imm,absw
+      16'b0010001111111100: begin entry = 13'd1398; prev = 21'h100800; end  // MOVE.L imm,absl
+      16'b0011???001000???: begin entry = 13'd1405; prev = 21'h101000; end  // MOVEA.W dn
+      16'b0011???001001???: begin entry = 13'd1406; prev = 21'h101000; end  // MOVEA.W an
+      16'b0011???001010???: begin entry = 13'd1407; prev = 21'h086928; end  // MOVEA.W aind
+      16'b0011???001011???: begin entry = 13'd1409; prev = 21'h082928; end  // MOVEA.W apost
+      16'b0011???001100???: begin entry = 13'd1411; prev = 21'h084928; end  // MOVEA.W apre
+      16'b0011???001101???: begin entry = 13'd1413; prev = 21'h100800; end  // MOVEA.W adisp
+      16'b0011???001110???: begin entry = 13'd1416; prev = 21'h000807; end  // MOVEA.W aidx
+      16'b0011???001111000: begin entry = 13'd1421; prev = 21'h100800; end  // MOVEA.W absw
+      16'b0011???001111001: begin entry = 13'd1424; prev = 21'h180800; end  // MOVEA.W absl
+      16'b0011???001111010: begin entry = 13'd1428; prev = 21'h100800; end  // MOVEA.W pcdisp
+      16'b0011???001111011: begin entry = 13'd1431; prev = 21'h000807; end  // MOVEA.W pcidx
+      16'b0011???001111100: begin entry = 13'd1436; prev = 21'h100800; end  // MOVEA.W imm
+      16'b0010???001000???: begin entry = 13'd1438; prev = 21'h101000; end  // MOVEA.L dn
+      16'b0010???001001???: begin entry = 13'd1439; prev = 21'h101000; end  // MOVEA.L an
+      16'b0010???001010???: begin entry = 13'd1440; prev = 21'h087128; end  // MOVEA.L aind
+      16'b0010???001011???: begin entry = 13'd1443; prev = 21'h081128; end  // MOVEA.L apost
+      16'b0010???001100???: begin entry = 13'd1446; prev = 21'h085128; end  // MOVEA.L apre
+      16'b0010???001101???: begin entry = 13'd1449; prev = 21'h100800; end  // MOVEA.L adisp
+      16'b0010???001110???: begin entry = 13'd1453; prev = 21'h000807; end  // MOVEA.L aidx
+      16'b0010???001111000: begin entry = 13'd1459; prev = 21'h100800; end  // MOVEA.L absw
+      16'b0010???001111001: begin entry = 13'd1463; prev = 21'h180800; end  // MOVEA.L absl
+      16'b0010???001111010: begin entry = 13'd1468; prev = 21'h100800; end  // MOVEA.L pcdisp
+      16'b0010???001111011: begin entry = 13'd1472; prev = 21'h000807; end  // MOVEA.L pcidx
+      16'b0010???001111100: begin entry = 13'd1478; prev = 21'h100800; end  // MOVEA.L imm
+      16'b0100101000000???: begin entry = 13'd1481; prev = 21'h100000; end  // TST.B dn
+      16'b0100101000010???: begin entry = 13'd1482; prev = 21'h086128; end  // TST.B aind
+      16'b0100101000011???: begin entry = 13'd1484; prev = 21'h082128; end  // TST.B apost
+      16'b0100101000100???: begin entry = 13'd1486; prev = 21'h084128; end  // TST.B apre
+      16'b0100101000101???: begin entry = 13'd1488; prev = 21'h100800; end  // TST.B adisp
+      16'b0100101000110???: begin entry = 13'd1491; prev = 21'h000807; end  // TST.B aidx
+      16'b0100101000111000: begin entry = 13'd1496; prev = 21'h100800; end  // TST.B absw
+      16'b0100101000111001: begin entry = 13'd1499; prev = 21'h180800; end  // TST.B absl
+      16'b0100101001000???: begin entry = 13'd1503; prev = 21'h100800; end  // TST.W dn
+      16'b0100101001010???: begin entry = 13'd1504; prev = 21'h086928; end  // TST.W aind
+      16'b0100101001011???: begin entry = 13'd1506; prev = 21'h082928; end  // TST.W apost
+      16'b0100101001100???: begin entry = 13'd1508; prev = 21'h084928; end  // TST.W apre
+      16'b0100101001101???: begin entry = 13'd1510; prev = 21'h100800; end  // TST.W adisp
+      16'b0100101001110???: begin entry = 13'd1513; prev = 21'h000807; end  // TST.W aidx
+      16'b0100101001111000: begin entry = 13'd1518; prev = 21'h100800; end  // TST.W absw
+      16'b0100101001111001: begin entry = 13'd1521; prev = 21'h180800; end  // TST.W absl
+      16'b0100101010000???: begin entry = 13'd1525; prev = 21'h101000; end  // TST.L dn
+      16'b0100101010010???: begin entry = 13'd1526; prev = 21'h087128; end  // TST.L aind
+      16'b0100101010011???: begin entry = 13'd1529; prev = 21'h081128; end  // TST.L apost
+      16'b0100101010100???: begin entry = 13'd1532; prev = 21'h085128; end  // TST.L apre
+      16'b0100101010101???: begin entry = 13'd1535; prev = 21'h100800; end  // TST.L adisp
+      16'b0100101010110???: begin entry = 13'd1539; prev = 21'h000807; end  // TST.L aidx
+      16'b0100101010111000: begin entry = 13'd1545; prev = 21'h100800; end  // TST.L absw
+      16'b0100101010111001: begin entry = 13'd1549; prev = 21'h180800; end  // TST.L absl
+      16'b0100010000000???: begin entry = 13'd1554; prev = 21'h100000; end  // NEG.B dn
+      16'b0100010000010???: begin entry = 13'd1555; prev = 21'h086128; end  // NEG.B aind
+      16'b0100010000011???: begin entry = 13'd1558; prev = 21'h082128; end  // NEG.B apost
+      16'b0100010000100???: begin entry = 13'd1561; prev = 21'h084128; end  // NEG.B apre
+      16'b0100010000101???: begin entry = 13'd1564; prev = 21'h100800; end  // NEG.B adisp
+      16'b0100010000110???: begin entry = 13'd1568; prev = 21'h000807; end  // NEG.B aidx
+      16'b0100010000111000: begin entry = 13'd1574; prev = 21'h100800; end  // NEG.B absw
+      16'b0100010000111001: begin entry = 13'd1578; prev = 21'h180800; end  // NEG.B absl
+      16'b0100010001000???: begin entry = 13'd1583; prev = 21'h100800; end  // NEG.W dn
+      16'b0100010001010???: begin entry = 13'd1584; prev = 21'h086928; end  // NEG.W aind
+      16'b0100010001011???: begin entry = 13'd1587; prev = 21'h082928; end  // NEG.W apost
+      16'b0100010001100???: begin entry = 13'd1590; prev = 21'h084928; end  // NEG.W apre
+      16'b0100010001101???: begin entry = 13'd1593; prev = 21'h100800; end  // NEG.W adisp
+      16'b0100010001110???: begin entry = 13'd1597; prev = 21'h000807; end  // NEG.W aidx
+      16'b0100010001111000: begin entry = 13'd1603; prev = 21'h100800; end  // NEG.W absw
+      16'b0100010001111001: begin entry = 13'd1607; prev = 21'h180800; end  // NEG.W absl
+      16'b0100010010000???: begin entry = 13'd1612; prev = 21'h101000; end  // NEG.L dn
+      16'b0100010010010???: begin entry = 13'd1613; prev = 21'h087128; end  // NEG.L aind
+      16'b0100010010011???: begin entry = 13'd1618; prev = 21'h081128; end  // NEG.L apost
+      16'b0100010010100???: begin entry = 13'd1623; prev = 21'h085128; end  // NEG.L apre
+      16'b0100010010101???: begin entry = 13'd1628; prev = 21'h100800; end  // NEG.L adisp
+      16'b0100010010110???: begin entry = 13'd1634; prev = 21'h000807; end  // NEG.L aidx
+      16'b0100010010111000: begin entry = 13'd1642; prev = 21'h100800; end  // NEG.L absw
+      16'b0100010010111001: begin entry = 13'd1648; prev = 21'h180800; end  // NEG.L absl
+      16'b0100011000000???: begin entry = 13'd1655; prev = 21'h100000; end  // NOT.B dn
+      16'b0100011000010???: begin entry = 13'd1656; prev = 21'h086128; end  // NOT.B aind
+      16'b0100011000011???: begin entry = 13'd1659; prev = 21'h082128; end  // NOT.B apost
+      16'b0100011000100???: begin entry = 13'd1662; prev = 21'h084128; end  // NOT.B apre
+      16'b0100011000101???: begin entry = 13'd1665; prev = 21'h100800; end  // NOT.B adisp
+      16'b0100011000110???: begin entry = 13'd1669; prev = 21'h000807; end  // NOT.B aidx
+      16'b0100011000111000: begin entry = 13'd1675; prev = 21'h100800; end  // NOT.B absw
+      16'b0100011000111001: begin entry = 13'd1679; prev = 21'h180800; end  // NOT.B absl
+      16'b0100011001000???: begin entry = 13'd1684; prev = 21'h100800; end  // NOT.W dn
+      16'b0100011001010???: begin entry = 13'd1685; prev = 21'h086928; end  // NOT.W aind
+      16'b0100011001011???: begin entry = 13'd1688; prev = 21'h082928; end  // NOT.W apost
+      16'b0100011001100???: begin entry = 13'd1691; prev = 21'h084928; end  // NOT.W apre
+      16'b0100011001101???: begin entry = 13'd1694; prev = 21'h100800; end  // NOT.W adisp
+      16'b0100011001110???: begin entry = 13'd1698; prev = 21'h000807; end  // NOT.W aidx
+      16'b0100011001111000: begin entry = 13'd1704; prev = 21'h100800; end  // NOT.W absw
+      16'b0100011001111001: begin entry = 13'd1708; prev = 21'h180800; end  // NOT.W absl
+      16'b0100011010000???: begin entry = 13'd1713; prev = 21'h101000; end  // NOT.L dn
+      16'b0100011010010???: begin entry = 13'd1714; prev = 21'h087128; end  // NOT.L aind
+      16'b0100011010011???: begin entry = 13'd1719; prev = 21'h081128; end  // NOT.L apost
+      16'b0100011010100???: begin entry = 13'd1724; prev = 21'h085128; end  // NOT.L apre
+      16'b0100011010101???: begin entry = 13'd1729; prev = 21'h100800; end  // NOT.L adisp
+      16'b0100011010110???: begin entry = 13'd1735; prev = 21'h000807; end  // NOT.L aidx
+      16'b0100011010111000: begin entry = 13'd1743; prev = 21'h100800; end  // NOT.L absw
+      16'b0100011010111001: begin entry = 13'd1749; prev = 21'h180800; end  // NOT.L absl
+      16'b0100001000000???: begin entry = 13'd1756; prev = 21'h100000; end  // CLR.B dn
+      16'b0100001000010???: begin entry = 13'd1757; prev = 21'h106000; end  // CLR.B aind
+      16'b0100001000011???: begin entry = 13'd1759; prev = 21'h102000; end  // CLR.B apost
+      16'b0100001000100???: begin entry = 13'd1761; prev = 21'h104000; end  // CLR.B apre
+      16'b0100001000101???: begin entry = 13'd1763; prev = 21'h100800; end  // CLR.B adisp
+      16'b0100001000110???: begin entry = 13'd1766; prev = 21'h000807; end  // CLR.B aidx
+      16'b0100001000111000: begin entry = 13'd1771; prev = 21'h100800; end  // CLR.B absw
+      16'b0100001000111001: begin entry = 13'd1774; prev = 21'h180800; end  // CLR.B absl
+      16'b0100001001000???: begin entry = 13'd1778; prev = 21'h100800; end  // CLR.W dn
+      16'b0100001001010???: begin entry = 13'd1779; prev = 21'h106800; end  // CLR.W aind
+      16'b0100001001011???: begin entry = 13'd1781; prev = 21'h102800; end  // CLR.W apost
+      16'b0100001001100???: begin entry = 13'd1783; prev = 21'h104800; end  // CLR.W apre
+      16'b0100001001101???: begin entry = 13'd1785; prev = 21'h100800; end  // CLR.W adisp
+      16'b0100001001110???: begin entry = 13'd1788; prev = 21'h000807; end  // CLR.W aidx
+      16'b0100001001111000: begin entry = 13'd1793; prev = 21'h100800; end  // CLR.W absw
+      16'b0100001001111001: begin entry = 13'd1796; prev = 21'h180800; end  // CLR.W absl
+      16'b0100001010000???: begin entry = 13'd1800; prev = 21'h101000; end  // CLR.L dn
+      16'b0100001010010???: begin entry = 13'd1801; prev = 21'h107000; end  // CLR.L aind
+      16'b0100001010011???: begin entry = 13'd1804; prev = 21'h103000; end  // CLR.L apost
+      16'b0100001010100???: begin entry = 13'd1807; prev = 21'h105000; end  // CLR.L apre
+      16'b0100001010101???: begin entry = 13'd1810; prev = 21'h100800; end  // CLR.L adisp
+      16'b0100001010110???: begin entry = 13'd1814; prev = 21'h000807; end  // CLR.L aidx
+      16'b0100001010111000: begin entry = 13'd1820; prev = 21'h100800; end  // CLR.L absw
+      16'b0100001010111001: begin entry = 13'd1824; prev = 21'h180800; end  // CLR.L absl
+      16'b1101???000000???: begin entry = 13'd1829; prev = 21'h100000; end  // ADD.B dn,Dn
+      16'b1101???000010???: begin entry = 13'd1830; prev = 21'h086128; end  // ADD.B aind,Dn
+      16'b1101???000011???: begin entry = 13'd1832; prev = 21'h082128; end  // ADD.B apost,Dn
+      16'b1101???000100???: begin entry = 13'd1834; prev = 21'h084128; end  // ADD.B apre,Dn
+      16'b1101???000101???: begin entry = 13'd1836; prev = 21'h100800; end  // ADD.B adisp,Dn
+      16'b1101???000110???: begin entry = 13'd1839; prev = 21'h000807; end  // ADD.B aidx,Dn
+      16'b1101???000111000: begin entry = 13'd1844; prev = 21'h100800; end  // ADD.B absw,Dn
+      16'b1101???000111001: begin entry = 13'd1847; prev = 21'h180800; end  // ADD.B absl,Dn
+      16'b1101???000111010: begin entry = 13'd1851; prev = 21'h100800; end  // ADD.B pcdisp,Dn
+      16'b1101???000111011: begin entry = 13'd1854; prev = 21'h000807; end  // ADD.B pcidx,Dn
+      16'b1101???000111100: begin entry = 13'd1859; prev = 21'h100800; end  // ADD.B imm,Dn
+      16'b1101???100010???: begin entry = 13'd1861; prev = 21'h086128; end  // ADD.B Dn,aind
+      16'b1101???100011???: begin entry = 13'd1864; prev = 21'h082128; end  // ADD.B Dn,apost
+      16'b1101???100100???: begin entry = 13'd1867; prev = 21'h084128; end  // ADD.B Dn,apre
+      16'b1101???100101???: begin entry = 13'd1870; prev = 21'h100800; end  // ADD.B Dn,adisp
+      16'b1101???100110???: begin entry = 13'd1874; prev = 21'h000807; end  // ADD.B Dn,aidx
+      16'b1101???100111000: begin entry = 13'd1880; prev = 21'h100800; end  // ADD.B Dn,absw
+      16'b1101???100111001: begin entry = 13'd1884; prev = 21'h180800; end  // ADD.B Dn,absl
+      16'b1101???001000???: begin entry = 13'd1889; prev = 21'h100800; end  // ADD.W dn,Dn
+      16'b1101???001001???: begin entry = 13'd1890; prev = 21'h100800; end  // ADD.W an,Dn
+      16'b1101???001010???: begin entry = 13'd1891; prev = 21'h086928; end  // ADD.W aind,Dn
+      16'b1101???001011???: begin entry = 13'd1893; prev = 21'h082928; end  // ADD.W apost,Dn
+      16'b1101???001100???: begin entry = 13'd1895; prev = 21'h084928; end  // ADD.W apre,Dn
+      16'b1101???001101???: begin entry = 13'd1897; prev = 21'h100800; end  // ADD.W adisp,Dn
+      16'b1101???001110???: begin entry = 13'd1900; prev = 21'h000807; end  // ADD.W aidx,Dn
+      16'b1101???001111000: begin entry = 13'd1905; prev = 21'h100800; end  // ADD.W absw,Dn
+      16'b1101???001111001: begin entry = 13'd1908; prev = 21'h180800; end  // ADD.W absl,Dn
+      16'b1101???001111010: begin entry = 13'd1912; prev = 21'h100800; end  // ADD.W pcdisp,Dn
+      16'b1101???001111011: begin entry = 13'd1915; prev = 21'h000807; end  // ADD.W pcidx,Dn
+      16'b1101???001111100: begin entry = 13'd1920; prev = 21'h100800; end  // ADD.W imm,Dn
+      16'b1101???101010???: begin entry = 13'd1922; prev = 21'h086928; end  // ADD.W Dn,aind
+      16'b1101???101011???: begin entry = 13'd1925; prev = 21'h082928; end  // ADD.W Dn,apost
+      16'b1101???101100???: begin entry = 13'd1928; prev = 21'h084928; end  // ADD.W Dn,apre
+      16'b1101???101101???: begin entry = 13'd1931; prev = 21'h100800; end  // ADD.W Dn,adisp
+      16'b1101???101110???: begin entry = 13'd1935; prev = 21'h000807; end  // ADD.W Dn,aidx
+      16'b1101???101111000: begin entry = 13'd1941; prev = 21'h100800; end  // ADD.W Dn,absw
+      16'b1101???101111001: begin entry = 13'd1945; prev = 21'h180800; end  // ADD.W Dn,absl
+      16'b1101???010000???: begin entry = 13'd1950; prev = 21'h101000; end  // ADD.L dn,Dn
+      16'b1101???010001???: begin entry = 13'd1951; prev = 21'h101000; end  // ADD.L an,Dn
+      16'b1101???010010???: begin entry = 13'd1952; prev = 21'h087128; end  // ADD.L aind,Dn
+      16'b1101???010011???: begin entry = 13'd1955; prev = 21'h081128; end  // ADD.L apost,Dn
+      16'b1101???010100???: begin entry = 13'd1958; prev = 21'h085128; end  // ADD.L apre,Dn
+      16'b1101???010101???: begin entry = 13'd1961; prev = 21'h100800; end  // ADD.L adisp,Dn
+      16'b1101???010110???: begin entry = 13'd1965; prev = 21'h000807; end  // ADD.L aidx,Dn
+      16'b1101???010111000: begin entry = 13'd1971; prev = 21'h100800; end  // ADD.L absw,Dn
+      16'b1101???010111001: begin entry = 13'd1975; prev = 21'h180800; end  // ADD.L absl,Dn
+      16'b1101???010111010: begin entry = 13'd1980; prev = 21'h100800; end  // ADD.L pcdisp,Dn
+      16'b1101???010111011: begin entry = 13'd1984; prev = 21'h000807; end  // ADD.L pcidx,Dn
+      16'b1101???010111100: begin entry = 13'd1990; prev = 21'h100800; end  // ADD.L imm,Dn
+      16'b1101???110010???: begin entry = 13'd1993; prev = 21'h087128; end  // ADD.L Dn,aind
+      16'b1101???110011???: begin entry = 13'd1998; prev = 21'h081128; end  // ADD.L Dn,apost
+      16'b1101???110100???: begin entry = 13'd2003; prev = 21'h085128; end  // ADD.L Dn,apre
+      16'b1101???110101???: begin entry = 13'd2008; prev = 21'h100800; end  // ADD.L Dn,adisp
+      16'b1101???110110???: begin entry = 13'd2014; prev = 21'h000807; end  // ADD.L Dn,aidx
+      16'b1101???110111000: begin entry = 13'd2022; prev = 21'h100800; end  // ADD.L Dn,absw
+      16'b1101???110111001: begin entry = 13'd2028; prev = 21'h180800; end  // ADD.L Dn,absl
+      16'b1001???000000???: begin entry = 13'd2035; prev = 21'h100000; end  // SUB.B dn,Dn
+      16'b1001???000010???: begin entry = 13'd2036; prev = 21'h086128; end  // SUB.B aind,Dn
+      16'b1001???000011???: begin entry = 13'd2038; prev = 21'h082128; end  // SUB.B apost,Dn
+      16'b1001???000100???: begin entry = 13'd2040; prev = 21'h084128; end  // SUB.B apre,Dn
+      16'b1001???000101???: begin entry = 13'd2042; prev = 21'h100800; end  // SUB.B adisp,Dn
+      16'b1001???000110???: begin entry = 13'd2045; prev = 21'h000807; end  // SUB.B aidx,Dn
+      16'b1001???000111000: begin entry = 13'd2050; prev = 21'h100800; end  // SUB.B absw,Dn
+      16'b1001???000111001: begin entry = 13'd2053; prev = 21'h180800; end  // SUB.B absl,Dn
+      16'b1001???000111010: begin entry = 13'd2057; prev = 21'h100800; end  // SUB.B pcdisp,Dn
+      16'b1001???000111011: begin entry = 13'd2060; prev = 21'h000807; end  // SUB.B pcidx,Dn
+      16'b1001???000111100: begin entry = 13'd2065; prev = 21'h100800; end  // SUB.B imm,Dn
+      16'b1001???100010???: begin entry = 13'd2067; prev = 21'h086128; end  // SUB.B Dn,aind
+      16'b1001???100011???: begin entry = 13'd2070; prev = 21'h082128; end  // SUB.B Dn,apost
+      16'b1001???100100???: begin entry = 13'd2073; prev = 21'h084128; end  // SUB.B Dn,apre
+      16'b1001???100101???: begin entry = 13'd2076; prev = 21'h100800; end  // SUB.B Dn,adisp
+      16'b1001???100110???: begin entry = 13'd2080; prev = 21'h000807; end  // SUB.B Dn,aidx
+      16'b1001???100111000: begin entry = 13'd2086; prev = 21'h100800; end  // SUB.B Dn,absw
+      16'b1001???100111001: begin entry = 13'd2090; prev = 21'h180800; end  // SUB.B Dn,absl
+      16'b1001???001000???: begin entry = 13'd2095; prev = 21'h100800; end  // SUB.W dn,Dn
+      16'b1001???001001???: begin entry = 13'd2096; prev = 21'h100800; end  // SUB.W an,Dn
+      16'b1001???001010???: begin entry = 13'd2097; prev = 21'h086928; end  // SUB.W aind,Dn
+      16'b1001???001011???: begin entry = 13'd2099; prev = 21'h082928; end  // SUB.W apost,Dn
+      16'b1001???001100???: begin entry = 13'd2101; prev = 21'h084928; end  // SUB.W apre,Dn
+      16'b1001???001101???: begin entry = 13'd2103; prev = 21'h100800; end  // SUB.W adisp,Dn
+      16'b1001???001110???: begin entry = 13'd2106; prev = 21'h000807; end  // SUB.W aidx,Dn
+      16'b1001???001111000: begin entry = 13'd2111; prev = 21'h100800; end  // SUB.W absw,Dn
+      16'b1001???001111001: begin entry = 13'd2114; prev = 21'h180800; end  // SUB.W absl,Dn
+      16'b1001???001111010: begin entry = 13'd2118; prev = 21'h100800; end  // SUB.W pcdisp,Dn
+      16'b1001???001111011: begin entry = 13'd2121; prev = 21'h000807; end  // SUB.W pcidx,Dn
+      16'b1001???001111100: begin entry = 13'd2126; prev = 21'h100800; end  // SUB.W imm,Dn
+      16'b1001???101010???: begin entry = 13'd2128; prev = 21'h086928; end  // SUB.W Dn,aind
+      16'b1001???101011???: begin entry = 13'd2131; prev = 21'h082928; end  // SUB.W Dn,apost
+      16'b1001???101100???: begin entry = 13'd2134; prev = 21'h084928; end  // SUB.W Dn,apre
+      16'b1001???101101???: begin entry = 13'd2137; prev = 21'h100800; end  // SUB.W Dn,adisp
+      16'b1001???101110???: begin entry = 13'd2141; prev = 21'h000807; end  // SUB.W Dn,aidx
+      16'b1001???101111000: begin entry = 13'd2147; prev = 21'h100800; end  // SUB.W Dn,absw
+      16'b1001???101111001: begin entry = 13'd2151; prev = 21'h180800; end  // SUB.W Dn,absl
+      16'b1001???010000???: begin entry = 13'd2156; prev = 21'h101000; end  // SUB.L dn,Dn
+      16'b1001???010001???: begin entry = 13'd2157; prev = 21'h101000; end  // SUB.L an,Dn
+      16'b1001???010010???: begin entry = 13'd2158; prev = 21'h087128; end  // SUB.L aind,Dn
+      16'b1001???010011???: begin entry = 13'd2161; prev = 21'h081128; end  // SUB.L apost,Dn
+      16'b1001???010100???: begin entry = 13'd2164; prev = 21'h085128; end  // SUB.L apre,Dn
+      16'b1001???010101???: begin entry = 13'd2167; prev = 21'h100800; end  // SUB.L adisp,Dn
+      16'b1001???010110???: begin entry = 13'd2171; prev = 21'h000807; end  // SUB.L aidx,Dn
+      16'b1001???010111000: begin entry = 13'd2177; prev = 21'h100800; end  // SUB.L absw,Dn
+      16'b1001???010111001: begin entry = 13'd2181; prev = 21'h180800; end  // SUB.L absl,Dn
+      16'b1001???010111010: begin entry = 13'd2186; prev = 21'h100800; end  // SUB.L pcdisp,Dn
+      16'b1001???010111011: begin entry = 13'd2190; prev = 21'h000807; end  // SUB.L pcidx,Dn
+      16'b1001???010111100: begin entry = 13'd2196; prev = 21'h100800; end  // SUB.L imm,Dn
+      16'b1001???110010???: begin entry = 13'd2199; prev = 21'h087128; end  // SUB.L Dn,aind
+      16'b1001???110011???: begin entry = 13'd2204; prev = 21'h081128; end  // SUB.L Dn,apost
+      16'b1001???110100???: begin entry = 13'd2209; prev = 21'h085128; end  // SUB.L Dn,apre
+      16'b1001???110101???: begin entry = 13'd2214; prev = 21'h100800; end  // SUB.L Dn,adisp
+      16'b1001???110110???: begin entry = 13'd2220; prev = 21'h000807; end  // SUB.L Dn,aidx
+      16'b1001???110111000: begin entry = 13'd2228; prev = 21'h100800; end  // SUB.L Dn,absw
+      16'b1001???110111001: begin entry = 13'd2234; prev = 21'h180800; end  // SUB.L Dn,absl
+      16'b1100???000000???: begin entry = 13'd2241; prev = 21'h100000; end  // AND.B dn,Dn
+      16'b1100???000010???: begin entry = 13'd2242; prev = 21'h086128; end  // AND.B aind,Dn
+      16'b1100???000011???: begin entry = 13'd2244; prev = 21'h082128; end  // AND.B apost,Dn
+      16'b1100???000100???: begin entry = 13'd2246; prev = 21'h084128; end  // AND.B apre,Dn
+      16'b1100???000101???: begin entry = 13'd2248; prev = 21'h100800; end  // AND.B adisp,Dn
+      16'b1100???000110???: begin entry = 13'd2251; prev = 21'h000807; end  // AND.B aidx,Dn
+      16'b1100???000111000: begin entry = 13'd2256; prev = 21'h100800; end  // AND.B absw,Dn
+      16'b1100???000111001: begin entry = 13'd2259; prev = 21'h180800; end  // AND.B absl,Dn
+      16'b1100???000111010: begin entry = 13'd2263; prev = 21'h100800; end  // AND.B pcdisp,Dn
+      16'b1100???000111011: begin entry = 13'd2266; prev = 21'h000807; end  // AND.B pcidx,Dn
+      16'b1100???000111100: begin entry = 13'd2271; prev = 21'h100800; end  // AND.B imm,Dn
+      16'b1100???100010???: begin entry = 13'd2273; prev = 21'h086128; end  // AND.B Dn,aind
+      16'b1100???100011???: begin entry = 13'd2276; prev = 21'h082128; end  // AND.B Dn,apost
+      16'b1100???100100???: begin entry = 13'd2279; prev = 21'h084128; end  // AND.B Dn,apre
+      16'b1100???100101???: begin entry = 13'd2282; prev = 21'h100800; end  // AND.B Dn,adisp
+      16'b1100???100110???: begin entry = 13'd2286; prev = 21'h000807; end  // AND.B Dn,aidx
+      16'b1100???100111000: begin entry = 13'd2292; prev = 21'h100800; end  // AND.B Dn,absw
+      16'b1100???100111001: begin entry = 13'd2296; prev = 21'h180800; end  // AND.B Dn,absl
+      16'b1100???001000???: begin entry = 13'd2301; prev = 21'h100800; end  // AND.W dn,Dn
+      16'b1100???001010???: begin entry = 13'd2302; prev = 21'h086928; end  // AND.W aind,Dn
+      16'b1100???001011???: begin entry = 13'd2304; prev = 21'h082928; end  // AND.W apost,Dn
+      16'b1100???001100???: begin entry = 13'd2306; prev = 21'h084928; end  // AND.W apre,Dn
+      16'b1100???001101???: begin entry = 13'd2308; prev = 21'h100800; end  // AND.W adisp,Dn
+      16'b1100???001110???: begin entry = 13'd2311; prev = 21'h000807; end  // AND.W aidx,Dn
+      16'b1100???001111000: begin entry = 13'd2316; prev = 21'h100800; end  // AND.W absw,Dn
+      16'b1100???001111001: begin entry = 13'd2319; prev = 21'h180800; end  // AND.W absl,Dn
+      16'b1100???001111010: begin entry = 13'd2323; prev = 21'h100800; end  // AND.W pcdisp,Dn
+      16'b1100???001111011: begin entry = 13'd2326; prev = 21'h000807; end  // AND.W pcidx,Dn
+      16'b1100???001111100: begin entry = 13'd2331; prev = 21'h100800; end  // AND.W imm,Dn
+      16'b1100???101010???: begin entry = 13'd2333; prev = 21'h086928; end  // AND.W Dn,aind
+      16'b1100???101011???: begin entry = 13'd2336; prev = 21'h082928; end  // AND.W Dn,apost
+      16'b1100???101100???: begin entry = 13'd2339; prev = 21'h084928; end  // AND.W Dn,apre
+      16'b1100???101101???: begin entry = 13'd2342; prev = 21'h100800; end  // AND.W Dn,adisp
+      16'b1100???101110???: begin entry = 13'd2346; prev = 21'h000807; end  // AND.W Dn,aidx
+      16'b1100???101111000: begin entry = 13'd2352; prev = 21'h100800; end  // AND.W Dn,absw
+      16'b1100???101111001: begin entry = 13'd2356; prev = 21'h180800; end  // AND.W Dn,absl
+      16'b1100???010000???: begin entry = 13'd2361; prev = 21'h101000; end  // AND.L dn,Dn
+      16'b1100???010010???: begin entry = 13'd2362; prev = 21'h087128; end  // AND.L aind,Dn
+      16'b1100???010011???: begin entry = 13'd2365; prev = 21'h081128; end  // AND.L apost,Dn
+      16'b1100???010100???: begin entry = 13'd2368; prev = 21'h085128; end  // AND.L apre,Dn
+      16'b1100???010101???: begin entry = 13'd2371; prev = 21'h100800; end  // AND.L adisp,Dn
+      16'b1100???010110???: begin entry = 13'd2375; prev = 21'h000807; end  // AND.L aidx,Dn
+      16'b1100???010111000: begin entry = 13'd2381; prev = 21'h100800; end  // AND.L absw,Dn
+      16'b1100???010111001: begin entry = 13'd2385; prev = 21'h180800; end  // AND.L absl,Dn
+      16'b1100???010111010: begin entry = 13'd2390; prev = 21'h100800; end  // AND.L pcdisp,Dn
+      16'b1100???010111011: begin entry = 13'd2394; prev = 21'h000807; end  // AND.L pcidx,Dn
+      16'b1100???010111100: begin entry = 13'd2400; prev = 21'h100800; end  // AND.L imm,Dn
+      16'b1100???110010???: begin entry = 13'd2403; prev = 21'h087128; end  // AND.L Dn,aind
+      16'b1100???110011???: begin entry = 13'd2408; prev = 21'h081128; end  // AND.L Dn,apost
+      16'b1100???110100???: begin entry = 13'd2413; prev = 21'h085128; end  // AND.L Dn,apre
+      16'b1100???110101???: begin entry = 13'd2418; prev = 21'h100800; end  // AND.L Dn,adisp
+      16'b1100???110110???: begin entry = 13'd2424; prev = 21'h000807; end  // AND.L Dn,aidx
+      16'b1100???110111000: begin entry = 13'd2432; prev = 21'h100800; end  // AND.L Dn,absw
+      16'b1100???110111001: begin entry = 13'd2438; prev = 21'h180800; end  // AND.L Dn,absl
+      16'b1000???000000???: begin entry = 13'd2445; prev = 21'h100000; end  // OR.B dn,Dn
+      16'b1000???000010???: begin entry = 13'd2446; prev = 21'h086128; end  // OR.B aind,Dn
+      16'b1000???000011???: begin entry = 13'd2448; prev = 21'h082128; end  // OR.B apost,Dn
+      16'b1000???000100???: begin entry = 13'd2450; prev = 21'h084128; end  // OR.B apre,Dn
+      16'b1000???000101???: begin entry = 13'd2452; prev = 21'h100800; end  // OR.B adisp,Dn
+      16'b1000???000110???: begin entry = 13'd2455; prev = 21'h000807; end  // OR.B aidx,Dn
+      16'b1000???000111000: begin entry = 13'd2460; prev = 21'h100800; end  // OR.B absw,Dn
+      16'b1000???000111001: begin entry = 13'd2463; prev = 21'h180800; end  // OR.B absl,Dn
+      16'b1000???000111010: begin entry = 13'd2467; prev = 21'h100800; end  // OR.B pcdisp,Dn
+      16'b1000???000111011: begin entry = 13'd2470; prev = 21'h000807; end  // OR.B pcidx,Dn
+      16'b1000???000111100: begin entry = 13'd2475; prev = 21'h100800; end  // OR.B imm,Dn
+      16'b1000???100010???: begin entry = 13'd2477; prev = 21'h086128; end  // OR.B Dn,aind
+      16'b1000???100011???: begin entry = 13'd2480; prev = 21'h082128; end  // OR.B Dn,apost
+      16'b1000???100100???: begin entry = 13'd2483; prev = 21'h084128; end  // OR.B Dn,apre
+      16'b1000???100101???: begin entry = 13'd2486; prev = 21'h100800; end  // OR.B Dn,adisp
+      16'b1000???100110???: begin entry = 13'd2490; prev = 21'h000807; end  // OR.B Dn,aidx
+      16'b1000???100111000: begin entry = 13'd2496; prev = 21'h100800; end  // OR.B Dn,absw
+      16'b1000???100111001: begin entry = 13'd2500; prev = 21'h180800; end  // OR.B Dn,absl
+      16'b1000???001000???: begin entry = 13'd2505; prev = 21'h100800; end  // OR.W dn,Dn
+      16'b1000???001010???: begin entry = 13'd2506; prev = 21'h086928; end  // OR.W aind,Dn
+      16'b1000???001011???: begin entry = 13'd2508; prev = 21'h082928; end  // OR.W apost,Dn
+      16'b1000???001100???: begin entry = 13'd2510; prev = 21'h084928; end  // OR.W apre,Dn
+      16'b1000???001101???: begin entry = 13'd2512; prev = 21'h100800; end  // OR.W adisp,Dn
+      16'b1000???001110???: begin entry = 13'd2515; prev = 21'h000807; end  // OR.W aidx,Dn
+      16'b1000???001111000: begin entry = 13'd2520; prev = 21'h100800; end  // OR.W absw,Dn
+      16'b1000???001111001: begin entry = 13'd2523; prev = 21'h180800; end  // OR.W absl,Dn
+      16'b1000???001111010: begin entry = 13'd2527; prev = 21'h100800; end  // OR.W pcdisp,Dn
+      16'b1000???001111011: begin entry = 13'd2530; prev = 21'h000807; end  // OR.W pcidx,Dn
+      16'b1000???001111100: begin entry = 13'd2535; prev = 21'h100800; end  // OR.W imm,Dn
+      16'b1000???101010???: begin entry = 13'd2537; prev = 21'h086928; end  // OR.W Dn,aind
+      16'b1000???101011???: begin entry = 13'd2540; prev = 21'h082928; end  // OR.W Dn,apost
+      16'b1000???101100???: begin entry = 13'd2543; prev = 21'h084928; end  // OR.W Dn,apre
+      16'b1000???101101???: begin entry = 13'd2546; prev = 21'h100800; end  // OR.W Dn,adisp
+      16'b1000???101110???: begin entry = 13'd2550; prev = 21'h000807; end  // OR.W Dn,aidx
+      16'b1000???101111000: begin entry = 13'd2556; prev = 21'h100800; end  // OR.W Dn,absw
+      16'b1000???101111001: begin entry = 13'd2560; prev = 21'h180800; end  // OR.W Dn,absl
+      16'b1000???010000???: begin entry = 13'd2565; prev = 21'h101000; end  // OR.L dn,Dn
+      16'b1000???010010???: begin entry = 13'd2566; prev = 21'h087128; end  // OR.L aind,Dn
+      16'b1000???010011???: begin entry = 13'd2569; prev = 21'h081128; end  // OR.L apost,Dn
+      16'b1000???010100???: begin entry = 13'd2572; prev = 21'h085128; end  // OR.L apre,Dn
+      16'b1000???010101???: begin entry = 13'd2575; prev = 21'h100800; end  // OR.L adisp,Dn
+      16'b1000???010110???: begin entry = 13'd2579; prev = 21'h000807; end  // OR.L aidx,Dn
+      16'b1000???010111000: begin entry = 13'd2585; prev = 21'h100800; end  // OR.L absw,Dn
+      16'b1000???010111001: begin entry = 13'd2589; prev = 21'h180800; end  // OR.L absl,Dn
+      16'b1000???010111010: begin entry = 13'd2594; prev = 21'h100800; end  // OR.L pcdisp,Dn
+      16'b1000???010111011: begin entry = 13'd2598; prev = 21'h000807; end  // OR.L pcidx,Dn
+      16'b1000???010111100: begin entry = 13'd2604; prev = 21'h100800; end  // OR.L imm,Dn
+      16'b1000???110010???: begin entry = 13'd2607; prev = 21'h087128; end  // OR.L Dn,aind
+      16'b1000???110011???: begin entry = 13'd2612; prev = 21'h081128; end  // OR.L Dn,apost
+      16'b1000???110100???: begin entry = 13'd2617; prev = 21'h085128; end  // OR.L Dn,apre
+      16'b1000???110101???: begin entry = 13'd2622; prev = 21'h100800; end  // OR.L Dn,adisp
+      16'b1000???110110???: begin entry = 13'd2628; prev = 21'h000807; end  // OR.L Dn,aidx
+      16'b1000???110111000: begin entry = 13'd2636; prev = 21'h100800; end  // OR.L Dn,absw
+      16'b1000???110111001: begin entry = 13'd2642; prev = 21'h180800; end  // OR.L Dn,absl
+      16'b1011???000000???: begin entry = 13'd2649; prev = 21'h100000; end  // CMP.B dn
+      16'b1011???000010???: begin entry = 13'd2650; prev = 21'h086128; end  // CMP.B aind
+      16'b1011???000011???: begin entry = 13'd2652; prev = 21'h082128; end  // CMP.B apost
+      16'b1011???000100???: begin entry = 13'd2654; prev = 21'h084128; end  // CMP.B apre
+      16'b1011???000101???: begin entry = 13'd2656; prev = 21'h100800; end  // CMP.B adisp
+      16'b1011???000110???: begin entry = 13'd2659; prev = 21'h000807; end  // CMP.B aidx
+      16'b1011???000111000: begin entry = 13'd2664; prev = 21'h100800; end  // CMP.B absw
+      16'b1011???000111001: begin entry = 13'd2667; prev = 21'h180800; end  // CMP.B absl
+      16'b1011???000111010: begin entry = 13'd2671; prev = 21'h100800; end  // CMP.B pcdisp
+      16'b1011???000111011: begin entry = 13'd2674; prev = 21'h000807; end  // CMP.B pcidx
+      16'b1011???000111100: begin entry = 13'd2679; prev = 21'h100800; end  // CMP.B imm
+      16'b1011???100000???: begin entry = 13'd2681; prev = 21'h100000; end  // EOR.B Dn,dn
+      16'b1011???100010???: begin entry = 13'd2682; prev = 21'h086128; end  // EOR.B Dn,aind
+      16'b1011???100011???: begin entry = 13'd2685; prev = 21'h082128; end  // EOR.B Dn,apost
+      16'b1011???100100???: begin entry = 13'd2688; prev = 21'h084128; end  // EOR.B Dn,apre
+      16'b1011???100101???: begin entry = 13'd2691; prev = 21'h100800; end  // EOR.B Dn,adisp
+      16'b1011???100110???: begin entry = 13'd2695; prev = 21'h000807; end  // EOR.B Dn,aidx
+      16'b1011???100111000: begin entry = 13'd2701; prev = 21'h100800; end  // EOR.B Dn,absw
+      16'b1011???100111001: begin entry = 13'd2705; prev = 21'h180800; end  // EOR.B Dn,absl
+      16'b1011???001000???: begin entry = 13'd2710; prev = 21'h100800; end  // CMP.W dn
+      16'b1011???001001???: begin entry = 13'd2711; prev = 21'h100800; end  // CMP.W an
+      16'b1011???001010???: begin entry = 13'd2712; prev = 21'h086928; end  // CMP.W aind
+      16'b1011???001011???: begin entry = 13'd2714; prev = 21'h082928; end  // CMP.W apost
+      16'b1011???001100???: begin entry = 13'd2716; prev = 21'h084928; end  // CMP.W apre
+      16'b1011???001101???: begin entry = 13'd2718; prev = 21'h100800; end  // CMP.W adisp
+      16'b1011???001110???: begin entry = 13'd2721; prev = 21'h000807; end  // CMP.W aidx
+      16'b1011???001111000: begin entry = 13'd2726; prev = 21'h100800; end  // CMP.W absw
+      16'b1011???001111001: begin entry = 13'd2729; prev = 21'h180800; end  // CMP.W absl
+      16'b1011???001111010: begin entry = 13'd2733; prev = 21'h100800; end  // CMP.W pcdisp
+      16'b1011???001111011: begin entry = 13'd2736; prev = 21'h000807; end  // CMP.W pcidx
+      16'b1011???001111100: begin entry = 13'd2741; prev = 21'h100800; end  // CMP.W imm
+      16'b1011???101000???: begin entry = 13'd2743; prev = 21'h100800; end  // EOR.W Dn,dn
+      16'b1011???101010???: begin entry = 13'd2744; prev = 21'h086928; end  // EOR.W Dn,aind
+      16'b1011???101011???: begin entry = 13'd2747; prev = 21'h082928; end  // EOR.W Dn,apost
+      16'b1011???101100???: begin entry = 13'd2750; prev = 21'h084928; end  // EOR.W Dn,apre
+      16'b1011???101101???: begin entry = 13'd2753; prev = 21'h100800; end  // EOR.W Dn,adisp
+      16'b1011???101110???: begin entry = 13'd2757; prev = 21'h000807; end  // EOR.W Dn,aidx
+      16'b1011???101111000: begin entry = 13'd2763; prev = 21'h100800; end  // EOR.W Dn,absw
+      16'b1011???101111001: begin entry = 13'd2767; prev = 21'h180800; end  // EOR.W Dn,absl
+      16'b1011???010000???: begin entry = 13'd2772; prev = 21'h101000; end  // CMP.L dn
+      16'b1011???010001???: begin entry = 13'd2773; prev = 21'h101000; end  // CMP.L an
+      16'b1011???010010???: begin entry = 13'd2774; prev = 21'h087128; end  // CMP.L aind
+      16'b1011???010011???: begin entry = 13'd2777; prev = 21'h081128; end  // CMP.L apost
+      16'b1011???010100???: begin entry = 13'd2780; prev = 21'h085128; end  // CMP.L apre
+      16'b1011???010101???: begin entry = 13'd2783; prev = 21'h100800; end  // CMP.L adisp
+      16'b1011???010110???: begin entry = 13'd2787; prev = 21'h000807; end  // CMP.L aidx
+      16'b1011???010111000: begin entry = 13'd2793; prev = 21'h100800; end  // CMP.L absw
+      16'b1011???010111001: begin entry = 13'd2797; prev = 21'h180800; end  // CMP.L absl
+      16'b1011???010111010: begin entry = 13'd2802; prev = 21'h100800; end  // CMP.L pcdisp
+      16'b1011???010111011: begin entry = 13'd2806; prev = 21'h000807; end  // CMP.L pcidx
+      16'b1011???010111100: begin entry = 13'd2812; prev = 21'h100800; end  // CMP.L imm
+      16'b1011???110000???: begin entry = 13'd2815; prev = 21'h101000; end  // EOR.L Dn,dn
+      16'b1011???110010???: begin entry = 13'd2816; prev = 21'h087128; end  // EOR.L Dn,aind
+      16'b1011???110011???: begin entry = 13'd2821; prev = 21'h081128; end  // EOR.L Dn,apost
+      16'b1011???110100???: begin entry = 13'd2826; prev = 21'h085128; end  // EOR.L Dn,apre
+      16'b1011???110101???: begin entry = 13'd2831; prev = 21'h100800; end  // EOR.L Dn,adisp
+      16'b1011???110110???: begin entry = 13'd2837; prev = 21'h000807; end  // EOR.L Dn,aidx
+      16'b1011???110111000: begin entry = 13'd2845; prev = 21'h100800; end  // EOR.L Dn,absw
+      16'b1011???110111001: begin entry = 13'd2851; prev = 21'h180800; end  // EOR.L Dn,absl
+      16'b1101???011000???: begin entry = 13'd2858; prev = 21'h001007; end  // ADDA.W dn
+      16'b1101???011001???: begin entry = 13'd2860; prev = 21'h001007; end  // ADDA.W an
+      16'b1101???011010???: begin entry = 13'd2862; prev = 21'h086928; end  // ADDA.W aind
+      16'b1101???011011???: begin entry = 13'd2865; prev = 21'h082928; end  // ADDA.W apost
+      16'b1101???011100???: begin entry = 13'd2868; prev = 21'h084928; end  // ADDA.W apre
+      16'b1101???011101???: begin entry = 13'd2871; prev = 21'h100800; end  // ADDA.W adisp
+      16'b1101???011110???: begin entry = 13'd2875; prev = 21'h000807; end  // ADDA.W aidx
+      16'b1101???011111000: begin entry = 13'd2881; prev = 21'h100800; end  // ADDA.W absw
+      16'b1101???011111001: begin entry = 13'd2885; prev = 21'h180800; end  // ADDA.W absl
+      16'b1101???011111010: begin entry = 13'd2890; prev = 21'h100800; end  // ADDA.W pcdisp
+      16'b1101???011111011: begin entry = 13'd2894; prev = 21'h000807; end  // ADDA.W pcidx
+      16'b1101???011111100: begin entry = 13'd2900; prev = 21'h100800; end  // ADDA.W imm
+      16'b1101???111000???: begin entry = 13'd2903; prev = 21'h001007; end  // ADDA.L dn
+      16'b1101???111001???: begin entry = 13'd2905; prev = 21'h001007; end  // ADDA.L an
+      16'b1101???111010???: begin entry = 13'd2907; prev = 21'h087128; end  // ADDA.L aind
+      16'b1101???111011???: begin entry = 13'd2910; prev = 21'h081128; end  // ADDA.L apost
+      16'b1101???111100???: begin entry = 13'd2913; prev = 21'h085128; end  // ADDA.L apre
+      16'b1101???111101???: begin entry = 13'd2916; prev = 21'h100800; end  // ADDA.L adisp
+      16'b1101???111110???: begin entry = 13'd2920; prev = 21'h000807; end  // ADDA.L aidx
+      16'b1101???111111000: begin entry = 13'd2926; prev = 21'h100800; end  // ADDA.L absw
+      16'b1101???111111001: begin entry = 13'd2930; prev = 21'h180800; end  // ADDA.L absl
+      16'b1101???111111010: begin entry = 13'd2935; prev = 21'h100800; end  // ADDA.L pcdisp
+      16'b1101???111111011: begin entry = 13'd2939; prev = 21'h000807; end  // ADDA.L pcidx
+      16'b1101???111111100: begin entry = 13'd2945; prev = 21'h100800; end  // ADDA.L imm
+      16'b1001???011000???: begin entry = 13'd2948; prev = 21'h001007; end  // SUBA.W dn
+      16'b1001???011001???: begin entry = 13'd2950; prev = 21'h001007; end  // SUBA.W an
+      16'b1001???011010???: begin entry = 13'd2952; prev = 21'h086928; end  // SUBA.W aind
+      16'b1001???011011???: begin entry = 13'd2955; prev = 21'h082928; end  // SUBA.W apost
+      16'b1001???011100???: begin entry = 13'd2958; prev = 21'h084928; end  // SUBA.W apre
+      16'b1001???011101???: begin entry = 13'd2961; prev = 21'h100800; end  // SUBA.W adisp
+      16'b1001???011110???: begin entry = 13'd2965; prev = 21'h000807; end  // SUBA.W aidx
+      16'b1001???011111000: begin entry = 13'd2971; prev = 21'h100800; end  // SUBA.W absw
+      16'b1001???011111001: begin entry = 13'd2975; prev = 21'h180800; end  // SUBA.W absl
+      16'b1001???011111010: begin entry = 13'd2980; prev = 21'h100800; end  // SUBA.W pcdisp
+      16'b1001???011111011: begin entry = 13'd2984; prev = 21'h000807; end  // SUBA.W pcidx
+      16'b1001???011111100: begin entry = 13'd2990; prev = 21'h100800; end  // SUBA.W imm
+      16'b1001???111000???: begin entry = 13'd2993; prev = 21'h001007; end  // SUBA.L dn
+      16'b1001???111001???: begin entry = 13'd2995; prev = 21'h001007; end  // SUBA.L an
+      16'b1001???111010???: begin entry = 13'd2997; prev = 21'h087128; end  // SUBA.L aind
+      16'b1001???111011???: begin entry = 13'd3000; prev = 21'h081128; end  // SUBA.L apost
+      16'b1001???111100???: begin entry = 13'd3003; prev = 21'h085128; end  // SUBA.L apre
+      16'b1001???111101???: begin entry = 13'd3006; prev = 21'h100800; end  // SUBA.L adisp
+      16'b1001???111110???: begin entry = 13'd3010; prev = 21'h000807; end  // SUBA.L aidx
+      16'b1001???111111000: begin entry = 13'd3016; prev = 21'h100800; end  // SUBA.L absw
+      16'b1001???111111001: begin entry = 13'd3020; prev = 21'h180800; end  // SUBA.L absl
+      16'b1001???111111010: begin entry = 13'd3025; prev = 21'h100800; end  // SUBA.L pcdisp
+      16'b1001???111111011: begin entry = 13'd3029; prev = 21'h000807; end  // SUBA.L pcidx
+      16'b1001???111111100: begin entry = 13'd3035; prev = 21'h100800; end  // SUBA.L imm
+      16'b1011???011000???: begin entry = 13'd3038; prev = 21'h001007; end  // CMPA.W dn
+      16'b1011???011001???: begin entry = 13'd3040; prev = 21'h001007; end  // CMPA.W an
+      16'b1011???011010???: begin entry = 13'd3042; prev = 21'h086928; end  // CMPA.W aind
+      16'b1011???011011???: begin entry = 13'd3045; prev = 21'h082928; end  // CMPA.W apost
+      16'b1011???011100???: begin entry = 13'd3048; prev = 21'h084928; end  // CMPA.W apre
+      16'b1011???011101???: begin entry = 13'd3051; prev = 21'h100800; end  // CMPA.W adisp
+      16'b1011???011110???: begin entry = 13'd3055; prev = 21'h000807; end  // CMPA.W aidx
+      16'b1011???011111000: begin entry = 13'd3061; prev = 21'h100800; end  // CMPA.W absw
+      16'b1011???011111001: begin entry = 13'd3065; prev = 21'h180800; end  // CMPA.W absl
+      16'b1011???011111010: begin entry = 13'd3070; prev = 21'h100800; end  // CMPA.W pcdisp
+      16'b1011???011111011: begin entry = 13'd3074; prev = 21'h000807; end  // CMPA.W pcidx
+      16'b1011???011111100: begin entry = 13'd3080; prev = 21'h100800; end  // CMPA.W imm
+      16'b1011???111000???: begin entry = 13'd3083; prev = 21'h001007; end  // CMPA.L dn
+      16'b1011???111001???: begin entry = 13'd3085; prev = 21'h001007; end  // CMPA.L an
+      16'b1011???111010???: begin entry = 13'd3087; prev = 21'h087128; end  // CMPA.L aind
+      16'b1011???111011???: begin entry = 13'd3090; prev = 21'h081128; end  // CMPA.L apost
+      16'b1011???111100???: begin entry = 13'd3093; prev = 21'h085128; end  // CMPA.L apre
+      16'b1011???111101???: begin entry = 13'd3096; prev = 21'h100800; end  // CMPA.L adisp
+      16'b1011???111110???: begin entry = 13'd3100; prev = 21'h000807; end  // CMPA.L aidx
+      16'b1011???111111000: begin entry = 13'd3106; prev = 21'h100800; end  // CMPA.L absw
+      16'b1011???111111001: begin entry = 13'd3110; prev = 21'h180800; end  // CMPA.L absl
+      16'b1011???111111010: begin entry = 13'd3115; prev = 21'h100800; end  // CMPA.L pcdisp
+      16'b1011???111111011: begin entry = 13'd3119; prev = 21'h000807; end  // CMPA.L pcidx
+      16'b1011???111111100: begin entry = 13'd3125; prev = 21'h100800; end  // CMPA.L imm
+      16'b0000000000000???: begin entry = 13'd3128; prev = 21'h100800; end  // ORI.B dn
+      16'b0000000000010???: begin entry = 13'd3130; prev = 21'h100800; end  // ORI.B aind
+      16'b0000000000011???: begin entry = 13'd3134; prev = 21'h100800; end  // ORI.B apost
+      16'b0000000000100???: begin entry = 13'd3138; prev = 21'h100800; end  // ORI.B apre
+      16'b0000000000101???: begin entry = 13'd3142; prev = 21'h100800; end  // ORI.B adisp
+      16'b0000000000110???: begin entry = 13'd3147; prev = 21'h100800; end  // ORI.B aidx
+      16'b0000000000111000: begin entry = 13'd3154; prev = 21'h100800; end  // ORI.B absw
+      16'b0000000000111001: begin entry = 13'd3159; prev = 21'h100800; end  // ORI.B absl
+      16'b0000000001000???: begin entry = 13'd3165; prev = 21'h100800; end  // ORI.W dn
+      16'b0000000001010???: begin entry = 13'd3167; prev = 21'h100800; end  // ORI.W aind
+      16'b0000000001011???: begin entry = 13'd3171; prev = 21'h100800; end  // ORI.W apost
+      16'b0000000001100???: begin entry = 13'd3175; prev = 21'h100800; end  // ORI.W apre
+      16'b0000000001101???: begin entry = 13'd3179; prev = 21'h100800; end  // ORI.W adisp
+      16'b0000000001110???: begin entry = 13'd3184; prev = 21'h100800; end  // ORI.W aidx
+      16'b0000000001111000: begin entry = 13'd3191; prev = 21'h100800; end  // ORI.W absw
+      16'b0000000001111001: begin entry = 13'd3196; prev = 21'h100800; end  // ORI.W absl
+      16'b0000000010000???: begin entry = 13'd3202; prev = 21'h100800; end  // ORI.L dn
+      16'b0000000010010???: begin entry = 13'd3205; prev = 21'h100800; end  // ORI.L aind
+      16'b0000000010011???: begin entry = 13'd3212; prev = 21'h100800; end  // ORI.L apost
+      16'b0000000010100???: begin entry = 13'd3219; prev = 21'h100800; end  // ORI.L apre
+      16'b0000000010101???: begin entry = 13'd3226; prev = 21'h100800; end  // ORI.L adisp
+      16'b0000000010110???: begin entry = 13'd3234; prev = 21'h100800; end  // ORI.L aidx
+      16'b0000000010111000: begin entry = 13'd3244; prev = 21'h100800; end  // ORI.L absw
+      16'b0000000010111001: begin entry = 13'd3252; prev = 21'h100800; end  // ORI.L absl
+      16'b0000001000000???: begin entry = 13'd3261; prev = 21'h100800; end  // ANDI.B dn
+      16'b0000001000010???: begin entry = 13'd3263; prev = 21'h100800; end  // ANDI.B aind
+      16'b0000001000011???: begin entry = 13'd3267; prev = 21'h100800; end  // ANDI.B apost
+      16'b0000001000100???: begin entry = 13'd3271; prev = 21'h100800; end  // ANDI.B apre
+      16'b0000001000101???: begin entry = 13'd3275; prev = 21'h100800; end  // ANDI.B adisp
+      16'b0000001000110???: begin entry = 13'd3280; prev = 21'h100800; end  // ANDI.B aidx
+      16'b0000001000111000: begin entry = 13'd3287; prev = 21'h100800; end  // ANDI.B absw
+      16'b0000001000111001: begin entry = 13'd3292; prev = 21'h100800; end  // ANDI.B absl
+      16'b0000001001000???: begin entry = 13'd3298; prev = 21'h100800; end  // ANDI.W dn
+      16'b0000001001010???: begin entry = 13'd3300; prev = 21'h100800; end  // ANDI.W aind
+      16'b0000001001011???: begin entry = 13'd3304; prev = 21'h100800; end  // ANDI.W apost
+      16'b0000001001100???: begin entry = 13'd3308; prev = 21'h100800; end  // ANDI.W apre
+      16'b0000001001101???: begin entry = 13'd3312; prev = 21'h100800; end  // ANDI.W adisp
+      16'b0000001001110???: begin entry = 13'd3317; prev = 21'h100800; end  // ANDI.W aidx
+      16'b0000001001111000: begin entry = 13'd3324; prev = 21'h100800; end  // ANDI.W absw
+      16'b0000001001111001: begin entry = 13'd3329; prev = 21'h100800; end  // ANDI.W absl
+      16'b0000001010000???: begin entry = 13'd3335; prev = 21'h100800; end  // ANDI.L dn
+      16'b0000001010010???: begin entry = 13'd3338; prev = 21'h100800; end  // ANDI.L aind
+      16'b0000001010011???: begin entry = 13'd3345; prev = 21'h100800; end  // ANDI.L apost
+      16'b0000001010100???: begin entry = 13'd3352; prev = 21'h100800; end  // ANDI.L apre
+      16'b0000001010101???: begin entry = 13'd3359; prev = 21'h100800; end  // ANDI.L adisp
+      16'b0000001010110???: begin entry = 13'd3367; prev = 21'h100800; end  // ANDI.L aidx
+      16'b0000001010111000: begin entry = 13'd3377; prev = 21'h100800; end  // ANDI.L absw
+      16'b0000001010111001: begin entry = 13'd3385; prev = 21'h100800; end  // ANDI.L absl
+      16'b0000010000000???: begin entry = 13'd3394; prev = 21'h100800; end  // SUBI.B dn
+      16'b0000010000010???: begin entry = 13'd3396; prev = 21'h100800; end  // SUBI.B aind
+      16'b0000010000011???: begin entry = 13'd3400; prev = 21'h100800; end  // SUBI.B apost
+      16'b0000010000100???: begin entry = 13'd3404; prev = 21'h100800; end  // SUBI.B apre
+      16'b0000010000101???: begin entry = 13'd3408; prev = 21'h100800; end  // SUBI.B adisp
+      16'b0000010000110???: begin entry = 13'd3413; prev = 21'h100800; end  // SUBI.B aidx
+      16'b0000010000111000: begin entry = 13'd3420; prev = 21'h100800; end  // SUBI.B absw
+      16'b0000010000111001: begin entry = 13'd3425; prev = 21'h100800; end  // SUBI.B absl
+      16'b0000010001000???: begin entry = 13'd3431; prev = 21'h100800; end  // SUBI.W dn
+      16'b0000010001010???: begin entry = 13'd3433; prev = 21'h100800; end  // SUBI.W aind
+      16'b0000010001011???: begin entry = 13'd3437; prev = 21'h100800; end  // SUBI.W apost
+      16'b0000010001100???: begin entry = 13'd3441; prev = 21'h100800; end  // SUBI.W apre
+      16'b0000010001101???: begin entry = 13'd3445; prev = 21'h100800; end  // SUBI.W adisp
+      16'b0000010001110???: begin entry = 13'd3450; prev = 21'h100800; end  // SUBI.W aidx
+      16'b0000010001111000: begin entry = 13'd3457; prev = 21'h100800; end  // SUBI.W absw
+      16'b0000010001111001: begin entry = 13'd3462; prev = 21'h100800; end  // SUBI.W absl
+      16'b0000010010000???: begin entry = 13'd3468; prev = 21'h100800; end  // SUBI.L dn
+      16'b0000010010010???: begin entry = 13'd3471; prev = 21'h100800; end  // SUBI.L aind
+      16'b0000010010011???: begin entry = 13'd3478; prev = 21'h100800; end  // SUBI.L apost
+      16'b0000010010100???: begin entry = 13'd3485; prev = 21'h100800; end  // SUBI.L apre
+      16'b0000010010101???: begin entry = 13'd3492; prev = 21'h100800; end  // SUBI.L adisp
+      16'b0000010010110???: begin entry = 13'd3500; prev = 21'h100800; end  // SUBI.L aidx
+      16'b0000010010111000: begin entry = 13'd3510; prev = 21'h100800; end  // SUBI.L absw
+      16'b0000010010111001: begin entry = 13'd3518; prev = 21'h100800; end  // SUBI.L absl
+      16'b0000011000000???: begin entry = 13'd3527; prev = 21'h100800; end  // ADDI.B dn
+      16'b0000011000010???: begin entry = 13'd3529; prev = 21'h100800; end  // ADDI.B aind
+      16'b0000011000011???: begin entry = 13'd3533; prev = 21'h100800; end  // ADDI.B apost
+      16'b0000011000100???: begin entry = 13'd3537; prev = 21'h100800; end  // ADDI.B apre
+      16'b0000011000101???: begin entry = 13'd3541; prev = 21'h100800; end  // ADDI.B adisp
+      16'b0000011000110???: begin entry = 13'd3546; prev = 21'h100800; end  // ADDI.B aidx
+      16'b0000011000111000: begin entry = 13'd3553; prev = 21'h100800; end  // ADDI.B absw
+      16'b0000011000111001: begin entry = 13'd3558; prev = 21'h100800; end  // ADDI.B absl
+      16'b0000011001000???: begin entry = 13'd3564; prev = 21'h100800; end  // ADDI.W dn
+      16'b0000011001010???: begin entry = 13'd3566; prev = 21'h100800; end  // ADDI.W aind
+      16'b0000011001011???: begin entry = 13'd3570; prev = 21'h100800; end  // ADDI.W apost
+      16'b0000011001100???: begin entry = 13'd3574; prev = 21'h100800; end  // ADDI.W apre
+      16'b0000011001101???: begin entry = 13'd3578; prev = 21'h100800; end  // ADDI.W adisp
+      16'b0000011001110???: begin entry = 13'd3583; prev = 21'h100800; end  // ADDI.W aidx
+      16'b0000011001111000: begin entry = 13'd3590; prev = 21'h100800; end  // ADDI.W absw
+      16'b0000011001111001: begin entry = 13'd3595; prev = 21'h100800; end  // ADDI.W absl
+      16'b0000011010000???: begin entry = 13'd3601; prev = 21'h100800; end  // ADDI.L dn
+      16'b0000011010010???: begin entry = 13'd3604; prev = 21'h100800; end  // ADDI.L aind
+      16'b0000011010011???: begin entry = 13'd3611; prev = 21'h100800; end  // ADDI.L apost
+      16'b0000011010100???: begin entry = 13'd3618; prev = 21'h100800; end  // ADDI.L apre
+      16'b0000011010101???: begin entry = 13'd3625; prev = 21'h100800; end  // ADDI.L adisp
+      16'b0000011010110???: begin entry = 13'd3633; prev = 21'h100800; end  // ADDI.L aidx
+      16'b0000011010111000: begin entry = 13'd3643; prev = 21'h100800; end  // ADDI.L absw
+      16'b0000011010111001: begin entry = 13'd3651; prev = 21'h100800; end  // ADDI.L absl
+      16'b0000101000000???: begin entry = 13'd3660; prev = 21'h100800; end  // EORI.B dn
+      16'b0000101000010???: begin entry = 13'd3662; prev = 21'h100800; end  // EORI.B aind
+      16'b0000101000011???: begin entry = 13'd3666; prev = 21'h100800; end  // EORI.B apost
+      16'b0000101000100???: begin entry = 13'd3670; prev = 21'h100800; end  // EORI.B apre
+      16'b0000101000101???: begin entry = 13'd3674; prev = 21'h100800; end  // EORI.B adisp
+      16'b0000101000110???: begin entry = 13'd3679; prev = 21'h100800; end  // EORI.B aidx
+      16'b0000101000111000: begin entry = 13'd3686; prev = 21'h100800; end  // EORI.B absw
+      16'b0000101000111001: begin entry = 13'd3691; prev = 21'h100800; end  // EORI.B absl
+      16'b0000101001000???: begin entry = 13'd3697; prev = 21'h100800; end  // EORI.W dn
+      16'b0000101001010???: begin entry = 13'd3699; prev = 21'h100800; end  // EORI.W aind
+      16'b0000101001011???: begin entry = 13'd3703; prev = 21'h100800; end  // EORI.W apost
+      16'b0000101001100???: begin entry = 13'd3707; prev = 21'h100800; end  // EORI.W apre
+      16'b0000101001101???: begin entry = 13'd3711; prev = 21'h100800; end  // EORI.W adisp
+      16'b0000101001110???: begin entry = 13'd3716; prev = 21'h100800; end  // EORI.W aidx
+      16'b0000101001111000: begin entry = 13'd3723; prev = 21'h100800; end  // EORI.W absw
+      16'b0000101001111001: begin entry = 13'd3728; prev = 21'h100800; end  // EORI.W absl
+      16'b0000101010000???: begin entry = 13'd3734; prev = 21'h100800; end  // EORI.L dn
+      16'b0000101010010???: begin entry = 13'd3737; prev = 21'h100800; end  // EORI.L aind
+      16'b0000101010011???: begin entry = 13'd3744; prev = 21'h100800; end  // EORI.L apost
+      16'b0000101010100???: begin entry = 13'd3751; prev = 21'h100800; end  // EORI.L apre
+      16'b0000101010101???: begin entry = 13'd3758; prev = 21'h100800; end  // EORI.L adisp
+      16'b0000101010110???: begin entry = 13'd3766; prev = 21'h100800; end  // EORI.L aidx
+      16'b0000101010111000: begin entry = 13'd3776; prev = 21'h100800; end  // EORI.L absw
+      16'b0000101010111001: begin entry = 13'd3784; prev = 21'h100800; end  // EORI.L absl
+      16'b0000110000000???: begin entry = 13'd3793; prev = 21'h100800; end  // CMPI.B dn
+      16'b0000110000010???: begin entry = 13'd3795; prev = 21'h100800; end  // CMPI.B aind
+      16'b0000110000011???: begin entry = 13'd3798; prev = 21'h100800; end  // CMPI.B apost
+      16'b0000110000100???: begin entry = 13'd3801; prev = 21'h100800; end  // CMPI.B apre
+      16'b0000110000101???: begin entry = 13'd3804; prev = 21'h100800; end  // CMPI.B adisp
+      16'b0000110000110???: begin entry = 13'd3808; prev = 21'h100800; end  // CMPI.B aidx
+      16'b0000110000111000: begin entry = 13'd3814; prev = 21'h100800; end  // CMPI.B absw
+      16'b0000110000111001: begin entry = 13'd3818; prev = 21'h100800; end  // CMPI.B absl
+      16'b0000110001000???: begin entry = 13'd3823; prev = 21'h100800; end  // CMPI.W dn
+      16'b0000110001010???: begin entry = 13'd3825; prev = 21'h100800; end  // CMPI.W aind
+      16'b0000110001011???: begin entry = 13'd3828; prev = 21'h100800; end  // CMPI.W apost
+      16'b0000110001100???: begin entry = 13'd3831; prev = 21'h100800; end  // CMPI.W apre
+      16'b0000110001101???: begin entry = 13'd3834; prev = 21'h100800; end  // CMPI.W adisp
+      16'b0000110001110???: begin entry = 13'd3838; prev = 21'h100800; end  // CMPI.W aidx
+      16'b0000110001111000: begin entry = 13'd3844; prev = 21'h100800; end  // CMPI.W absw
+      16'b0000110001111001: begin entry = 13'd3848; prev = 21'h100800; end  // CMPI.W absl
+      16'b0000110010000???: begin entry = 13'd3853; prev = 21'h100800; end  // CMPI.L dn
+      16'b0000110010010???: begin entry = 13'd3856; prev = 21'h100800; end  // CMPI.L aind
+      16'b0000110010011???: begin entry = 13'd3861; prev = 21'h100800; end  // CMPI.L apost
+      16'b0000110010100???: begin entry = 13'd3866; prev = 21'h100800; end  // CMPI.L apre
+      16'b0000110010101???: begin entry = 13'd3871; prev = 21'h100800; end  // CMPI.L adisp
+      16'b0000110010110???: begin entry = 13'd3877; prev = 21'h100800; end  // CMPI.L aidx
+      16'b0000110010111000: begin entry = 13'd3885; prev = 21'h100800; end  // CMPI.L absw
+      16'b0000110010111001: begin entry = 13'd3891; prev = 21'h100800; end  // CMPI.L absl
+      16'b0101???000000???: begin entry = 13'd3898; prev = 21'h100000; end  // ADDQ.B dn
+      16'b0101???000010???: begin entry = 13'd3899; prev = 21'h086128; end  // ADDQ.B aind
+      16'b0101???000011???: begin entry = 13'd3902; prev = 21'h082128; end  // ADDQ.B apost
+      16'b0101???000100???: begin entry = 13'd3905; prev = 21'h084128; end  // ADDQ.B apre
+      16'b0101???000101???: begin entry = 13'd3908; prev = 21'h100800; end  // ADDQ.B adisp
+      16'b0101???000110???: begin entry = 13'd3912; prev = 21'h000807; end  // ADDQ.B aidx
+      16'b0101???000111000: begin entry = 13'd3918; prev = 21'h100800; end  // ADDQ.B absw
+      16'b0101???000111001: begin entry = 13'd3922; prev = 21'h180800; end  // ADDQ.B absl
+      16'b0101???001000???: begin entry = 13'd3927; prev = 21'h100800; end  // ADDQ.W dn
+      16'b0101???001001???: begin entry = 13'd3928; prev = 21'h101000; end  // ADDQ.W an
+      16'b0101???001010???: begin entry = 13'd3929; prev = 21'h086928; end  // ADDQ.W aind
+      16'b0101???001011???: begin entry = 13'd3932; prev = 21'h082928; end  // ADDQ.W apost
+      16'b0101???001100???: begin entry = 13'd3935; prev = 21'h084928; end  // ADDQ.W apre
+      16'b0101???001101???: begin entry = 13'd3938; prev = 21'h100800; end  // ADDQ.W adisp
+      16'b0101???001110???: begin entry = 13'd3942; prev = 21'h000807; end  // ADDQ.W aidx
+      16'b0101???001111000: begin entry = 13'd3948; prev = 21'h100800; end  // ADDQ.W absw
+      16'b0101???001111001: begin entry = 13'd3952; prev = 21'h180800; end  // ADDQ.W absl
+      16'b0101???010000???: begin entry = 13'd3957; prev = 21'h101000; end  // ADDQ.L dn
+      16'b0101???010001???: begin entry = 13'd3958; prev = 21'h101000; end  // ADDQ.L an
+      16'b0101???010010???: begin entry = 13'd3959; prev = 21'h087128; end  // ADDQ.L aind
+      16'b0101???010011???: begin entry = 13'd3964; prev = 21'h081128; end  // ADDQ.L apost
+      16'b0101???010100???: begin entry = 13'd3969; prev = 21'h085128; end  // ADDQ.L apre
+      16'b0101???010101???: begin entry = 13'd3974; prev = 21'h100800; end  // ADDQ.L adisp
+      16'b0101???010110???: begin entry = 13'd3980; prev = 21'h000807; end  // ADDQ.L aidx
+      16'b0101???010111000: begin entry = 13'd3988; prev = 21'h100800; end  // ADDQ.L absw
+      16'b0101???010111001: begin entry = 13'd3994; prev = 21'h180800; end  // ADDQ.L absl
+      16'b0101???100000???: begin entry = 13'd4001; prev = 21'h100000; end  // SUBQ.B dn
+      16'b0101???100010???: begin entry = 13'd4002; prev = 21'h086128; end  // SUBQ.B aind
+      16'b0101???100011???: begin entry = 13'd4005; prev = 21'h082128; end  // SUBQ.B apost
+      16'b0101???100100???: begin entry = 13'd4008; prev = 21'h084128; end  // SUBQ.B apre
+      16'b0101???100101???: begin entry = 13'd4011; prev = 21'h100800; end  // SUBQ.B adisp
+      16'b0101???100110???: begin entry = 13'd4015; prev = 21'h000807; end  // SUBQ.B aidx
+      16'b0101???100111000: begin entry = 13'd4021; prev = 21'h100800; end  // SUBQ.B absw
+      16'b0101???100111001: begin entry = 13'd4025; prev = 21'h180800; end  // SUBQ.B absl
+      16'b0101???101000???: begin entry = 13'd4030; prev = 21'h100800; end  // SUBQ.W dn
+      16'b0101???101001???: begin entry = 13'd4031; prev = 21'h101000; end  // SUBQ.W an
+      16'b0101???101010???: begin entry = 13'd4032; prev = 21'h086928; end  // SUBQ.W aind
+      16'b0101???101011???: begin entry = 13'd4035; prev = 21'h082928; end  // SUBQ.W apost
+      16'b0101???101100???: begin entry = 13'd4038; prev = 21'h084928; end  // SUBQ.W apre
+      16'b0101???101101???: begin entry = 13'd4041; prev = 21'h100800; end  // SUBQ.W adisp
+      16'b0101???101110???: begin entry = 13'd4045; prev = 21'h000807; end  // SUBQ.W aidx
+      16'b0101???101111000: begin entry = 13'd4051; prev = 21'h100800; end  // SUBQ.W absw
+      16'b0101???101111001: begin entry = 13'd4055; prev = 21'h180800; end  // SUBQ.W absl
+      16'b0101???110000???: begin entry = 13'd4060; prev = 21'h101000; end  // SUBQ.L dn
+      16'b0101???110001???: begin entry = 13'd4061; prev = 21'h101000; end  // SUBQ.L an
+      16'b0101???110010???: begin entry = 13'd4062; prev = 21'h087128; end  // SUBQ.L aind
+      16'b0101???110011???: begin entry = 13'd4067; prev = 21'h081128; end  // SUBQ.L apost
+      16'b0101???110100???: begin entry = 13'd4072; prev = 21'h085128; end  // SUBQ.L apre
+      16'b0101???110101???: begin entry = 13'd4077; prev = 21'h100800; end  // SUBQ.L adisp
+      16'b0101???110110???: begin entry = 13'd4083; prev = 21'h000807; end  // SUBQ.L aidx
+      16'b0101???110111000: begin entry = 13'd4091; prev = 21'h100800; end  // SUBQ.L absw
+      16'b0101???110111001: begin entry = 13'd4097; prev = 21'h180800; end  // SUBQ.L absl
+      16'b0100100010000???: begin entry = 13'd4104; prev = 21'h100800; end  // EXT.W
+      16'b0100100011000???: begin entry = 13'd4105; prev = 21'h101000; end  // EXT.L
+      16'b0100100001000???: begin entry = 13'd4106; prev = 21'h101000; end  // SWAP
+      16'b0100???111010???: begin entry = 13'd4107; prev = 21'h101000; end  // LEA aind
+      16'b0100???111101???: begin entry = 13'd4108; prev = 21'h100800; end  // LEA adisp
+      16'b0100???111110???: begin entry = 13'd4110; prev = 21'h000807; end  // LEA aidx
+      16'b0100???111111000: begin entry = 13'd4114; prev = 21'h100800; end  // LEA absw
+      16'b0100???111111001: begin entry = 13'd4116; prev = 21'h180800; end  // LEA absl
+      16'b0100???111111010: begin entry = 13'd4119; prev = 21'h100800; end  // LEA pcdisp
+      16'b0100???111111011: begin entry = 13'd4121; prev = 21'h000807; end  // LEA pcidx
+      16'b0100100001010???: begin entry = 13'd4125; prev = 21'h101000; end  // PEA aind
+      16'b0100100001101???: begin entry = 13'd4128; prev = 21'h100800; end  // PEA adisp
+      16'b0100100001110???: begin entry = 13'd4132; prev = 21'h000807; end  // PEA aidx
+      16'b0100100001111000: begin entry = 13'd4138; prev = 21'h100800; end  // PEA absw
+      16'b0100100001111001: begin entry = 13'd4142; prev = 21'h180800; end  // PEA absl
+      16'b0100100001111010: begin entry = 13'd4147; prev = 21'h100800; end  // PEA pcdisp
+      16'b0100100001111011: begin entry = 13'd4151; prev = 21'h000807; end  // PEA pcidx
+      16'b1110???000000???: begin entry = 13'd4157; prev = 21'h100000; end  // ASR.B
+      16'b1110???000100???: begin entry = 13'd4158; prev = 21'h100000; end  // ASR.B
+      16'b1110???001000???: begin entry = 13'd4159; prev = 21'h100800; end  // ASR.W
+      16'b1110???001100???: begin entry = 13'd4160; prev = 21'h100800; end  // ASR.W
+      16'b1110???010000???: begin entry = 13'd4161; prev = 21'h101000; end  // ASR.L
+      16'b1110???010100???: begin entry = 13'd4162; prev = 21'h101000; end  // ASR.L
+      16'b1110???100000???: begin entry = 13'd4163; prev = 21'h100000; end  // ASL.B
+      16'b1110???100100???: begin entry = 13'd4164; prev = 21'h100000; end  // ASL.B
+      16'b1110???101000???: begin entry = 13'd4165; prev = 21'h100800; end  // ASL.W
+      16'b1110???101100???: begin entry = 13'd4166; prev = 21'h100800; end  // ASL.W
+      16'b1110???110000???: begin entry = 13'd4167; prev = 21'h101000; end  // ASL.L
+      16'b1110???110100???: begin entry = 13'd4168; prev = 21'h101000; end  // ASL.L
+      16'b1110???000001???: begin entry = 13'd4169; prev = 21'h100000; end  // LSR.B
+      16'b1110???000101???: begin entry = 13'd4170; prev = 21'h100000; end  // LSR.B
+      16'b1110???001001???: begin entry = 13'd4171; prev = 21'h100800; end  // LSR.W
+      16'b1110???001101???: begin entry = 13'd4172; prev = 21'h100800; end  // LSR.W
+      16'b1110???010001???: begin entry = 13'd4173; prev = 21'h101000; end  // LSR.L
+      16'b1110???010101???: begin entry = 13'd4174; prev = 21'h101000; end  // LSR.L
+      16'b1110???100001???: begin entry = 13'd4175; prev = 21'h100000; end  // LSL.B
+      16'b1110???100101???: begin entry = 13'd4176; prev = 21'h100000; end  // LSL.B
+      16'b1110???101001???: begin entry = 13'd4177; prev = 21'h100800; end  // LSL.W
+      16'b1110???101101???: begin entry = 13'd4178; prev = 21'h100800; end  // LSL.W
+      16'b1110???110001???: begin entry = 13'd4179; prev = 21'h101000; end  // LSL.L
+      16'b1110???110101???: begin entry = 13'd4180; prev = 21'h101000; end  // LSL.L
+      16'b1110???000010???: begin entry = 13'd4181; prev = 21'h100000; end  // ROXR.B
+      16'b1110???000110???: begin entry = 13'd4182; prev = 21'h100000; end  // ROXR.B
+      16'b1110???001010???: begin entry = 13'd4183; prev = 21'h100800; end  // ROXR.W
+      16'b1110???001110???: begin entry = 13'd4184; prev = 21'h100800; end  // ROXR.W
+      16'b1110???010010???: begin entry = 13'd4185; prev = 21'h101000; end  // ROXR.L
+      16'b1110???010110???: begin entry = 13'd4186; prev = 21'h101000; end  // ROXR.L
+      16'b1110???100010???: begin entry = 13'd4187; prev = 21'h100000; end  // ROXL.B
+      16'b1110???100110???: begin entry = 13'd4188; prev = 21'h100000; end  // ROXL.B
+      16'b1110???101010???: begin entry = 13'd4189; prev = 21'h100800; end  // ROXL.W
+      16'b1110???101110???: begin entry = 13'd4190; prev = 21'h100800; end  // ROXL.W
+      16'b1110???110010???: begin entry = 13'd4191; prev = 21'h101000; end  // ROXL.L
+      16'b1110???110110???: begin entry = 13'd4192; prev = 21'h101000; end  // ROXL.L
+      16'b1110???000011???: begin entry = 13'd4193; prev = 21'h100000; end  // ROR.B
+      16'b1110???000111???: begin entry = 13'd4194; prev = 21'h100000; end  // ROR.B
+      16'b1110???001011???: begin entry = 13'd4195; prev = 21'h100800; end  // ROR.W
+      16'b1110???001111???: begin entry = 13'd4196; prev = 21'h100800; end  // ROR.W
+      16'b1110???010011???: begin entry = 13'd4197; prev = 21'h101000; end  // ROR.L
+      16'b1110???010111???: begin entry = 13'd4198; prev = 21'h101000; end  // ROR.L
+      16'b1110???100011???: begin entry = 13'd4199; prev = 21'h100000; end  // ROL.B
+      16'b1110???100111???: begin entry = 13'd4200; prev = 21'h100000; end  // ROL.B
+      16'b1110???101011???: begin entry = 13'd4201; prev = 21'h100800; end  // ROL.W
+      16'b1110???101111???: begin entry = 13'd4202; prev = 21'h100800; end  // ROL.W
+      16'b1110???110011???: begin entry = 13'd4203; prev = 21'h101000; end  // ROL.L
+      16'b1110???110111???: begin entry = 13'd4204; prev = 21'h101000; end  // ROL.L
+      16'b1110000011010???: begin entry = 13'd4205; prev = 21'h086928; end  // ASR <memory>
+      16'b1110000011011???: begin entry = 13'd4208; prev = 21'h082928; end  // ASR <memory>
+      16'b1110000011100???: begin entry = 13'd4211; prev = 21'h084928; end  // ASR <memory>
+      16'b1110000011101???: begin entry = 13'd4214; prev = 21'h100800; end  // ASR <memory>
+      16'b1110000011110???: begin entry = 13'd4218; prev = 21'h000807; end  // ASR <memory>
+      16'b1110000011111000: begin entry = 13'd4224; prev = 21'h100800; end  // ASR <memory>
+      16'b1110000011111001: begin entry = 13'd4228; prev = 21'h180800; end  // ASR <memory>
+      16'b1110000111010???: begin entry = 13'd4233; prev = 21'h086928; end  // ASL <memory>
+      16'b1110000111011???: begin entry = 13'd4236; prev = 21'h082928; end  // ASL <memory>
+      16'b1110000111100???: begin entry = 13'd4239; prev = 21'h084928; end  // ASL <memory>
+      16'b1110000111101???: begin entry = 13'd4242; prev = 21'h100800; end  // ASL <memory>
+      16'b1110000111110???: begin entry = 13'd4246; prev = 21'h000807; end  // ASL <memory>
+      16'b1110000111111000: begin entry = 13'd4252; prev = 21'h100800; end  // ASL <memory>
+      16'b1110000111111001: begin entry = 13'd4256; prev = 21'h180800; end  // ASL <memory>
+      16'b1110001011010???: begin entry = 13'd4261; prev = 21'h086928; end  // LSR <memory>
+      16'b1110001011011???: begin entry = 13'd4264; prev = 21'h082928; end  // LSR <memory>
+      16'b1110001011100???: begin entry = 13'd4267; prev = 21'h084928; end  // LSR <memory>
+      16'b1110001011101???: begin entry = 13'd4270; prev = 21'h100800; end  // LSR <memory>
+      16'b1110001011110???: begin entry = 13'd4274; prev = 21'h000807; end  // LSR <memory>
+      16'b1110001011111000: begin entry = 13'd4280; prev = 21'h100800; end  // LSR <memory>
+      16'b1110001011111001: begin entry = 13'd4284; prev = 21'h180800; end  // LSR <memory>
+      16'b1110001111010???: begin entry = 13'd4289; prev = 21'h086928; end  // LSL <memory>
+      16'b1110001111011???: begin entry = 13'd4292; prev = 21'h082928; end  // LSL <memory>
+      16'b1110001111100???: begin entry = 13'd4295; prev = 21'h084928; end  // LSL <memory>
+      16'b1110001111101???: begin entry = 13'd4298; prev = 21'h100800; end  // LSL <memory>
+      16'b1110001111110???: begin entry = 13'd4302; prev = 21'h000807; end  // LSL <memory>
+      16'b1110001111111000: begin entry = 13'd4308; prev = 21'h100800; end  // LSL <memory>
+      16'b1110001111111001: begin entry = 13'd4312; prev = 21'h180800; end  // LSL <memory>
+      16'b1110010011010???: begin entry = 13'd4317; prev = 21'h086928; end  // ROXR <memory>
+      16'b1110010011011???: begin entry = 13'd4320; prev = 21'h082928; end  // ROXR <memory>
+      16'b1110010011100???: begin entry = 13'd4323; prev = 21'h084928; end  // ROXR <memory>
+      16'b1110010011101???: begin entry = 13'd4326; prev = 21'h100800; end  // ROXR <memory>
+      16'b1110010011110???: begin entry = 13'd4330; prev = 21'h000807; end  // ROXR <memory>
+      16'b1110010011111000: begin entry = 13'd4336; prev = 21'h100800; end  // ROXR <memory>
+      16'b1110010011111001: begin entry = 13'd4340; prev = 21'h180800; end  // ROXR <memory>
+      16'b1110010111010???: begin entry = 13'd4345; prev = 21'h086928; end  // ROXL <memory>
+      16'b1110010111011???: begin entry = 13'd4348; prev = 21'h082928; end  // ROXL <memory>
+      16'b1110010111100???: begin entry = 13'd4351; prev = 21'h084928; end  // ROXL <memory>
+      16'b1110010111101???: begin entry = 13'd4354; prev = 21'h100800; end  // ROXL <memory>
+      16'b1110010111110???: begin entry = 13'd4358; prev = 21'h000807; end  // ROXL <memory>
+      16'b1110010111111000: begin entry = 13'd4364; prev = 21'h100800; end  // ROXL <memory>
+      16'b1110010111111001: begin entry = 13'd4368; prev = 21'h180800; end  // ROXL <memory>
+      16'b1110011011010???: begin entry = 13'd4373; prev = 21'h086928; end  // ROR <memory>
+      16'b1110011011011???: begin entry = 13'd4376; prev = 21'h082928; end  // ROR <memory>
+      16'b1110011011100???: begin entry = 13'd4379; prev = 21'h084928; end  // ROR <memory>
+      16'b1110011011101???: begin entry = 13'd4382; prev = 21'h100800; end  // ROR <memory>
+      16'b1110011011110???: begin entry = 13'd4386; prev = 21'h000807; end  // ROR <memory>
+      16'b1110011011111000: begin entry = 13'd4392; prev = 21'h100800; end  // ROR <memory>
+      16'b1110011011111001: begin entry = 13'd4396; prev = 21'h180800; end  // ROR <memory>
+      16'b1110011111010???: begin entry = 13'd4401; prev = 21'h086928; end  // ROL <memory>
+      16'b1110011111011???: begin entry = 13'd4404; prev = 21'h082928; end  // ROL <memory>
+      16'b1110011111100???: begin entry = 13'd4407; prev = 21'h084928; end  // ROL <memory>
+      16'b1110011111101???: begin entry = 13'd4410; prev = 21'h100800; end  // ROL <memory>
+      16'b1110011111110???: begin entry = 13'd4414; prev = 21'h000807; end  // ROL <memory>
+      16'b1110011111111000: begin entry = 13'd4420; prev = 21'h100800; end  // ROL <memory>
+      16'b1110011111111001: begin entry = 13'd4424; prev = 21'h180800; end  // ROL <memory>
+      16'b0000???100000???: begin entry = 13'd4429; prev = 21'h101000; end  // BTST Dn,dn
+      16'b0000???100010???: begin entry = 13'd4430; prev = 21'h086128; end  // BTST Dn,aind
+      16'b0000???100011???: begin entry = 13'd4432; prev = 21'h082128; end  // BTST Dn,apost
+      16'b0000???100100???: begin entry = 13'd4434; prev = 21'h084128; end  // BTST Dn,apre
+      16'b0000???100101???: begin entry = 13'd4436; prev = 21'h100800; end  // BTST Dn,adisp
+      16'b0000???100110???: begin entry = 13'd4439; prev = 21'h000807; end  // BTST Dn,aidx
+      16'b0000???100111000: begin entry = 13'd4444; prev = 21'h100800; end  // BTST Dn,absw
+      16'b0000???100111001: begin entry = 13'd4447; prev = 21'h180800; end  // BTST Dn,absl
+      16'b0000???100111010: begin entry = 13'd4451; prev = 21'h100800; end  // BTST Dn,pcdisp
+      16'b0000???100111011: begin entry = 13'd4454; prev = 21'h000807; end  // BTST Dn,pcidx
+      16'b0000???100111100: begin entry = 13'd4459; prev = 21'h100800; end  // BTST Dn,imm
+      16'b0000100000000???: begin entry = 13'd4461; prev = 21'h101000; end  // BTST #,dn
+      16'b0000100000010???: begin entry = 13'd4463; prev = 21'h100000; end  // BTST #,aind
+      16'b0000100000011???: begin entry = 13'd4466; prev = 21'h100000; end  // BTST #,apost
+      16'b0000100000100???: begin entry = 13'd4469; prev = 21'h100000; end  // BTST #,apre
+      16'b0000100000101???: begin entry = 13'd4472; prev = 21'h100000; end  // BTST #,adisp
+      16'b0000100000110???: begin entry = 13'd4476; prev = 21'h100000; end  // BTST #,aidx
+      16'b0000100000111000: begin entry = 13'd4482; prev = 21'h100000; end  // BTST #,absw
+      16'b0000100000111001: begin entry = 13'd4486; prev = 21'h100000; end  // BTST #,absl
+      16'b0000100000111010: begin entry = 13'd4491; prev = 21'h100000; end  // BTST #,pcdisp
+      16'b0000100000111011: begin entry = 13'd4495; prev = 21'h100000; end  // BTST #,pcidx
+      16'b0000100000111100: begin entry = 13'd4501; prev = 21'h100000; end  // BTST #,imm
+      16'b0000???101000???: begin entry = 13'd4504; prev = 21'h101000; end  // BCHG Dn,dn
+      16'b0000???101010???: begin entry = 13'd4505; prev = 21'h086128; end  // BCHG Dn,aind
+      16'b0000???101011???: begin entry = 13'd4508; prev = 21'h082128; end  // BCHG Dn,apost
+      16'b0000???101100???: begin entry = 13'd4511; prev = 21'h084128; end  // BCHG Dn,apre
+      16'b0000???101101???: begin entry = 13'd4514; prev = 21'h100800; end  // BCHG Dn,adisp
+      16'b0000???101110???: begin entry = 13'd4518; prev = 21'h000807; end  // BCHG Dn,aidx
+      16'b0000???101111000: begin entry = 13'd4524; prev = 21'h100800; end  // BCHG Dn,absw
+      16'b0000???101111001: begin entry = 13'd4528; prev = 21'h180800; end  // BCHG Dn,absl
+      16'b0000100001000???: begin entry = 13'd4533; prev = 21'h101000; end  // BCHG #,dn
+      16'b0000100001010???: begin entry = 13'd4535; prev = 21'h100000; end  // BCHG #,aind
+      16'b0000100001011???: begin entry = 13'd4539; prev = 21'h100000; end  // BCHG #,apost
+      16'b0000100001100???: begin entry = 13'd4543; prev = 21'h100000; end  // BCHG #,apre
+      16'b0000100001101???: begin entry = 13'd4547; prev = 21'h100000; end  // BCHG #,adisp
+      16'b0000100001110???: begin entry = 13'd4552; prev = 21'h100000; end  // BCHG #,aidx
+      16'b0000100001111000: begin entry = 13'd4559; prev = 21'h100000; end  // BCHG #,absw
+      16'b0000100001111001: begin entry = 13'd4564; prev = 21'h100000; end  // BCHG #,absl
+      16'b0000???110000???: begin entry = 13'd4570; prev = 21'h101000; end  // BCLR Dn,dn
+      16'b0000???110010???: begin entry = 13'd4571; prev = 21'h086128; end  // BCLR Dn,aind
+      16'b0000???110011???: begin entry = 13'd4574; prev = 21'h082128; end  // BCLR Dn,apost
+      16'b0000???110100???: begin entry = 13'd4577; prev = 21'h084128; end  // BCLR Dn,apre
+      16'b0000???110101???: begin entry = 13'd4580; prev = 21'h100800; end  // BCLR Dn,adisp
+      16'b0000???110110???: begin entry = 13'd4584; prev = 21'h000807; end  // BCLR Dn,aidx
+      16'b0000???110111000: begin entry = 13'd4590; prev = 21'h100800; end  // BCLR Dn,absw
+      16'b0000???110111001: begin entry = 13'd4594; prev = 21'h180800; end  // BCLR Dn,absl
+      16'b0000100010000???: begin entry = 13'd4599; prev = 21'h101000; end  // BCLR #,dn
+      16'b0000100010010???: begin entry = 13'd4601; prev = 21'h100000; end  // BCLR #,aind
+      16'b0000100010011???: begin entry = 13'd4605; prev = 21'h100000; end  // BCLR #,apost
+      16'b0000100010100???: begin entry = 13'd4609; prev = 21'h100000; end  // BCLR #,apre
+      16'b0000100010101???: begin entry = 13'd4613; prev = 21'h100000; end  // BCLR #,adisp
+      16'b0000100010110???: begin entry = 13'd4618; prev = 21'h100000; end  // BCLR #,aidx
+      16'b0000100010111000: begin entry = 13'd4625; prev = 21'h100000; end  // BCLR #,absw
+      16'b0000100010111001: begin entry = 13'd4630; prev = 21'h100000; end  // BCLR #,absl
+      16'b0000???111000???: begin entry = 13'd4636; prev = 21'h101000; end  // BSET Dn,dn
+      16'b0000???111010???: begin entry = 13'd4637; prev = 21'h086128; end  // BSET Dn,aind
+      16'b0000???111011???: begin entry = 13'd4640; prev = 21'h082128; end  // BSET Dn,apost
+      16'b0000???111100???: begin entry = 13'd4643; prev = 21'h084128; end  // BSET Dn,apre
+      16'b0000???111101???: begin entry = 13'd4646; prev = 21'h100800; end  // BSET Dn,adisp
+      16'b0000???111110???: begin entry = 13'd4650; prev = 21'h000807; end  // BSET Dn,aidx
+      16'b0000???111111000: begin entry = 13'd4656; prev = 21'h100800; end  // BSET Dn,absw
+      16'b0000???111111001: begin entry = 13'd4660; prev = 21'h180800; end  // BSET Dn,absl
+      16'b0000100011000???: begin entry = 13'd4665; prev = 21'h101000; end  // BSET #,dn
+      16'b0000100011010???: begin entry = 13'd4667; prev = 21'h100000; end  // BSET #,aind
+      16'b0000100011011???: begin entry = 13'd4671; prev = 21'h100000; end  // BSET #,apost
+      16'b0000100011100???: begin entry = 13'd4675; prev = 21'h100000; end  // BSET #,apre
+      16'b0000100011101???: begin entry = 13'd4679; prev = 21'h100000; end  // BSET #,adisp
+      16'b0000100011110???: begin entry = 13'd4684; prev = 21'h100000; end  // BSET #,aidx
+      16'b0000100011111000: begin entry = 13'd4691; prev = 21'h100000; end  // BSET #,absw
+      16'b0000100011111001: begin entry = 13'd4696; prev = 21'h100000; end  // BSET #,absl
+      16'b0101????11000???: begin entry = 13'd4702; prev = 21'h100000; end  // Scc dn
+      16'b0101????11010???: begin entry = 13'd4703; prev = 21'h086128; end  // Scc aind
+      16'b0101????11011???: begin entry = 13'd4706; prev = 21'h082128; end  // Scc apost
+      16'b0101????11100???: begin entry = 13'd4709; prev = 21'h084128; end  // Scc apre
+      16'b0101????11101???: begin entry = 13'd4712; prev = 21'h100800; end  // Scc adisp
+      16'b0101????11110???: begin entry = 13'd4716; prev = 21'h000807; end  // Scc aidx
+      16'b0101????11111000: begin entry = 13'd4722; prev = 21'h100800; end  // Scc absw
+      16'b0101????11111001: begin entry = 13'd4726; prev = 21'h180800; end  // Scc absl
+      16'b0100000000000???: begin entry = 13'd4731; prev = 21'h100000; end  // NEGX.B dn
+      16'b0100000000010???: begin entry = 13'd4732; prev = 21'h086128; end  // NEGX.B aind
+      16'b0100000000011???: begin entry = 13'd4735; prev = 21'h082128; end  // NEGX.B apost
+      16'b0100000000100???: begin entry = 13'd4738; prev = 21'h084128; end  // NEGX.B apre
+      16'b0100000000101???: begin entry = 13'd4741; prev = 21'h100800; end  // NEGX.B adisp
+      16'b0100000000110???: begin entry = 13'd4745; prev = 21'h000807; end  // NEGX.B aidx
+      16'b0100000000111000: begin entry = 13'd4751; prev = 21'h100800; end  // NEGX.B absw
+      16'b0100000000111001: begin entry = 13'd4755; prev = 21'h180800; end  // NEGX.B absl
+      16'b0100000001000???: begin entry = 13'd4760; prev = 21'h100800; end  // NEGX.W dn
+      16'b0100000001010???: begin entry = 13'd4761; prev = 21'h086928; end  // NEGX.W aind
+      16'b0100000001011???: begin entry = 13'd4764; prev = 21'h082928; end  // NEGX.W apost
+      16'b0100000001100???: begin entry = 13'd4767; prev = 21'h084928; end  // NEGX.W apre
+      16'b0100000001101???: begin entry = 13'd4770; prev = 21'h100800; end  // NEGX.W adisp
+      16'b0100000001110???: begin entry = 13'd4774; prev = 21'h000807; end  // NEGX.W aidx
+      16'b0100000001111000: begin entry = 13'd4780; prev = 21'h100800; end  // NEGX.W absw
+      16'b0100000001111001: begin entry = 13'd4784; prev = 21'h180800; end  // NEGX.W absl
+      16'b0100000010000???: begin entry = 13'd4789; prev = 21'h101000; end  // NEGX.L dn
+      16'b0100000010010???: begin entry = 13'd4790; prev = 21'h087128; end  // NEGX.L aind
+      16'b0100000010011???: begin entry = 13'd4795; prev = 21'h081128; end  // NEGX.L apost
+      16'b0100000010100???: begin entry = 13'd4800; prev = 21'h085128; end  // NEGX.L apre
+      16'b0100000010101???: begin entry = 13'd4805; prev = 21'h100800; end  // NEGX.L adisp
+      16'b0100000010110???: begin entry = 13'd4811; prev = 21'h000807; end  // NEGX.L aidx
+      16'b0100000010111000: begin entry = 13'd4819; prev = 21'h100800; end  // NEGX.L absw
+      16'b0100000010111001: begin entry = 13'd4825; prev = 21'h180800; end  // NEGX.L absl
+      16'b0100101011000???: begin entry = 13'd4832; prev = 21'h100000; end  // TAS dn
+      16'b0100101011010???: begin entry = 13'd4833; prev = 21'h08612a; end  // TAS aind
+      16'b0100101011011???: begin entry = 13'd4835; prev = 21'h08212a; end  // TAS apost
+      16'b0100101011100???: begin entry = 13'd4837; prev = 21'h08412a; end  // TAS apre
+      16'b0100101011101???: begin entry = 13'd4839; prev = 21'h100800; end  // TAS adisp
+      16'b0100101011110???: begin entry = 13'd4842; prev = 21'h000807; end  // TAS aidx
+      16'b0100101011111000: begin entry = 13'd4847; prev = 21'h100800; end  // TAS absw
+      16'b0100101011111001: begin entry = 13'd4850; prev = 21'h180800; end  // TAS absl
+      16'b0110000100000000: begin entry = 13'd4861; prev = 21'h000807; end  // BSR.W
+      16'b01100001????????: begin entry = 13'd4854; prev = 21'h000807; end  // BSR.B
+      16'b0101????11001???: begin entry = 13'd4868; prev = 21'h000807; end  // DBcc
+      16'b0110????00000000: begin entry = 13'd4900; prev = 21'h000807; end  // Bcc.W
+      16'b0110????????????: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b0100111011010???: begin entry = 13'd4909; prev = 21'h000807; end  // JMP aind
+      16'b0100111011101???: begin entry = 13'd4912; prev = 21'h000807; end  // JMP adisp
+      16'b0100111011110???: begin entry = 13'd4916; prev = 21'h000807; end  // JMP aidx
+      16'b0100111011111000: begin entry = 13'd4921; prev = 21'h000807; end  // JMP absw
+      16'b0100111011111001: begin entry = 13'd4925; prev = 21'h080800; end  // JMP absl
+      16'b0100111011111010: begin entry = 13'd4929; prev = 21'h000807; end  // JMP pcdisp
+      16'b0100111011111011: begin entry = 13'd4933; prev = 21'h000807; end  // JMP pcidx
+      16'b0100111010010???: begin entry = 13'd4938; prev = 21'h000807; end  // JSR aind
+      16'b0100111010101???: begin entry = 13'd4944; prev = 21'h000807; end  // JSR adisp
+      16'b0100111010110???: begin entry = 13'd4951; prev = 21'h000807; end  // JSR aidx
+      16'b0100111010111000: begin entry = 13'd4959; prev = 21'h000807; end  // JSR absw
+      16'b0100111010111001: begin entry = 13'd4966; prev = 21'h080800; end  // JSR absl
+      16'b0100111010111010: begin entry = 13'd4973; prev = 21'h000807; end  // JSR pcdisp
+      16'b0100111010111011: begin entry = 13'd4980; prev = 21'h000807; end  // JSR pcidx
+      16'b0100111001110101: begin entry = 13'd4988; prev = 21'h0a1128; end  // RTS
+      16'b0100111001110111: begin entry = 13'd4993; prev = 21'h0a0928; end  // RTR
+      16'b0100111001010???: begin entry = 13'd4999; prev = 21'h101000; end  // LINK
+      16'b0100111001011???: begin entry = 13'd5003; prev = 21'h081128; end  // UNLK
+      16'b0100101011111100: begin entry = 13'd5018; prev = 21'h000807; end  // ILLEGAL
+      16'b1010????????????: begin entry = 13'd5021; prev = 21'h000807; end  // line A
+      16'b1111????????????: begin entry = 13'd5024; prev = 21'h000807; end  // line F
+      16'b010011100100????: begin entry = 13'd5027; prev = 21'h000807; end  // TRAP
+      16'b0100111001110110: begin entry = 13'd5030; prev = 21'h000807; end  // TRAPV
+      16'b0100111001110011: begin entry = 13'd5041; prev = 21'h000807; end  // RTE
+      16'b0100000011000???: begin entry = 13'd5097; prev = 21'h000807; end  // MOVE SR,dn
+      16'b0100000011010???: begin entry = 13'd5101; prev = 21'h000807; end  // MOVE SR,aind
+      16'b0100000011011???: begin entry = 13'd5107; prev = 21'h000807; end  // MOVE SR,apost
+      16'b0100000011100???: begin entry = 13'd5113; prev = 21'h000807; end  // MOVE SR,apre
+      16'b0100000011101???: begin entry = 13'd5119; prev = 21'h000807; end  // MOVE SR,adisp
+      16'b0100000011110???: begin entry = 13'd5126; prev = 21'h000807; end  // MOVE SR,aidx
+      16'b0100000011111000: begin entry = 13'd5136; prev = 21'h000807; end  // MOVE SR,absw
+      16'b0100000011111001: begin entry = 13'd5144; prev = 21'h000807; end  // MOVE SR,absl
+      16'b0100001011000???: begin entry = 13'd5153; prev = 21'h100800; end  // MOVE CCR,dn
+      16'b0100001011010???: begin entry = 13'd5154; prev = 21'h086928; end  // MOVE CCR,aind
+      16'b0100001011011???: begin entry = 13'd5157; prev = 21'h082928; end  // MOVE CCR,apost
+      16'b0100001011100???: begin entry = 13'd5160; prev = 21'h084928; end  // MOVE CCR,apre
+      16'b0100001011101???: begin entry = 13'd5163; prev = 21'h100800; end  // MOVE CCR,adisp
+      16'b0100001011110???: begin entry = 13'd5167; prev = 21'h000807; end  // MOVE CCR,aidx
+      16'b0100001011111000: begin entry = 13'd5173; prev = 21'h100800; end  // MOVE CCR,absw
+      16'b0100001011111001: begin entry = 13'd5177; prev = 21'h180800; end  // MOVE CCR,absl
+      16'b0100010011000???: begin entry = 13'd5182; prev = 21'h000807; end  // MOVE dn,CCR
+      16'b0100010011010???: begin entry = 13'd5186; prev = 21'h086928; end  // MOVE aind,CCR
+      16'b0100010011011???: begin entry = 13'd5190; prev = 21'h082928; end  // MOVE apost,CCR
+      16'b0100010011100???: begin entry = 13'd5194; prev = 21'h084928; end  // MOVE apre,CCR
+      16'b0100010011101???: begin entry = 13'd5198; prev = 21'h100800; end  // MOVE adisp,CCR
+      16'b0100010011110???: begin entry = 13'd5203; prev = 21'h000807; end  // MOVE aidx,CCR
+      16'b0100010011111000: begin entry = 13'd5210; prev = 21'h100800; end  // MOVE absw,CCR
+      16'b0100010011111001: begin entry = 13'd5215; prev = 21'h180800; end  // MOVE absl,CCR
+      16'b0100010011111010: begin entry = 13'd5221; prev = 21'h100800; end  // MOVE pcdisp,CCR
+      16'b0100010011111011: begin entry = 13'd5226; prev = 21'h000807; end  // MOVE pcidx,CCR
+      16'b0100010011111100: begin entry = 13'd5233; prev = 21'h100800; end  // MOVE imm,CCR
+      16'b0100011011000???: begin entry = 13'd5237; prev = 21'h000807; end  // MOVE dn,SR
+      16'b0100011011010???: begin entry = 13'd5244; prev = 21'h000807; end  // MOVE aind,SR
+      16'b0100011011011???: begin entry = 13'd5252; prev = 21'h000807; end  // MOVE apost,SR
+      16'b0100011011100???: begin entry = 13'd5260; prev = 21'h000807; end  // MOVE apre,SR
+      16'b0100011011101???: begin entry = 13'd5268; prev = 21'h000807; end  // MOVE adisp,SR
+      16'b0100011011110???: begin entry = 13'd5277; prev = 21'h000807; end  // MOVE aidx,SR
+      16'b0100011011111000: begin entry = 13'd5287; prev = 21'h000807; end  // MOVE absw,SR
+      16'b0100011011111001: begin entry = 13'd5295; prev = 21'h000807; end  // MOVE absl,SR
+      16'b0100011011111010: begin entry = 13'd5304; prev = 21'h000807; end  // MOVE pcdisp,SR
+      16'b0100011011111011: begin entry = 13'd5313; prev = 21'h000807; end  // MOVE pcidx,SR
+      16'b0100011011111100: begin entry = 13'd5323; prev = 21'h000807; end  // MOVE imm,SR
+      16'b0000000000111100: begin entry = 13'd5330; prev = 21'h100800; end  // ORI to CCR
+      16'b0000000001111100: begin entry = 13'd5333; prev = 21'h000807; end  // ORI to SR
+      16'b0000001000111100: begin entry = 13'd5339; prev = 21'h100800; end  // ANDI to CCR
+      16'b0000001001111100: begin entry = 13'd5342; prev = 21'h000807; end  // ANDI to SR
+      16'b0000101000111100: begin entry = 13'd5349; prev = 21'h100800; end  // EORI to CCR
+      16'b0000101001111100: begin entry = 13'd5352; prev = 21'h000807; end  // EORI to SR
+      16'b0100111001100???: begin entry = 13'd5359; prev = 21'h000807; end  // MOVE An,USP
+      16'b0100111001101???: begin entry = 13'd5363; prev = 21'h000807; end  // MOVE USP,An
+      16'b0100111001110000: begin entry = 13'd5367; prev = 21'h000807; end  // RESET
+      16'b0100111001110010: begin entry = 13'd5377; prev = 21'h000807; end  // STOP
+      16'b0100???110000???: begin entry = 13'd5382; prev = 21'h000807; end  // CHK dn
+      16'b0100???110010???: begin entry = 13'd5391; prev = 21'h086928; end  // CHK aind
+      16'b0100???110011???: begin entry = 13'd5401; prev = 21'h082928; end  // CHK apost
+      16'b0100???110100???: begin entry = 13'd5411; prev = 21'h084928; end  // CHK apre
+      16'b0100???110101???: begin entry = 13'd5421; prev = 21'h100800; end  // CHK adisp
+      16'b0100???110110???: begin entry = 13'd5431; prev = 21'h000807; end  // CHK aidx
+      16'b0100???110111000: begin entry = 13'd5443; prev = 21'h100800; end  // CHK absw
+      16'b0100???110111001: begin entry = 13'd5453; prev = 21'h180800; end  // CHK absl
+      16'b0100???110111010: begin entry = 13'd5465; prev = 21'h100800; end  // CHK pcdisp
+      16'b0100???110111011: begin entry = 13'd5475; prev = 21'h000807; end  // CHK pcidx
+      16'b0100???110111100: begin entry = 13'd5487; prev = 21'h100800; end  // CHK imm
+      16'b1100???101000???: begin entry = 13'd5510; prev = 21'h001007; end  // EXG dd
+      16'b1100???101001???: begin entry = 13'd5513; prev = 21'h001007; end  // EXG aa
+      16'b1100???110001???: begin entry = 13'd5516; prev = 21'h001007; end  // EXG da
+      16'b1101???100000???: begin entry = 13'd5519; prev = 21'h100000; end  // ADDX.B Dy,Dx
+      16'b1101???100001???: begin entry = 13'd5520; prev = 21'h084128; end  // ADDX.B -(Ay),-(Ax)
+      16'b1101???101000???: begin entry = 13'd5524; prev = 21'h100800; end  // ADDX.W Dy,Dx
+      16'b1101???101001???: begin entry = 13'd5525; prev = 21'h084928; end  // ADDX.W -(Ay),-(Ax)
+      16'b1101???110000???: begin entry = 13'd5529; prev = 21'h101000; end  // ADDX.L Dy,Dx
+      16'b1101???110001???: begin entry = 13'd5530; prev = 21'h085130; end  // ADDX.L -(Ay),-(Ax)
+      16'b1001???100000???: begin entry = 13'd5537; prev = 21'h100000; end  // SUBX.B Dy,Dx
+      16'b1001???100001???: begin entry = 13'd5538; prev = 21'h084128; end  // SUBX.B -(Ay),-(Ax)
+      16'b1001???101000???: begin entry = 13'd5542; prev = 21'h100800; end  // SUBX.W Dy,Dx
+      16'b1001???101001???: begin entry = 13'd5543; prev = 21'h084928; end  // SUBX.W -(Ay),-(Ax)
+      16'b1001???110000???: begin entry = 13'd5547; prev = 21'h101000; end  // SUBX.L Dy,Dx
+      16'b1001???110001???: begin entry = 13'd5548; prev = 21'h085130; end  // SUBX.L -(Ay),-(Ax)
+      16'b1011???100001???: begin entry = 13'd5555; prev = 21'h082128; end  // CMPM.B
+      16'b1011???101001???: begin entry = 13'd5558; prev = 21'h082928; end  // CMPM.W
+      16'b1011???110001???: begin entry = 13'd5561; prev = 21'h081128; end  // CMPM.L
+      16'b1100???100000???: begin entry = 13'd5566; prev = 21'h100000; end  // ABCD Dy,Dx
+      16'b1100???100001???: begin entry = 13'd5567; prev = 21'h084128; end  // ABCD -(Ay),-(Ax)
+      16'b1000???100000???: begin entry = 13'd5571; prev = 21'h100000; end  // SBCD Dy,Dx
+      16'b1000???100001???: begin entry = 13'd5572; prev = 21'h084128; end  // SBCD -(Ay),-(Ax)
+      16'b0100100000000???: begin entry = 13'd5576; prev = 21'h100000; end  // NBCD dn
+      16'b0100100000010???: begin entry = 13'd5577; prev = 21'h086128; end  // NBCD aind
+      16'b0100100000011???: begin entry = 13'd5580; prev = 21'h082128; end  // NBCD apost
+      16'b0100100000100???: begin entry = 13'd5583; prev = 21'h084128; end  // NBCD apre
+      16'b0100100000101???: begin entry = 13'd5586; prev = 21'h100800; end  // NBCD adisp
+      16'b0100100000110???: begin entry = 13'd5590; prev = 21'h000807; end  // NBCD aidx
+      16'b0100100000111000: begin entry = 13'd5596; prev = 21'h100800; end  // NBCD absw
+      16'b0100100000111001: begin entry = 13'd5600; prev = 21'h180800; end  // NBCD absl
+      16'b1100???011000???: begin entry = 13'd5605; prev = 21'h000807; end  // MULU dn
+      16'b1100???011010???: begin entry = 13'd5607; prev = 21'h086928; end  // MULU aind
+      16'b1100???011011???: begin entry = 13'd5610; prev = 21'h082928; end  // MULU apost
+      16'b1100???011100???: begin entry = 13'd5613; prev = 21'h084928; end  // MULU apre
+      16'b1100???011101???: begin entry = 13'd5616; prev = 21'h100800; end  // MULU adisp
+      16'b1100???011110???: begin entry = 13'd5620; prev = 21'h000807; end  // MULU aidx
+      16'b1100???011111000: begin entry = 13'd5626; prev = 21'h100800; end  // MULU absw
+      16'b1100???011111001: begin entry = 13'd5630; prev = 21'h180800; end  // MULU absl
+      16'b1100???011111010: begin entry = 13'd5635; prev = 21'h100800; end  // MULU pcdisp
+      16'b1100???011111011: begin entry = 13'd5639; prev = 21'h000807; end  // MULU pcidx
+      16'b1100???011111100: begin entry = 13'd5645; prev = 21'h100800; end  // MULU imm
+      16'b1100???111000???: begin entry = 13'd5648; prev = 21'h000807; end  // MULS dn
+      16'b1100???111010???: begin entry = 13'd5650; prev = 21'h086928; end  // MULS aind
+      16'b1100???111011???: begin entry = 13'd5653; prev = 21'h082928; end  // MULS apost
+      16'b1100???111100???: begin entry = 13'd5656; prev = 21'h084928; end  // MULS apre
+      16'b1100???111101???: begin entry = 13'd5659; prev = 21'h100800; end  // MULS adisp
+      16'b1100???111110???: begin entry = 13'd5663; prev = 21'h000807; end  // MULS aidx
+      16'b1100???111111000: begin entry = 13'd5669; prev = 21'h100800; end  // MULS absw
+      16'b1100???111111001: begin entry = 13'd5673; prev = 21'h180800; end  // MULS absl
+      16'b1100???111111010: begin entry = 13'd5678; prev = 21'h100800; end  // MULS pcdisp
+      16'b1100???111111011: begin entry = 13'd5682; prev = 21'h000807; end  // MULS pcidx
+      16'b1100???111111100: begin entry = 13'd5688; prev = 21'h100800; end  // MULS imm
+      16'b1000???011000???: begin entry = 13'd5691; prev = 21'h000807; end  // DIVU dn
+      16'b1000???011010???: begin entry = 13'd5708; prev = 21'h086928; end  // DIVU aind
+      16'b1000???011011???: begin entry = 13'd5724; prev = 21'h082928; end  // DIVU apost
+      16'b1000???011100???: begin entry = 13'd5740; prev = 21'h084928; end  // DIVU apre
+      16'b1000???011101???: begin entry = 13'd5756; prev = 21'h100800; end  // DIVU adisp
+      16'b1000???011110???: begin entry = 13'd5774; prev = 21'h000807; end  // DIVU aidx
+      16'b1000???011111000: begin entry = 13'd5794; prev = 21'h100800; end  // DIVU absw
+      16'b1000???011111001: begin entry = 13'd5812; prev = 21'h180800; end  // DIVU absl
+      16'b1000???011111010: begin entry = 13'd5830; prev = 21'h100800; end  // DIVU pcdisp
+      16'b1000???011111011: begin entry = 13'd5848; prev = 21'h000807; end  // DIVU pcidx
+      16'b1000???011111100: begin entry = 13'd5868; prev = 21'h100800; end  // DIVU imm
+      16'b1000???111000???: begin entry = 13'd5884; prev = 21'h000807; end  // DIVS dn
+      16'b1000???111010???: begin entry = 13'd5900; prev = 21'h086928; end  // DIVS aind
+      16'b1000???111011???: begin entry = 13'd5916; prev = 21'h082928; end  // DIVS apost
+      16'b1000???111100???: begin entry = 13'd5932; prev = 21'h084928; end  // DIVS apre
+      16'b1000???111101???: begin entry = 13'd5948; prev = 21'h100800; end  // DIVS adisp
+      16'b1000???111110???: begin entry = 13'd5966; prev = 21'h000807; end  // DIVS aidx
+      16'b1000???111111000: begin entry = 13'd5986; prev = 21'h100800; end  // DIVS absw
+      16'b1000???111111001: begin entry = 13'd6004; prev = 21'h180800; end  // DIVS absl
+      16'b1000???111111010: begin entry = 13'd6022; prev = 21'h100800; end  // DIVS pcdisp
+      16'b1000???111111011: begin entry = 13'd6040; prev = 21'h000807; end  // DIVS pcidx
+      16'b1000???111111100: begin entry = 13'd6060; prev = 21'h100800; end  // DIVS imm
+      16'b0000???100001???: begin entry = 13'd6079; prev = 21'h100800; end  // MOVEP.W memory to Dx
+      16'b0000???110001???: begin entry = 13'd6083; prev = 21'h100800; end  // MOVEP.W Dx to memory
+      16'b0000???101001???: begin entry = 13'd6087; prev = 21'h100800; end  // MOVEP.L memory to Dx
+      16'b0000???111001???: begin entry = 13'd6093; prev = 21'h100800; end  // MOVEP.L Dx to memory
+      16'b0100100010010???: begin entry = 13'd6099; prev = 21'h100800; end  // MOVEM.W from aind
+      16'b0100100010100???: begin entry = 13'd6102; prev = 21'h100800; end  // MOVEM.W from apre
+      16'b0100100010101???: begin entry = 13'd6106; prev = 21'h100800; end  // MOVEM.W from adisp
+      16'b0100100010110???: begin entry = 13'd6110; prev = 21'h100800; end  // MOVEM.W from aidx
+      16'b0100100010111000: begin entry = 13'd6116; prev = 21'h100800; end  // MOVEM.W from absw
+      16'b0100100010111001: begin entry = 13'd6120; prev = 21'h100800; end  // MOVEM.W from absl
+      16'b0100110010010???: begin entry = 13'd6126; prev = 21'h100800; end  // MOVEM.W to aind
+      16'b0100110010011???: begin entry = 13'd6131; prev = 21'h100800; end  // MOVEM.W to apost
+      16'b0100110010101???: begin entry = 13'd6135; prev = 21'h100800; end  // MOVEM.W to adisp
+      16'b0100110010110???: begin entry = 13'd6141; prev = 21'h100800; end  // MOVEM.W to aidx
+      16'b0100110010111000: begin entry = 13'd6149; prev = 21'h100800; end  // MOVEM.W to absw
+      16'b0100110010111001: begin entry = 13'd6155; prev = 21'h100800; end  // MOVEM.W to absl
+      16'b0100110010111010: begin entry = 13'd6161; prev = 21'h100800; end  // MOVEM.W to pcdisp
+      16'b0100110010111011: begin entry = 13'd6167; prev = 21'h100800; end  // MOVEM.W to pcidx
+      16'b0100100011010???: begin entry = 13'd6175; prev = 21'h100800; end  // MOVEM.L from aind
+      16'b0100100011100???: begin entry = 13'd6179; prev = 21'h100800; end  // MOVEM.L from apre
+      16'b0100100011101???: begin entry = 13'd6183; prev = 21'h100800; end  // MOVEM.L from adisp
+      16'b0100100011110???: begin entry = 13'd6189; prev = 21'h100800; end  // MOVEM.L from aidx
+      16'b0100100011111000: begin entry = 13'd6197; prev = 21'h100800; end  // MOVEM.L from absw
+      16'b0100100011111001: begin entry = 13'd6203; prev = 21'h100800; end  // MOVEM.L from absl
+      16'b0100110011010???: begin entry = 13'd6209; prev = 21'h100800; end  // MOVEM.L to aind
+      16'b0100110011011???: begin entry = 13'd6214; prev = 21'h100800; end  // MOVEM.L to apost
+      16'b0100110011101???: begin entry = 13'd6220; prev = 21'h100800; end  // MOVEM.L to adisp
+      16'b0100110011110???: begin entry = 13'd6226; prev = 21'h100800; end  // MOVEM.L to aidx
+      16'b0100110011111000: begin entry = 13'd6234; prev = 21'h100800; end  // MOVEM.L to absw
+      16'b0100110011111001: begin entry = 13'd6240; prev = 21'h100800; end  // MOVEM.L to absl
+      16'b0100110011111010: begin entry = 13'd6248; prev = 21'h100800; end  // MOVEM.L to pcdisp
+      16'b0100110011111011: begin entry = 13'd6254; prev = 21'h100800; end  // MOVEM.L to pcidx
+      16'b0100111001110100: begin entry = 13'd6262; prev = 21'h0a1128; end  // RTD
+      16'b0100100001001???: begin entry = 13'd6268; prev = 21'h000807; end  // BKPT
+      16'b0100111001111010: begin entry = 13'd6271; prev = 21'h000807; end  // MOVEC Rc,Rn
+      16'b0100111001111011: begin entry = 13'd6280; prev = 21'h000807; end  // MOVEC Rn,Rc
+      16'b0000111000010???: begin entry = 13'd6290; prev = 21'h000807; end  // MOVES.B aind
+      16'b0000111000011???: begin entry = 13'd6302; prev = 21'h000807; end  // MOVES.B apost
+      16'b0000111000100???: begin entry = 13'd6314; prev = 21'h000807; end  // MOVES.B apre
+      16'b0000111000101???: begin entry = 13'd6326; prev = 21'h000807; end  // MOVES.B adisp
+      16'b0000111000110???: begin entry = 13'd6340; prev = 21'h000807; end  // MOVES.B aidx
+      16'b0000111000111000: begin entry = 13'd6358; prev = 21'h000807; end  // MOVES.B absw
+      16'b0000111000111001: begin entry = 13'd6372; prev = 21'h000807; end  // MOVES.B absl
+      16'b0000111001010???: begin entry = 13'd6388; prev = 21'h000807; end  // MOVES.W aind
+      16'b0000111001011???: begin entry = 13'd6400; prev = 21'h000807; end  // MOVES.W apost
+      16'b0000111001100???: begin entry = 13'd6412; prev = 21'h000807; end  // MOVES.W apre
+      16'b0000111001101???: begin entry = 13'd6424; prev = 21'h000807; end  // MOVES.W adisp
+      16'b0000111001110???: begin entry = 13'd6438; prev = 21'h000807; end  // MOVES.W aidx
+      16'b0000111001111000: begin entry = 13'd6456; prev = 21'h000807; end  // MOVES.W absw
+      16'b0000111001111001: begin entry = 13'd6470; prev = 21'h000807; end  // MOVES.W absl
+      16'b0000111010010???: begin entry = 13'd6486; prev = 21'h000807; end  // MOVES.L aind
+      16'b0000111010011???: begin entry = 13'd6500; prev = 21'h000807; end  // MOVES.L apost
+      16'b0000111010100???: begin entry = 13'd6514; prev = 21'h000807; end  // MOVES.L apre
+      16'b0000111010101???: begin entry = 13'd6528; prev = 21'h000807; end  // MOVES.L adisp
+      16'b0000111010110???: begin entry = 13'd6544; prev = 21'h000807; end  // MOVES.L aidx
+      16'b0000111010111000: begin entry = 13'd6564; prev = 21'h000807; end  // MOVES.L absw
+      16'b0000111010111001: begin entry = 13'd6580; prev = 21'h000807; end  // MOVES.L absl
       default: begin
         entry   = 13'd9;  // illegal
+        prev    = 21'h000807;
         illegal = 1'b1;
       end
     endcase

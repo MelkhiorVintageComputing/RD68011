@@ -6,11 +6,10 @@
 Writes three generated files under rtl/gen/ and a listing under build/:
 
   rd68011_ucode_pkg.sv    field positions and every encoding, as localparams
-  rd68011_ucode_rom.sv    micro-address -> microword
-  rd68011_ureq_rom.sv     micro-address -> the fields a bus request needs,
-                          which is the copy read at the address the sequencer
-                          has only just computed
-  rd68011_decode_rom.sv   opcode -> microcode entry point, as a casez
+  rd68011_ucode_rom.sv    micro-address -> microword, which carries the
+                          request previews of its own successors
+  rd68011_decode_rom.sv   opcode -> microcode entry point and its request
+                          preview, as a casez
   rd68011_loop_rom.sv     opcode -> can this be a looped instruction, UM
                           table A-1, also a casez
   build/ucode.lst         the microcode, disassembled, for reading
@@ -64,6 +63,58 @@ def resolve(words, labels, fixups, fallthrough):
     return words
 
 
+def fill_previews(words):
+    """Give every microword the request previews of its own successors.
+
+    Must run after resolve(), because a fall-through microword only has a
+    `next` once that has filled it in. Returns the preview of every address,
+    which emit_pkg and emit_decode need for the arms whose successor is not
+    `next` at all.
+    """
+    rq = [isa.req_word(fields) for fields, _ in words]
+    none = isa.req_word({})            # bus=NONE: presents no request
+
+    def preview(addr):
+        # A DECODE or RESUME microword's `next` is meaningless -- its successor
+        # is the decoder's entry point or the saved micro-PC -- and the last
+        # microword's fall-through runs off the end of the store.
+        return rq[addr] if 0 <= addr < len(rq) else none
+
+    for fields, _ in words:
+        seq = fields.get('seq', isa.DEFAULTS['seq'])
+        nxt = fields.get('next', isa.DEFAULTS['next'])
+        if seq in (isa.SEQ['DECODE'], isa.SEQ['RESUME']):
+            fields['rq0'] = fields['rq1'] = none
+        else:
+            fields['rq0'] = preview(nxt)
+            # Only a COND microword can land on the odd half of the pair. For
+            # everything else both halves are the same successor, which lets
+            # the RTL select without testing `seq` at all.
+            fields['rq1'] = (preview(nxt | 1) if seq == isa.SEQ['COND']
+                             else fields['rq0'])
+    return rq
+
+
+def check_arms(words, rq):
+    """Which conditions can steer the bus, and how many actually do.
+
+    Reported rather than enforced. rd68011_seq.sv narrows the preview select to
+    the conditions listed here, so this is the evidence for that narrowing, and
+    a microcode change that gives some other condition two different bus
+    requests has to show up as a build-time failure rather than as a wrong
+    address on the pins.
+    """
+    names = {v: k for k, v in isa.COND.items()}
+    steering = set()
+    for i, (fields, _) in enumerate(words):
+        if fields.get('seq') != isa.SEQ['COND']:
+            continue
+        nxt = fields['next']
+        if rq[nxt] != rq[nxt | 1]:
+            steering.add(names[fields.get('cond', isa.DEFAULTS['cond'])])
+    return steering
+
+
 def check_patterns(patterns):
     """Report any opcode pattern completely shadowed by an earlier one.
 
@@ -91,7 +142,7 @@ def check_patterns(patterns):
     return problems
 
 
-def emit_pkg(labels=None):
+def emit_pkg(labels=None, rq=None):
     out = [BANNER, '',
            '// The microword layout. Every field position and every encoding',
            '// the microcode can use, so the RTL and the microcode cannot',
@@ -126,6 +177,24 @@ def emit_pkg(labels=None):
             out.append("  localparam logic [UADDR-1:0] ENTRY_%s = %d'd%d;"
                        % (name.upper(), isa.UADDR_BITS, labels[name]))
         out.append('')
+    if labels and rq is not None:
+        w = isa.req_width()
+        nib = (w + 3) // 4
+        out.append('  // The request previews of those entry points. Every arm')
+        out.append('  // of the sequencer\'s next-microword choice needs one,')
+        out.append('  // and the arms that go to a fixed entry point can have')
+        out.append('  // it as a constant. PREV_NONE presents no request at')
+        out.append('  // all -- it is what a RESUME arm carries, and what the')
+        out.append('  // rq0/rq1 fields of a microword whose successor is not')
+        out.append('  // `next` are filled with.')
+        for name in ('reset', 'illegal', 'interrupt', 'trace',
+                     'buserr', 'addrerr', 'halted', 'spurious',
+                     'dbcc_loop'):
+            out.append("  localparam logic [RQW-1:0] PREV_%s = %d'h%0*x;"
+                       % (name.upper(), w, nib, rq[labels[name]]))
+        out.append("  localparam logic [RQW-1:0] PREV_NONE = %d'h%0*x;"
+                   % (w, nib, isa.req_word({})))
+        out.append('')
     out.append('endpackage')
     out.append('')
     return '\n'.join(out)
@@ -158,19 +227,30 @@ def emit_urom(words):
     return '\n'.join(out)
 
 
-def emit_decode(patterns, labels):
+def emit_decode(patterns, labels, rq):
+    w = isa.req_width()
+    nib = (w + 3) // 4
+    ndistinct = len({rq[labels[t]] for _, t, _ in patterns})
     out = [BANNER, '',
-           '// Opcode to microcode entry point.',
+           '// Opcode to microcode entry point, and that entry point\'s',
+           '// request preview.',
            '//',
            '// Ordered: the first matching pattern wins, which is how forms',
            '// distinguished only by a field value -- BRA.W is BRA.B with a',
            '// displacement byte of zero -- are separated here rather than by',
            '// a run-time test in the microcode.',
            '//',
+           '// The preview comes out of here rather than out of a second store',
+           '// read at `entry`, which is what used to happen and what made the',
+           '// decoder and that store a chain of two lookups inside half a',
+           '// clock. It is nearly free: across all the patterns there are only',
+           '// %d distinct preview values.' % ndistinct,
+           '//',
            '// `illegal` is asserted for anything with no pattern.', '',
            'module rd68011_decode_rom (',
            '    input  logic                 [15:0] op,',
            '    output logic [rd68011_ucode_pkg::UADDR-1:0] entry,',
+           '    output logic [rd68011_ucode_pkg::RQW-1:0]   prev,',
            '    output logic                        illegal',
            ');', '',
            '  always_comb begin',
@@ -180,52 +260,15 @@ def emit_decode(patterns, labels):
         if target not in labels:
             raise KeyError('opcode %s targets unknown label %r' % (mnem, target))
         svpat = pat.replace('-', '?')
-        out.append("      16'b%s: entry = %d'd%-3d;  // %s"
-                   % (svpat, isa.UADDR_BITS, labels[target], mnem))
+        out.append("      16'b%s: begin entry = %d'd%-4d; prev = %d'h%0*x; end  // %s"
+                   % (svpat, isa.UADDR_BITS, labels[target],
+                      w, nib, rq[labels[target]], mnem))
     out.append('      default: begin')
     out.append("        entry   = %d'd%d;  // illegal" % (isa.UADDR_BITS,
                                                           labels['illegal']))
+    out.append("        prev    = %d'h%0*x;" % (w, nib, rq[labels['illegal']]))
     out.append("        illegal = 1'b1;")
     out.append('      end')
-    out.append('    endcase')
-    out.append('  end')
-    out.append('')
-    out.append('endmodule')
-    out.append('')
-    return '\n'.join(out)
-
-
-def emit_ureq(words):
-    """The narrow copy: only what a bus request is built from."""
-    w = isa.req_width()
-    out = [BANNER, '',
-           '// Micro-address to request preview.',
-           '//',
-           '// The same store as rd68011_ucode_rom, cut down to the fields the',
-           '// bus request needs. This is the copy read at `upc_nxt` -- an',
-           '// address the sequencer computes from the ALU and the bus in the',
-           '// same half clock the request has to reach the pins in -- so its',
-           '// width is the width of that path. tools/ucode/isa.py says which',
-           '// fields and why.', '',
-           'module rd68011_ureq_rom (',
-           '    input  logic [rd68011_ucode_pkg::UADDR-1:0] addr,',
-           '    output logic [rd68011_ucode_pkg::RQW-1:0]   rq',
-           ');', '',
-           '  always_comb begin',
-           '    // Plain case, not unique case, and for a reason worth writing',
-           '    // down: with a default arm and every address enumerated, unique',
-           '    // adds nothing a synthesiser can use here -- and Vivado xsim',
-           '    // runs out of memory elaborating a unique case of this many',
-           '    // arms, where a plain one of the same size costs it nothing.',
-           '    // rd68011_ucode_rom, the wider store this is cut down from, has',
-           '    // always been emitted as a plain case for the same reason.',
-           '    case (addr)']
-    for i, (fields, comment) in enumerate(words):
-        out.append("      %d'd%-5d: rq = %d'h%0*x;%s"
-                   % (isa.UADDR_BITS, i, w, (w + 3) // 4,
-                      isa.req_word(fields),
-                      ('  // ' + comment) if comment else ''))
-    out.append("      default: rq = %d'd0;" % w)
     out.append('    endcase')
     out.append('  end')
     out.append('')
@@ -286,6 +329,13 @@ def emit_listing(words, labels, patterns):
             out.append('%s:' % name)
         parts = []
         for name, _, _ in isa.FIELDS:
+            # rq0/rq1 are not written by the microprogram: they are the
+            # successors' own fields, copied here by fill_previews so the
+            # sequencer has them a clock early. Printing them says nothing a
+            # reader cannot get by looking at the successor, and says it on
+            # every line.
+            if name in ('rq0', 'rq1'):
+                continue
             v = fields.get(name, isa.DEFAULTS[name])
             if v == isa.DEFAULTS[name] and name != 'next':
                 continue
@@ -342,21 +392,31 @@ def main():
                   'address' % i)
             return 1
 
+    # Every microword's own successors' previews, once `next` is known.
+    rq = fill_previews(words)
+    steering = check_arms(words, rq)
+
     changed = []
     for name, text in [
-            ('rtl/gen/rd68011_ucode_pkg.sv', emit_pkg(labels)),
+            ('rtl/gen/rd68011_ucode_pkg.sv', emit_pkg(labels, rq)),
             ('rtl/gen/rd68011_ucode_rom.sv', emit_urom(words)),
-            ('rtl/gen/rd68011_ureq_rom.sv', emit_ureq(words)),
-            ('rtl/gen/rd68011_decode_rom.sv', emit_decode(patterns, labels)),
+            ('rtl/gen/rd68011_decode_rom.sv', emit_decode(patterns, labels, rq)),
             ('rtl/gen/rd68011_loop_rom.sv', emit_loop(program.loop_patterns)),
             ('build/ucode.lst', emit_listing(words, labels, patterns))]:
         if write(os.path.join(ROOT, name), text):
             changed.append(name)
 
+    stale = os.path.join(ROOT, 'rtl/gen/rd68011_ureq_rom.sv')
+    if os.path.exists(stale):
+        os.remove(stale)
+        changed.append('rtl/gen/rd68011_ureq_rom.sv (removed)')
+
     print('%d microwords, %d bits wide (%d of request preview), '
           '%d opcode patterns, %d loop mode patterns'
           % (len(words), isa.width(), isa.req_width(), len(patterns),
              len(program.loop_patterns)))
+    print('conditions that steer a bus request: %s'
+          % (', '.join(sorted(steering)) or 'none'))
     if changed:
         print('updated: ' + ', '.join(changed))
     else:

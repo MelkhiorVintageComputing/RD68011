@@ -188,14 +188,22 @@ module rd68011_seq (
   rd68011_ucode_rom u_urom (.addr (upc), .uw (uw));
 
   // The request the bus unit is about to latch comes from the microword that
-  // will be current after the coming edge, so it is read at an address the
-  // sequencer has only just computed -- from the ALU and the bus, in the same
-  // half clock the request has to reach the pins in. That read is the design's
-  // critical path, so it is of a store holding only the fields a request needs:
-  // twenty-one bits rather than a hundred and three. tools/ucode/isa.py's
-  // REQ_FIELDS says which, and rd68011_ureq_rom is generated from it.
+  // will be current after the coming edge -- an address the sequencer only
+  // computes at the end of this one, when the bus cycle terminates, the
+  // condition resolves and any fault is known.
+  //
+  // This used to be a second read of the store at that address, and
+  // doc/critical-path.md measures what it cost: the store's address net alone
+  // carried 1.241 ns of routing to 1189 loads, and on the arm that decodes an
+  // instruction it was the second of two lookups in series.
+  //
+  // Now nothing is looked up late. Every candidate successor's preview is in
+  // hand a whole clock early -- a microword carries its own two successors'
+  // previews in `rq0` and `rq1`, the decoder emits its entry point's, the
+  // entry points the sequencer can be thrown to have constant ones -- and the
+  // late signals only choose between them. `rq_nxt` below is that choice, and
+  // it is written to mirror `upc_nxt` arm for arm.
   logic [rd68011_ucode_pkg::RQW-1:0] rq_nxt;
-  rd68011_ureq_rom u_ureq_nxt (.addr (upc_nxt), .rq (rq_nxt));
 
   `define RF(w, f) w[rd68011_ucode_pkg::R_``f``_LSB +: rd68011_ucode_pkg::R_``f``_W]
 
@@ -240,6 +248,47 @@ module rd68011_seq (
   assign f_mop   = `UF(uw, MOP);
   assign f_fc    = `UF(uw, FC);
   assign f_lp    = `UF(uw, LP);
+
+  // This microword's own request preview -- what the store would have returned
+  // if read at `upc`, which is what the arms that hold the micro-PC need. It is
+  // built here rather than stored, because every one of its fields is already
+  // in the microword: seven are copies, and the two the request cannot take
+  // from a field are the same one-bit answers isa.py's req_word() computes.
+  //
+  // Keep this in step with REQ_FIELDS. Both sides name the same generated
+  // constants, so a field that moves moves in both.
+  logic [rd68011_ucode_pkg::RQW-1:0] rq_self;
+  logic rq_self_rdsrc, rq_self_pffet;
+
+  // Does this microword take what the cycle reads into the datapath, and does
+  // it load the instruction input buffer? The special status word's DF and IF
+  // bits (UM 6.3.9.1).
+  assign rq_self_rdsrc =
+      (f_asrc == rd68011_ucode_pkg::U_ASRC_RDATA)    ||
+      (f_asrc == rd68011_ucode_pkg::U_ASRC_RDATA_SX) ||
+      (f_asrc == rd68011_ucode_pkg::U_ASRC_RDATA_B)  ||
+      (f_bsrc == rd68011_ucode_pkg::U_BSRC_RDATA)    ||
+      (f_bsrc == rd68011_ucode_pkg::U_BSRC_RDATA_SX) ||
+      (f_bsrc == rd68011_ucode_pkg::U_BSRC_RDATA_B);
+  assign rq_self_pffet = (f_pf == rd68011_ucode_pkg::U_PF_FETCH) ||
+                         (f_pf == rd68011_ucode_pkg::U_PF_ADVFETCH);
+
+  always_comb begin
+    rq_self = '0;
+    rq_self[rd68011_ucode_pkg::R_BUS_LSB    +: rd68011_ucode_pkg::R_BUS_W]    = f_bus;
+    rq_self[rd68011_ucode_pkg::R_ASEL_LSB   +: rd68011_ucode_pkg::R_ASEL_W]   = f_asel;
+    rq_self[rd68011_ucode_pkg::R_FC_LSB     +: rd68011_ucode_pkg::R_FC_W]     = f_fc;
+    rq_self[rd68011_ucode_pkg::R_SIZE_LSB   +: rd68011_ucode_pkg::R_SIZE_W]   = f_size;
+    rq_self[rd68011_ucode_pkg::R_AUPD_LSB   +: rd68011_ucode_pkg::R_AUPD_W]   = f_aupd;
+    rq_self[rd68011_ucode_pkg::R_AEASEL_LSB +: rd68011_ucode_pkg::R_AEASEL_W] =
+        `UF(uw, AEASEL);
+    rq_self[rd68011_ucode_pkg::R_HB_LSB     +: rd68011_ucode_pkg::R_HB_W]     =
+        `UF(uw, HB);
+    rq_self[rd68011_ucode_pkg::R_RDSRC_LSB  +: rd68011_ucode_pkg::R_RDSRC_W]  =
+        rq_self_rdsrc;
+    rq_self[rd68011_ucode_pkg::R_PFFET_LSB  +: rd68011_ucode_pkg::R_PFFET_W]  =
+        rq_self_pffet;
+  end
 
   // ===========================================================================
   // Retirement
@@ -395,9 +444,12 @@ module rd68011_seq (
     if (f_dst == rd68011_ucode_pkg::U_DST_LOOPBACK) dec_op = loop_ir;
   end
 
+  logic [rd68011_ucode_pkg::RQW-1:0] dec_prev;
+
   rd68011_decode_rom u_decode (
       .op      (dec_op),
       .entry   (dec_entry),
+      .prev    (dec_prev),
       .illegal (dec_illegal)
   );
 
@@ -1158,6 +1210,11 @@ module rd68011_seq (
     endcase
   end
 
+  // Which of a conditional microword's two successors the bus request comes
+  // from. The same condition that steers the micro-PC, for now.
+  logic prev_sel;
+  assign prev_sel = (f_seq == rd68011_ucode_pkg::U_SEQ_COND) && cond_true;
+
   // A DBcc decoded while loop mode is running goes to its own routine, which
   // is the one that knows how to go round again without fetching anything.
   // Sending it there from the decoder rather than testing loop mode inside the
@@ -1224,11 +1281,20 @@ module rd68011_seq (
   assign spurious_int = bus_err && (f_bus == rd68011_ucode_pkg::U_BUS_IACK);
   assign dbl_fault    = fault && group0 && !spurious_int;
 
+  logic [rd68011_ucode_pkg::RQW-1:0] fault_prev;
+
   always_comb begin
     if      (dbl_fault)    fault_entry = rd68011_ucode_pkg::ENTRY_HALTED;
     else if (spurious_int) fault_entry = rd68011_ucode_pkg::ENTRY_SPURIOUS;
     else if (addr_err_q)   fault_entry = rd68011_ucode_pkg::ENTRY_ADDRERR;
     else                   fault_entry = rd68011_ucode_pkg::ENTRY_BUSERR;
+  end
+
+  always_comb begin
+    if      (dbl_fault)    fault_prev = rd68011_ucode_pkg::PREV_HALTED;
+    else if (spurious_int) fault_prev = rd68011_ucode_pkg::PREV_SPURIOUS;
+    else if (addr_err_q)   fault_prev = rd68011_ucode_pkg::PREV_ADDRERR;
+    else                   fault_prev = rd68011_ucode_pkg::PREV_BUSERR;
   end
 
   assign upc_nxt = !reset_sync_n ? rd68011_ucode_pkg::ENTRY_RESET
@@ -1240,6 +1306,42 @@ module rd68011_seq (
                  : take_irq      ? rd68011_ucode_pkg::ENTRY_INTERRUPT
                  : `UF(uw, STOP) ? upc
                                  : upc_target;
+
+  // The same choice, made over previews instead of over addresses. Read it
+  // against `upc_nxt` above: every arm is the preview of the address that arm
+  // selects, and the two must be changed together.
+  //
+  // Two arms are not the address's preview but PREV_NONE, and both are
+  // deliberate. RESUME goes to `upc_save`, which RTE reloads out of the format
+  // $8 frame, so there is no preview to have carried alongside it; presenting
+  // no request lets the resumed microword's own cycle start one clock later
+  // through the `!retire` arm below, which costs a clock on the rarest path in
+  // the machine and needs no second store. A DECODE or RESUME microword's
+  // `rq0`/`rq1` are PREV_NONE for the same reason -- their successor is not
+  // `next`.
+  logic [rd68011_ucode_pkg::RQW-1:0] rq_target;
+
+  always_comb begin
+    if (f_seq == rd68011_ucode_pkg::U_SEQ_DECODE) begin
+      rq_target = (loop_active && dec_dbcc) ? rd68011_ucode_pkg::PREV_DBCC_LOOP
+                                            : dec_prev;
+    end else begin
+      // The assembler writes `rq1` equal to `rq0` on every microword that is
+      // not a conditional branch, so this needs no test of `seq`.
+      rq_target = prev_sel ? `UF(uw, RQ1) : `UF(uw, RQ0);
+    end
+  end
+
+  assign rq_nxt  = !reset_sync_n ? rd68011_ucode_pkg::PREV_RESET
+                 : halted        ? rd68011_ucode_pkg::PREV_HALTED
+                 : fault         ? fault_prev
+                 : !retire       ? rq_self
+                 : (f_seq == rd68011_ucode_pkg::U_SEQ_RESUME) ?
+                                   rd68011_ucode_pkg::PREV_NONE
+                 : take_trace    ? rd68011_ucode_pkg::PREV_TRACE
+                 : take_irq      ? rd68011_ucode_pkg::PREV_INTERRUPT
+                 : `UF(uw, STOP) ? rq_self
+                                 : rq_target;
 
   // ===========================================================================
   // The bus request, built from the microword that comes next

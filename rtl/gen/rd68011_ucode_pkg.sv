@@ -8,7 +8,7 @@
 
 package rd68011_ucode_pkg;
 
-  localparam int UW    = 103;   // microword width
+  localparam int UW    = 145;   // microword width
   localparam int RQW   = 21;   // request preview width
   localparam int UADDR = 13;   // micro-address width
 
@@ -430,6 +430,14 @@ package rd68011_ucode_pkg;
   localparam logic [1:0] U_LP_ENTER = 2'd2;
   localparam logic [1:0] U_LP_EXIT = 2'd3;
 
+  // rq0: 21 bits at 103
+  localparam int U_RQ0_LSB = 103;
+  localparam int U_RQ0_W   = 21;
+
+  // rq1: 21 bits at 124
+  localparam int U_RQ1_LSB = 124;
+  localparam int U_RQ1_W   = 21;
+
   // Entry points the RTL needs by name.
   localparam logic [UADDR-1:0] ENTRY_RESET = 13'd0;
   localparam logic [UADDR-1:0] ENTRY_ILLEGAL = 13'd9;
@@ -440,5 +448,23 @@ package rd68011_ucode_pkg;
   localparam logic [UADDR-1:0] ENTRY_HALTED = 13'd6673;
   localparam logic [UADDR-1:0] ENTRY_SPURIOUS = 13'd6670;
   localparam logic [UADDR-1:0] ENTRY_DBCC_LOOP = 13'd4882;
+
+  // The request previews of those entry points. Every arm
+  // of the sequencer's next-microword choice needs one,
+  // and the arms that go to a fixed entry point can have
+  // it as a constant. PREV_NONE presents no request at
+  // all -- it is what a RESUME arm carries, and what the
+  // rq0/rq1 fields of a microword whose successor is not
+  // `next` are filled with.
+  localparam logic [RQW-1:0] PREV_RESET = 21'h000807;
+  localparam logic [RQW-1:0] PREV_ILLEGAL = 21'h000807;
+  localparam logic [RQW-1:0] PREV_INTERRUPT = 21'h000807;
+  localparam logic [RQW-1:0] PREV_TRACE = 21'h000807;
+  localparam logic [RQW-1:0] PREV_BUSERR = 21'h000807;
+  localparam logic [RQW-1:0] PREV_ADDRERR = 21'h000807;
+  localparam logic [RQW-1:0] PREV_HALTED = 21'h000807;
+  localparam logic [RQW-1:0] PREV_SPURIOUS = 21'h000807;
+  localparam logic [RQW-1:0] PREV_DBCC_LOOP = 21'h000807;
+  localparam logic [RQW-1:0] PREV_NONE = 21'h000807;
 
 endpackage
