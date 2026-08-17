@@ -40,7 +40,7 @@ set period [get_property PERIOD [get_clocks clk]]
 puts "RD68011: routed worst negative slack = $wns ns (hold $whs ns)"
 puts "RD68011: at a period of $period ns, so the design runs at\
      [format %.2f [expr {1000.0 / ($period - $wns)}]] MHz"
-puts "RD68011: cells: LUT [llength [get_cells -hier -filter {PRIMITIVE_GROUP == LUT}]] \
+puts "RD68011: cells (primitives, not the report's Slice LUTs): LUT [llength [get_cells -hier -filter {PRIMITIVE_GROUP == LUT}]] \
      FF [llength [get_cells -hier -filter {PRIMITIVE_GROUP == FLOP_LATCH}]] \
      CARRY [llength [get_cells -hier -filter {PRIMITIVE_GROUP == CARRY}]] \
      DSP [llength [get_cells -hier -filter {REF_NAME =~ DSP*}]] \

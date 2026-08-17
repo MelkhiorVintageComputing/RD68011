@@ -18,11 +18,11 @@ with a 50 % duty cycle:
 | | |
 |---|--:|
 | Clock period | **60.0 ns** |
-| Setup slack | 0.865 ns |
+| Setup slack | 0.289 ns (0.865 ns at P8 -- see below) |
 | Hold slack | 0.111 ns |
 | **Fastest the routed design will run** | **16.9 MHz** |
-| Slice LUTs | 12579 (19.8 % of the part) |
-| Slice registers | 1303 (1.0 %) |
+| Slice LUTs | 12650 (20.0 % of the part) |
+| Slice registers | 1381 (1.1 %) |
 | F7 / F8 muxes | 1707 / 282 |
 | DSP48E1 | 3 |
 | Block RAM | 0 |
@@ -66,6 +66,29 @@ Three things have been done about it, and each is measured:
 | The second read is of a store of its own, holding only the twenty-one bits a bus request is built from rather than all hundred and three. Area, mostly; the depth of an 8192-entry mux does not depend on its width. | 0.2 ns |
 
 The period went 72 ns to 60 ns across those, which is 13.9 MHz to 16.9.
+
+## Two cautions about these numbers
+
+**Two different LUT counts, both correct.** `scripts/impl.tcl` prints the number
+of LUT *primitives* (13647); the utilisation report says *Slice LUTs* (12650),
+which counts occupied LUT sites. They differ by about 8 %, and comparing one
+against the other looks exactly like an 8 % area regression. It is not one. The
+table above quotes the report.
+
+**Place and route varies more than the design does.** Adding `term_berr_late` --
+one flip-flop, the fix in `doc/divergences.md` -- costs +6 LUTs and +1 register
+at synthesis, with worst slack identical to the nanosecond (1.211 ns both ways).
+Through place and route the same change reads as +71 Slice LUTs, +78 registers
+and 0.576 ns less slack, because the router took a different trajectory and
+replicated 78 flops along the way. Measured by checking out the earlier commit
+into a worktree and running the same script, which is the only way to compare
+these honestly.
+
+So the routed slack at 60 ns sits somewhere around 0.3 to 0.9 ns depending on
+the run. That is a statement about how tight the constraint is, not about any
+particular change: a one-flop perturbation moves the result across most of that
+band. Anyone chasing a few hundred picoseconds here should re-run the baseline
+rather than trust a number in a document.
 
 ### What is left, and what it would cost
 
