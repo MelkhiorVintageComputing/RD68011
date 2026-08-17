@@ -55,19 +55,27 @@ proc mhz {period slack} {
 # through n_addr, not through the preview, so pairing the two ends cuts the
 # concatenation and nothing else.
 #
-# The "from" end names the ALU's and shifter's *module output pins*, not the
-# sequencer nets they drive. Nets get merged: `z_flag` and `n_flag` are a
-# multiplexer over `z_flag_alu`/`n_flag_alu` and the shifter's, and synthesis
+# Both ends name *module pins*, not the nets between them. Nets get merged:
+# `n_flag` is a multiplexer over `n_flag_alu` and the shifter's, and synthesis
 # folds that multiplexer into the logic downstream, so a route can reach the
-# preview without the net `u_seq/n_flag` existing anywhere on it. Hierarchical
-# pins survive, because scripts/synth.tcl passes -flatten_hierarchy none.
-# Naming the nets is how this script first got a wrong answer.
+# request without the net `u_seq/n_flag` existing anywhere on it; and `rq_nxt`
+# stopped existing as a net at all once it became a multiplexer rather than a
+# store output. Hierarchical pins survive, because scripts/synth.tcl passes
+# -flatten_hierarchy none. Naming nets is how this script got a wrong answer
+# twice.
+#
+# `req_kind` is the witness, rather than the whole request. It says which kind
+# of bus cycle happens, and it is built from the preview and from nothing else
+# -- unlike `req_addr`, which the ALU legitimately reaches through the address
+# unit, and unlike `req_valid`, which depends on the address error computed from
+# it. Every bit of the preview is selected by the same signal, so if the ALU
+# cannot reach `req_kind` it is not in the preview's fan-in at all.
 set exclusions {
     {alu-to-request
      "no microword both branches on an ALU result or flag and issues a bus cycle"
      {u_seq/u_alu/y[*] u_seq/u_alu/n_out u_seq/u_alu/z_out
       u_seq/u_shifter/dout[*]}
-     {u_seq/rq_nxt[*]}}
+     {u_biu/req_kind[*]}}
 }
 
 # ---------------------------------------------------------------------------
@@ -97,10 +105,10 @@ foreach e $exclusions {
     lassign $e name why frm to
 
     set fobj [get_pins -quiet $frm]
-    set tobj [get_nets -quiet $to]
+    set tobj [get_pins -quiet $to]
     if {[llength $fobj] == 0 || [llength $tobj] == 0} {
         puts "RD68011-PATHS: exclusion $name names nothing\
-              ([llength $fobj] pins, [llength $tobj] nets) -- ABORT"
+              ([llength $fobj] and [llength $tobj] pins) -- ABORT"
         exit 1
     }
 
@@ -137,11 +145,12 @@ report_timing -delay_type max -max_paths 400 -unique_pins -nworst 1 \
 # ---------------------------------------------------------------------------
 # Headroom
 #
-# Cutting everything into the request preview says what would be left if the
-# preview cost nothing at all to select. It is an upper bound and not a
-# promise: a real fix replaces a lookup with a multiplexer, not with nothing.
+# Cutting everything that decides the kind of the next bus cycle says what
+# would be left if choosing the request cost nothing at all. It is an upper
+# bound and not a promise: a real fix replaces a lookup with a multiplexer, not
+# with nothing.
 # ---------------------------------------------------------------------------
-set_false_path -through [get_nets u_seq/rq_nxt[*]]
+set_false_path -through [get_pins u_biu/req_kind[*]]
 
 set head [worst]
 puts "RD68011-PATHS: headroom slack [lindex $head 0] ns\

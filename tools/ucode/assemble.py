@@ -96,23 +96,41 @@ def fill_previews(words):
 
 
 def check_arms(words, rq):
-    """Which conditions can steer the bus, and how many actually do.
+    """Which conditions actually decide what the bus does next.
 
-    Reported rather than enforced. rd68011_seq.sv narrows the preview select to
-    the conditions listed here, so this is the evidence for that narrowing, and
-    a microcode change that gives some other condition two different bus
-    requests has to show up as a build-time failure rather than as a wrong
-    address on the pins.
+    A conditional microword only steers the bus if its two successors present
+    different requests. rd68011_seq.sv selects the preview on exactly the
+    conditions in isa.BUS_STEERING_CONDS and no others, which is what keeps the
+    ALU out of the bus request's fan-in; if the microprogram ever needs another
+    one, that has to be a build failure rather than a wrong address on the pins.
     """
     names = {v: k for k, v in isa.COND.items()}
-    steering = set()
+    steering = {}
     for i, (fields, _) in enumerate(words):
         if fields.get('seq') != isa.SEQ['COND']:
             continue
         nxt = fields['next']
         if rq[nxt] != rq[nxt | 1]:
-            steering.add(names[fields.get('cond', isa.DEFAULTS['cond'])])
-    return steering
+            steering.setdefault(
+                names[fields.get('cond', isa.DEFAULTS['cond'])], []).append(i)
+
+    problems = []
+    for cond in sorted(set(steering) - set(isa.BUS_STEERING_CONDS)):
+        where = steering[cond]
+        problems.append(
+            'microword%s %s branch%s on %s to successors that present '
+            'different bus requests. rd68011_seq.sv only steers the request on '
+            '%s, so this would put the wrong address on the pins. Either give '
+            'both arms the same request, or add %s to isa.BUS_STEERING_CONDS '
+            'and widen prev_sel in rd68011_seq.sv to match -- and re-measure, '
+            'because %s is what decides whether the ALU is in the request path.'
+            % ('' if len(where) == 1 else 's',
+               ', '.join(str(w) for w in where[:8]) +
+               ('' if len(where) <= 8 else ', ...'),
+               'es' if len(where) == 1 else '',
+               cond, ' and '.join(isa.BUS_STEERING_CONDS) or 'nothing',
+               cond, cond))
+    return sorted(steering), problems
 
 
 def check_patterns(patterns):
@@ -394,7 +412,11 @@ def main():
 
     # Every microword's own successors' previews, once `next` is known.
     rq = fill_previews(words)
-    steering = check_arms(words, rq)
+    steering, problems = check_arms(words, rq)
+    if problems:
+        for p in problems:
+            print('error: ' + p)
+        return 1
 
     changed = []
     for name, text in [
@@ -415,8 +437,9 @@ def main():
           '%d opcode patterns, %d loop mode patterns'
           % (len(words), isa.width(), isa.req_width(), len(patterns),
              len(program.loop_patterns)))
-    print('conditions that steer a bus request: %s'
-          % (', '.join(sorted(steering)) or 'none'))
+    print('conditions that steer a bus request: %s (rd68011_seq.sv implements %s)'
+          % (', '.join(steering) or 'none',
+             ', '.join(isa.BUS_STEERING_CONDS)))
     if changed:
         print('updated: ' + ', '.join(changed))
     else:

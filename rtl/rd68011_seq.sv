@@ -1211,9 +1211,27 @@ module rd68011_seq (
   end
 
   // Which of a conditional microword's two successors the bus request comes
-  // from. The same condition that steers the micro-PC, for now.
+  // from.
+  //
+  // Not `cond_true`, which is what steers the micro-PC. A conditional microword
+  // only steers the *bus* if its two successors present different requests, and
+  // across the whole microprogram exactly one condition ever does: MOVEM's
+  // register mask, deciding whether there is another transfer to make. The
+  // other 172 conditional microwords -- including all forty-six that branch on
+  // an ALU flag -- present the same request either way, so the condition cannot
+  // reach the bus through them at all.
+  //
+  // Which means the ALU, the shifter, the divider and the multiplier are not in
+  // the bus request's fan-in. `xw_after` is `irc`, `xw`, or `xw` with a bit
+  // cleared: registers, all of them.
+  //
+  // tools/ucode/isa.py BUS_STEERING_CONDS is the same statement on the other
+  // side, and tools/ucode/assemble.py fails the build if the microcode ever
+  // needs a condition this does not implement.
   logic prev_sel;
-  assign prev_sel = (f_seq == rd68011_ucode_pkg::U_SEQ_COND) && cond_true;
+  assign prev_sel = (f_seq  == rd68011_ucode_pkg::U_SEQ_COND) &&
+                    (f_cond == rd68011_ucode_pkg::U_COND_MASK) &&
+                    (xw_after != 16'd0);
 
   // A DBcc decoded while loop mode is running goes to its own routine, which
   // is the one that knows how to go round again without fetching anything.

@@ -669,6 +669,27 @@ FIELDS += [
 DEFAULTS['rq0'] = 0
 DEFAULTS['rq1'] = 0
 
+# Which conditions can decide what the bus does next.
+#
+# A conditional microword only steers the bus if its two successors present
+# *different* requests. Comparing them across the whole microprogram, exactly
+# one condition ever does: MOVEM's register mask, which decides whether there
+# is another transfer to make. Every other conditional branch -- including all
+# forty-six that branch on an ALU flag -- has both arms presenting the same
+# request, so the condition cannot reach the bus through them at all.
+#
+# That is why rd68011_seq.sv selects the preview on the mask test rather than
+# on `cond_true`, and it is what keeps the ALU, the shifter, the divider and
+# the multiplier out of the bus request's fan-in. `xw_after` is built from the
+# `xw` and `irc` registers and nothing else.
+#
+# This list is what the RTL implements. assemble.py compares it against what
+# the microprogram actually needs and fails the build if they disagree, because
+# the two have to be changed together: a microword that needs some other
+# condition to steer a request would otherwise present the wrong address on the
+# pins, silently.
+BUS_STEERING_CONDS = ('MASK',)
+
 
 def req_lsb(name):
     p = 0

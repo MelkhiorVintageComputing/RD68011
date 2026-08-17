@@ -138,8 +138,10 @@ paths: dirs
 	@echo "== vivado: what limits $(XTOP) =="
 	@cd $(BUILD) && VIVADO_SETTINGS=$(VIVADO_SETTINGS) \
 	    $(CURDIR)/scripts/vivado.sh -mode batch -nojournal -nolog \
-	    -source ../scripts/paths.tcl -tclargs $(CURDIR) | \
-	    grep -E '^RD68011-PATHS'
+	    -source ../scripts/paths.tcl -tclargs $(CURDIR) > paths.log 2>&1 || \
+	    { grep -E '^(RD68011-PATHS|ERROR)' paths.log; \
+	      echo "paths: vivado failed, see $(BUILD)/paths.log"; exit 1; }
+	@grep -E '^RD68011-PATHS' $(BUILD)/paths.log
 	@python3 tools/timing/paths.py $(BUILD)/paths_activatable.rpt
 
 # ---------------------------------------------------------------------------
