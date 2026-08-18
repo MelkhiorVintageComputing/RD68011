@@ -6685,7 +6685,9 @@ module rd68011_ucode_rom (
       13'd6671: uw = 145'h000807004038000000100000070c004401a10;  // the program counter to stack is the instruction not run
       13'd6672: uw = 145'h02b0071580380003001000000720003a01390;  // the format and vector word
       13'd6673: uw = 145'h0008070040380000001000000700000001a11;  // double bus fault: nothing more happens
-      default: uw = 145'h0;
+      // Unmapped. The defaults: no bus request, and the reset
+      // entry next. See tools/ucode/assemble.py emit_urom.
+      default: uw = 145'h0000000000000000001000000700000000000;
     endcase
   end
 

@@ -36,8 +36,13 @@ The constraint then moved to where the design actually closes:
 | clock | slack | |
 |--:|--:|---|
 | 54 ns | +3.497 ns | |
-| **48 ns** | **+2.077 ns** | **20.8 MHz, and what `scripts/rd68011.xdc` now asks for** |
-| 46 ns | +0.277 ns | closes, but inside the run-to-run variation |
+| **48 ns** | **+2.077 and +0.752 ns** | **20.8 MHz, two runs, and what `scripts/rd68011.xdc` now asks for** |
+| 46 ns | +0.277 ns | closes once, and that is well inside the spread above |
+
+The two 48 ns runs differed only in the contents of one unreachable microcode
+word and came out 1.3 ns apart, with the same register, carry and DSP counts and
+five Slice LUTs between them. That spread is the reason the rows in the previous
+table should not be read as though tenths of a nanosecond meant anything.
 
 16.8 MHz to 20.8, and the fastest MC68010 Motorola shipped ran at 12.5.
 
@@ -92,9 +97,9 @@ next issues at `asel=T0`:
 ```
 
 and branch targets do the same through `dst=PC` into `asel=PC`. Read data through
-the ALU into the next bus address, in half a period, is what "no wasted clock
-between the address arriving and the cycle that uses it" means. Shortening it
-means changing what the instructions cost.
+the datapath into the next bus address, in half a period, is what "no wasted
+clock between the address arriving and the cycle that uses it" means. Shortening
+it means changing what the instructions cost.
 
 The families behind it, from `make paths`:
 
@@ -225,11 +230,13 @@ not an error -- when the route simply is not there, which is what it now says.
   thing on it that is not obviously necessary is the address-error check standing
   between `n_addr` and `req_valid`; whether the bus unit could make that check
   itself, a state later, has not been looked at.
-- **72 % of the delay was routing** when it was last broken down, and the ratio has
-  not been re-measured since. At that ratio it is a placement and congestion
-  problem more than a logic-depth one, which is worth knowing before anyone
-  restructures logic.
-- **Place and route varies more than small changes do.** `doc/implementation.md`
-  records a one-flop change reading as ±0.6 ns after routing. Two of the rows in
-  the table above differ by less than that and should not be read as regressions.
-  Re-run the baseline rather than trusting a figure in a document.
+- **76.8 % of the delay is routing.** The worst path is 21.7 ns in 24 logic
+  levels and only 5.0 ns of that is gates; before these changes it was 29.4 ns
+  in 41 levels at 72 %. Taking logic out made the ratio worse, which is what
+  should be expected and is worth knowing before anyone restructures logic to
+  fix a placement and congestion problem.
+- **Place and route varies more than small changes do.** Two runs of the same
+  design 1.3 ns apart, and a one-flop change reading as 0.576 ns; treat anything
+  under about 1.5 ns as a statement about the router. Several rows above differ
+  by less than that and are not regressions. Re-run the baseline rather than
+  trusting a figure in a document, including these.

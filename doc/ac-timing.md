@@ -400,7 +400,9 @@ same code as ours.
   nanoseconds and `sim/tb/bus_arb_tb.sv` and `sim/tb/bus_m6800_tb.sv` already
   check them; the anchor table is arranged so adding figures 10-6 to 10-11 is a
   table entry rather than new code.
-- Real pad models, in the sense of numbers from a process rather than free
-  variables bounded by the manual.
 - Real pad models. Every delay here is a free variable bounded by the manual,
   not a number from a process.
+- Setup and hold at the other five grades. `make timing-setup` measures them at
+  8 MHz, which is the grade the thresholds are judged against; the bisections
+  are per-grade already, so the rest is runs rather than code.
+- Specifications 29A and 31, which are measured and reported but not judged.

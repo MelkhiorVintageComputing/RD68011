@@ -236,7 +236,20 @@ def emit_urom(words):
         if comment:
             line += '  // %s' % comment
         out.append(line)
-    out.append("      default: uw = %d'h0;" % w)
+    # The default arm is not "impossible", it is "unmapped": the store holds
+    # fewer microwords than a 13-bit address can name. Nothing the assembler
+    # emits targets one of the gaps, but a micro-address also arrives from
+    # outside -- RTE restores one out of a format $8 frame, and while the frame
+    # format and version are checked the micro-address in it is not.
+    #
+    # So this has to be a microword that does nothing, and all-zeros is not
+    # one: BUS['READ'] is 0, because the field doubles as rd68011_pkg's
+    # cycle_kind_e, so a zero microword asks for a read at the program counter
+    # in program space. The defaults do nothing and go to the reset entry.
+    out.append("      // Unmapped. The defaults: no bus request, and the reset")
+    out.append("      // entry next. See tools/ucode/assemble.py emit_urom.")
+    out.append("      default: uw = %d'h%0*x;"
+               % (w, nibbles, encode(isa.DEFAULTS)))
     out.append('    endcase')
     out.append('  end')
     out.append('')

@@ -29,7 +29,21 @@ phys_opt_design
 route_design
 
 report_utilization       -file impl_utilization.rpt
+
+# Per-module area. Every area claim in doc/implementation.md used to be a guess
+# because nothing recorded what the microcode store, the decoder and the
+# datapath cost separately.
+report_utilization -hierarchical -file impl_utilization_hier.rpt
+
 report_timing_summary -delay_type max -max_paths 20 -file impl_timing.rpt
+
+# -max_paths on its own returns the same path twenty times over, because the
+# worst endpoint's neighbours share almost all of it. One path per endpoint,
+# with a distinct pin set, turns that into twenty *families* --
+# tools/timing/paths.py groups this file and `make paths` prints the table.
+report_timing -delay_type max -max_paths 400 -unique_pins -nworst 1 \
+    -file impl_timing_families.rpt
+
 report_clock_utilization -file impl_clocks.rpt
 write_checkpoint -force ${top}_impl.dcp
 

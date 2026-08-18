@@ -19,17 +19,36 @@ with a 50 % duty cycle:
 | | |
 |---|--:|
 | Clock period | **48.0 ns**, which is **20.8 MHz** |
-| Setup slack | 2.077 ns |
-| Hold slack | 0.168 ns |
-| Slice LUTs | 13011 (20.5 % of the part) |
+| Setup slack | 0.75 to 2.08 ns, two runs -- see below |
+| Hold slack | 0.151 ns |
+| Slice LUTs | 13016 (20.5 % of the part) |
 | Slice registers | 1304 (1.0 %) |
-| F7 / F8 muxes | 1503 / 206 |
+| F7 / F8 muxes | 1502 / 206 |
 | DSP48E1 | 3 |
 | Block RAM | 0 |
 
-46 ns also closed, at 0.277 ns. That is inside the run-to-run variation
-described below, so it is not the number to quote; 48 ns is where it closes
-with margin.
+46 ns also closed once, at 0.277 ns. That is well inside the run-to-run
+variation, so it is not a number to quote; 48 ns is where it closes on every
+run so far.
+
+### Where the area goes
+
+`report_utilization -hierarchical`, same run. Worth having because until it was
+added every area claim in this document was a guess:
+
+| | LUTs | FFs | |
+|---|--:|--:|---|
+| `u_urom` | **6664** | 0 | the microcode store, **51 % of the design** |
+| `u_seq` itself | 3526 | 1042 | source multiplexers, address unit, register file |
+| `u_decode` | 1130 | 0 | 1401 opcode patterns, entry point and preview |
+| `u_shifter` | 816 | 0 | |
+| `u_alu` | 504 | 0 | |
+| `u_divider` | 224 | 89 | |
+| `u_biu` | 129 | 155 | the bus interface is almost all flops |
+| total | 13016 | 1304 | plus 3 DSP48E1 for the multiplier |
+
+The store being half the design is the one number that makes the block RAM
+question concrete rather than theoretical -- see the end of this section.
 
 For scale: the fastest MC68010 Motorola shipped ran at 12.5 MHz, and the part
 this is modelled on was usually clocked at 8 or 10.
@@ -97,24 +116,28 @@ is; they are the same path.
 ## Two cautions about these numbers
 
 **Two different LUT counts, both correct.** `scripts/impl.tcl` prints the number
-of LUT *primitives* (14522); the utilisation report says *Slice LUTs* (13011),
+of LUT *primitives* (14522); the utilisation report says *Slice LUTs* (13016),
 which counts occupied LUT sites. They differ by more than 10 %, and comparing
 one against the other looks exactly like a regression. It is not one. The table
 above quotes the report.
 
-**Place and route varies more than small changes do.** Adding `term_berr_late` --
-one flip-flop, the fix in `doc/divergences.md` -- costs +6 LUTs and +1 register
-at synthesis, with worst slack identical to the nanosecond. Through place and
-route the same change reads as +71 Slice LUTs, +78 registers and 0.576 ns less
-slack, because the router took a different trajectory and replicated 78 flops
-along the way. Measured by checking out the earlier commit into a worktree and
-running the same script, which is the only way to compare these honestly.
+**Place and route varies more than small changes do, and by more than was
+thought.** Two runs at 48 ns, differing only by the contents of one unreachable
+microcode word, came out at **2.077 ns and 0.752 ns** of slack -- with 13011 and
+13016 Slice LUTs, and identical register, carry and DSP counts. A 1.3 ns spread
+on what is essentially the same netlist.
 
-So a difference under about 0.6 ns is a statement about the router, not about
-the design. Two rows of the table in "Why the clock is what it is" differ by
-less than that and should not be read as a regression. Anyone chasing a few
-hundred picoseconds should re-run the baseline rather than trust a number in a
-document.
+The earlier evidence pointed the same way and was read too narrowly: adding
+`term_berr_late`, one flip-flop, costs +6 LUTs and +1 register at synthesis with
+worst slack identical to the nanosecond, but reads as +71 Slice LUTs, +78
+registers and 0.576 ns after routing, because the router took a different
+trajectory and replicated 78 flops on the way.
+
+So **treat a difference under about 1.5 ns as a statement about the router**,
+not about the design, and do not quote a single routed slack as though it were a
+property. Several rows of the table in "Why the clock is what it is" differ by
+less than that. Anyone chasing a few hundred picoseconds should re-run the
+baseline rather than trust a number in a document -- including these.
 
 **What the previews cost.** Deleting `rd68011_ureq_rom` and widening the
 microword from 103 bits to 145 is **+342 Slice LUTs, +2.7 %** -- and 77 *fewer*
@@ -125,28 +148,34 @@ registers, because the router had less reason to replicate. The 8192-entry
 
 - **The floor is the address path.** Read data through the datapath into the
   next bus address is required by absolute-long addressing and by branch
-  targets, and
-  shortening it means changing what those instructions cost. The one thing on it
-  that is not obviously necessary is the address-error check standing between
-  `n_addr` and `req_valid`; whether the bus unit could make that check itself, a
-  state later, has not been looked at.
-- **It is a routing problem more than a depth one.** 72 % of the delay was
-  routing when it was last broken down. That ratio is worth knowing before
-  anyone restructures logic to fix a placement problem.
+  targets, and shortening it means changing what those instructions cost. The
+  one thing on it that is not obviously necessary is the address-error check
+  standing between `n_addr` and `req_valid`; whether the bus unit could make
+  that check itself, a state later, has not been looked at.
+- **It is a routing problem more than a depth one.** The worst path is 21.7 ns
+  in 24 logic levels, and **76.8 % of that is routing** -- only 5.0 ns is gates.
+  It was 29.4 ns in 41 levels at 72 % before the changes above, so the logic
+  came out and the ratio got worse. That is worth knowing before anyone
+  restructures logic to fix a placement problem.
 - **Registering the bus request** would present it a cycle earlier, which means
   knowing the next microword a cycle earlier, which a conditional branch cannot
   do. It would cost a cycle on every bus access and break the exact cycle counts
   that `sim/tb/core_timing_tb.sv` checks and `doc/timing-divergences.md`
   accounts for. It is not worth it and it is not necessary.
 
-The microcode store as a block RAM was considered and remains an area trade
-rather than a speed one. The store's *second* read -- the one that was on the
-critical path -- no longer exists; what is left is the read at `upc`, whose
-address is already a register, so a block RAM with a registered output would
-hold exactly the same value at the same time. That would move a large part of
-the LUTs into the 135 block RAMs the part has, and buy no frequency. It would
-also need the reset rule bent, because a block RAM output register has only a
-synchronous reset.
+The microcode store as a block RAM remains an area trade rather than a speed
+one, but the hierarchical report makes it worth stating properly. The store's
+*second* read -- the one that was on the critical path -- no longer exists; what
+is left is the read at `upc`, whose address is already a register, so a block RAM
+with a registered output holds exactly the same value at the same time and costs
+no clock.
+
+It is **6664 LUTs, 51 % of the design**. 6674 words of 145 bits is 968 kbit,
+which in 1024x36 mode is about 35 of the part's 135 block RAMs. So it would
+roughly halve the LUT count and buy no frequency at all. It would also need the
+no-initialisation-outside-reset rule bent, because a block RAM output register
+has only a synchronous reset -- which is a project-policy decision, not an
+engineering one.
 
 ## The reset audit
 
