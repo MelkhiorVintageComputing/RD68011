@@ -99,6 +99,7 @@ make sim      # directed testbenches (iverilog)
 make harte    # one SingleStepTests opcode file: make harte OP=MOVE.w N=200
 make harte-all  # the whole sweep, every opcode file the ISA covers
 make programs # build sim/programs/ with m68k-linux-gnu and run them
+make programs WAITS=13  # ... against slow memory, as a shared bus makes it
 make cosim    # ... and run them against Musashi, comparing every register
 make suska    # compare bus transactions against the Suska VHDL core under ghdl
 make timing   # AC-specification conformance: is any pad-delay assignment legal?

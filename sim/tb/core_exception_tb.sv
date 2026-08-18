@@ -234,6 +234,35 @@ module core_exception_tb;
     check_frame("autovector", SSP0 - 32'd8, 16'h2000, PC0 + 32'd4, 8'd29);
     ipl_n_i = 3'b111;
 
+    // ---- The same, at level seven and with the memory slow -----------------
+    //
+    // Both halves of this are here because a real machine found the first one
+    // and asked about the second. The level matters because seven is the
+    // non-maskable one, which is what a monitor's clock uses and so the first
+    // interrupt a machine takes; the latency matters because a bus shared with
+    // DMA can hold a cycle off for a dozen clocks or more, and everything here
+    // ran at zero wait states until someone said so.
+    //
+    // Nothing about an autovector should depend on either. doc/divergences.md
+    // has the acknowledge-termination bug this area turned out to be hiding.
+    core_reset();
+    mem_waits = 8'd13;
+    poke_l(23'h000000, SSP0);
+    poke_l(23'h000002, PC0);
+    poke_l(23'h00003E, H_TRAP3);         // autovector 31 is at byte 124 = $7C
+    poke_w(H_TRAP3[23:1], 16'h60FE);
+    poke_w(23'h000800, 16'h60FE);        // 1000: branch to self, mask stays 7
+    iack_auto = 1'b1;
+    core_start();
+    repeat (40) @(posedge clk);
+    ipl_n_i = ~3'd7;                     // level 7: taken whatever the mask
+    run_until_pc(H_TRAP3, 20000);
+    expect_u32("autovector at 13 waits: the mask is raised to seven",
+               {29'd0, dut.u_seq.sr[10:8]}, 32'd7);
+    check_frame("autovector at 13 waits", SSP0 - 32'd8, 16'h2700, PC0, 8'd31);
+    ipl_n_i   = 3'b111;
+    mem_waits = 8'd0;
+
     // ---- A vectored interrupt ---------------------------------------------
     core_reset();
     poke_l(23'h000000, SSP0);

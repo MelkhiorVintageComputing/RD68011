@@ -46,6 +46,7 @@ module core_program_tb;
   logic        boundary;
   int          limit;
   int          berr_word;
+  int          prog_waits;
   logic [31:0] res, prog;
   int          n;
 
@@ -100,6 +101,11 @@ module core_program_tb;
     end
     if (!$value$plusargs("limit=%d", limit))   limit = 3000000;
     if (!$value$plusargs("berr=%d", berr_word)) berr_word = -1;
+    // Memory latency. Everything here ran at zero wait states until a report
+    // from a real machine pointed out that its memory can be saturated to the
+    // order of a dozen. Nothing about the processor should depend on it, which
+    // is exactly why it is worth being able to turn up.
+    if ($value$plusargs("waits=%d", prog_waits)) mem_waits = prog_waits[7:0];
     tracing = 1'b0;
     if ($value$plusargs("trace=%s", tracefile)) begin
       tf      = $fopen(tracefile, "w");

@@ -232,15 +232,21 @@ $(PROGDIR)/%.hex: sim/programs/%.c sim/programs/crt0.S sim/programs/libmc68010.S
 
 PROGHEX := $(addprefix $(PROGDIR)/,$(addsuffix .hex,$(PROGS)))
 
+# Memory latency for the program runs. Zero is what everything ran at until a
+# report from a real machine pointed out that a saturated bus can hold a cycle
+# off for a dozen clocks or more. `make programs WAITS=13` is the check.
+WAITS ?= 0
+
 programs: dirs $(PROGHEX)
-	@echo "== test programs =="
+	@echo "== test programs (waits=$(WAITS)) =="
 	@iverilog $(IVFLAGS) -I sim/tb -o $(BUILD)/program_tb.vvp \
 	    -s core_program_tb $(RTL) $(MODELS) sim/tb/core_program_tb.sv 2>&1 | \
 	    grep -v 'sorry:' || true
 	@fail=0; for p in $(PROGHEX); do \
 	  a=sim/programs/$$(basename $$p .hex).args; \
 	  extra=$$(test -f $$a && cat $$a || true); \
-	  out=$$(vvp $(BUILD)/program_tb.vvp +prog=$$p +timeout=2000000 $$extra 2>&1 | \
+	  out=$$(vvp $(BUILD)/program_tb.vvp +prog=$$p +timeout=2000000 \
+	         +waits=$(WAITS) $$extra 2>&1 | \
 	         grep -v 'sorry:'); \
 	  echo "$$out"; \
 	  case "$$out" in *"PASS"*) ;; *) fail=1;; esac; \
@@ -335,7 +341,7 @@ cosim: programs $(COSIMDIR)/musashi_trace
 	    -s core_program_tb $(RTL) $(MODELS) sim/tb/core_program_tb.sv 2>&1 | \
 	    grep -v 'sorry:' || true
 	@fail=0; for p in $(COSIMPROG); do \
-	  vvp $(BUILD)/program_tb.vvp +prog=$(PROGDIR)/$$p.hex \
+	  vvp $(BUILD)/program_tb.vvp +prog=$(PROGDIR)/$$p.hex +waits=$(WAITS) \
 	      +timeout=6000000 +trace=$(COSIMDIR)/$$p.rtl >/dev/null 2>&1; \
 	  $(COSIMDIR)/musashi_trace $(PROGDIR)/$$p.hex 4000000 \
 	      > $(COSIMDIR)/$$p.ref; \
