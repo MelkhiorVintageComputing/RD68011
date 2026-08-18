@@ -28,6 +28,7 @@ module bus_arb_tb;
   int      t0;
   realtime t_mark, t_ev;
   int      as_falls;
+  logic    arb_held;
 
   initial begin
     as_falls = 0;
@@ -158,6 +159,57 @@ module bus_arb_tb;
     expect_eq("exactly one cycle ran", as_falls, 1);
     // AS was asserted for its full window, not cut short.
     expect_window("AS during arbitration request", t0, OB_ASN, 1'b0, 2, 6);
+
+    // ---- A request during a read-modify-write ------------------------------
+    //
+    // UM 5.1.3: a read-modify-write is indivisible, and AS stays asserted
+    // across the whole of it rather than being negated between the halves.
+    // Figure 5-18 note 2 releases the buses once the grant is out *and* AS is
+    // negated, so the two rules together are what stops an alternate master
+    // getting in between the read and the write of a TAS. That is the whole
+    // point of the instruction, so it is worth a test rather than an argument.
+    br_n_i    = 1'b1;
+    bgack_n_i = 1'b1;
+    repeat (4) @(posedge clk);
+    slv.poke(23'h002020, 16'h1234);
+    as_falls = 0;
+    bus_start(rd68011_pkg::CT_RMW, rd68011_pkg::FC_SUPER_D,
+              23'h002020, 1'b1, 1'b1, 16'h5678, t0);
+
+    wait (as_n_o === 1'b0);              // the indivisible cycle is under way
+    repeat (2) @(posedge clk);
+    br_n_i = 1'b0;                       // and somebody wants the bus
+
+    // The grant may go out -- UM 5.2.1 lets the processor answer at once --
+    // but nothing may be released until the cycle is over.
+    arb_held = 1'b1;
+    fork
+      begin : hold_watch
+        while (as_n_o === 1'b0) begin
+          @(posedge clk);
+          if (!(a_oe && as_oe && ds_oe && fc_oe)) arb_held = 1'b0;
+        end
+      end
+    join_none
+    bus_finish();
+    disable hold_watch;
+
+    expect_val("RMW: the buses are held until the cycle ends",
+               {31'd0, arb_held}, 32'd1);
+    expect_val("RMW: the write half happened", {16'd0, slv.peek(23'h002020)},
+               {16'd0, 16'h5678});
+    expect_eq("RMW: one cycle, not two", as_falls, 1);
+    // AS asserted from S2 to the falling edge entering S19: the read half, the
+    // four modify states and the write half, with no gap for anyone else.
+    expect_window("RMW AS held across the request", t0, OB_ASN, 1'b0, 2, 18);
+
+    // Once it is over the grant takes effect as usual.
+    wait (bg_n_o === 1'b0);
+    @(posedge clk);
+    expect_val("RMW: buses released after the cycle, not during",
+               {28'd0, a_oe, as_oe, ds_oe, fc_oe}, 32'd0);
+    br_n_i = 1'b1;
+    repeat (6) @(posedge clk);
 
     br_n_i = 1'b1;
     repeat (6) @(posedge clk);
