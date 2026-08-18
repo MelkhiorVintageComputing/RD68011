@@ -35,7 +35,7 @@ YOSYS    := yosys
 # Vivado: a part with room for the core plus a testbench harness.
 XPART    ?= xc7a100tcsg324-1
 
-.PHONY: all lint lint-iverilog lint-verilator lint-yosys synth sim check clean dirs \
+.PHONY: suska-ssw all lint lint-iverilog lint-verilator lint-yosys synth sim check clean dirs \
         ucode ucode-check model-check harte harte-all \
         audit impl programs suska cosim \
         timing timing-events timing-check timing-duty timing-setup \
@@ -284,6 +284,30 @@ $(SUSKADIR)/bus_probe.hex: sim/suska/bus_probe.S sim/suska/probe.ld | dirs
 	@m68k-linux-gnu-objcopy -O binary $(SUSKADIR)/bus_probe.elf \
 	    $(SUSKADIR)/bus_probe.bin
 	@python3 tools/bin2hex.py $(SUSKADIR)/bus_probe.bin > $@
+
+# The special status word of a faulted bus cycle, on both processors.
+#
+# sim/programs/p06_ssw.S is self-checking and runs on RD68011 through
+# `make programs`; this runs the identical image on the Suska core and reads
+# its answers out of memory. Two implementations disagreed about the first of
+# its cases, so the point is to have the answer from something other than the
+# one being questioned. doc/ssw.md has what the manual says and what each
+# produced.
+suska-ssw: dirs $(PROGDIR)/p06_ssw.hex
+	@echo "== special status word: RD68011 =="
+	@vvp $(BUILD)/program_tb.vvp +prog=$(PROGDIR)/p06_ssw.hex \
+	    +timeout=2000000 +berr=4194304 2>&1 | grep -vi 'sorry:'
+	@echo "== special status word: Suska WF68K10 =="
+	@mkdir -p $(SUSKADIR)
+	@cp $(PROGDIR)/p06_ssw.hex $(SUSKADIR)/
+	@cd $(SUSKADIR) && for u in $(SUSKAUNIT); do \
+	    ghdl -a $(GHDLFLAGS) $(CURDIR)/$(SUSKASRC)/$$u.vhd 2>&1 | \
+	    grep -ci error >/dev/null || true; done
+	@cd $(SUSKADIR) && ghdl -a $(GHDLFLAGS) \
+	    $(CURDIR)/sim/suska/wf68k10_ssw_tb.vhd 2>&1 | grep -i '^.*error' || true
+	@cd $(SUSKADIR) && ghdl -e $(GHDLFLAGS) wf68k10_ssw_tb 2>/dev/null; \
+	    ghdl -r $(GHDLFLAGS) wf68k10_ssw_tb --stop-time=20ms 2>&1 | \
+	    grep -o 'SSW suska: .*'
 
 suska: dirs $(SUSKADIR)/bus_probe.hex
 	@echo "== suska cross-check =="

@@ -102,6 +102,7 @@ make programs # build sim/programs/ with m68k-linux-gnu and run them
 make programs WAITS=13  # ... against slow memory, as a shared bus makes it
 make cosim    # ... and run them against Musashi, comparing every register
 make suska    # compare bus transactions against the Suska VHDL core under ghdl
+make suska-ssw # the special status word of a faulted cycle, on both processors
 make timing   # AC-specification conformance: is any pad-delay assignment legal?
 make timing-setup # where the processor samples DTACK and read data, in ns
 make xsim-smoke   # gate: does SystemVerilog bind to the Suska VHDL under xsim?
