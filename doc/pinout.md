@@ -56,6 +56,28 @@ There is no A0 pin; byte selection is by `UDS`/`LDS`.
 these are *not* Hi-Z on RESET, unlike the address and data buses. They are kept as separate
 ports rather than one signal so a wrapper can pad them independently.
 
+**If you have to collapse them to one enable**, which a socket built for a core with a
+single bus-enable pin will make you do: use `as_oe`, not `a_oe`. They agree on bus
+relinquish, which is the case that gets tested first and works, so the difference hides.
+`a_oe` is strictly narrower and drops in three further cases where a real MC68010 keeps
+driving the control group:
+
+| | `a_oe` | `as_oe`, `rw_oe`, `ds_oe`, `fc_oe`, `vma_oe` |
+|---|---|---|
+| bus relinquish | released | released |
+| while RESET is asserted, including the core's own `RESET` instruction | **released** | driving |
+| while halted (UM 5.4.3) | **released** | driving |
+| during a retry, until HALT is negated (UM 5.4.2) | **released** | driving |
+
+The `RESET` instruction is the one most likely to be reached: it holds the pin for 124
+clocks, and boot firmware commonly executes it. Driving a single enable from `a_oe` floats
+the strobes for that whole time.
+
+There is no single signal that is right for *both* groups — that is the divergence, not a
+bug — so a wrapper that three-states the address bus and the control group together cannot
+match Table 3-4 exactly. `a_oe` for the address and data buses and `as_oe` for the control
+group is the mapping that does.
+
 ### Bus arbitration (§3.4)
 
 | Port | Dir | Notes |
