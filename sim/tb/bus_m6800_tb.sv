@@ -31,6 +31,9 @@
 `timescale 1ns/1ps
 
 module bus_m6800_tb;
+  realtime av_t0;
+  logic    av_vma;
+  int      av_clocks;
 
   localparam int   SLAVE_WAITS = 0;
   localparam logic SLAVE_M6800 = 1'b1;
@@ -120,9 +123,37 @@ module bus_m6800_tb;
               23'h7FFFF5, 1'b1, 1'b1, 16'h0000, t0);
     wait_state(t0, 4);
     tb_vpa_n = 1'b0;
+    av_t0 = $realtime;
+    av_vma = 1'b0;
+    fork
+      begin : watch_vma
+        forever begin
+          @(negedge clk);
+          if (!vma_n_o) av_vma = 1'b1;
+        end
+      end
+    join_none
     bus_finish();
+    disable watch_vma;
     tb_vpa_n = 1'b1;
     expect_val("autovector end code", {29'd0, req_end}, {29'd0, rd68011_pkg::CE_AVEC});
+
+    // The part that matters, and that nothing checked until an autovectored
+    // interrupt hung a real machine: VPA has to act where DTACK acts. UM 5.1.4
+    // says the acknowledge cycle "is the same, except the interrupting device
+    // asserts VPA instead of DTACK", and UM 6.3.4 lists VPA beside DTACK and
+    // BERR as a way to terminate the vector acquisition. Waiting for the E
+    // handshake instead took 15.5 clocks here, and a system with a twelve-clock
+    // bus timeout called it a bus error.
+    //
+    // Two clocks: VPA goes on at the wait state and the cycle ends after S6.
+    av_clocks = int'(($realtime - av_t0) / CLK_PERIOD);
+    if (av_clocks > 3) begin
+      $display("FAIL: autovector took %0d clocks after VPA; DTACK would take 2",
+               av_clocks);
+      errors = errors + 1;
+    end
+    expect_val("autovector asserts no VMA", {31'd0, av_vma}, 32'd0);
     expect_val("autovector function code", {29'd0, obs_fc[(t0 + 2) % OBSN]},
                {29'd0, rd68011_pkg::FC_CPU});
 

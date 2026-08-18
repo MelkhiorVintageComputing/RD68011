@@ -300,8 +300,32 @@ module rd68011_biu #(
   assign samp_retry = berr_a && halt_a && !cyc_is_rmw;  // UM 5.4.2: RMW never retries
   assign samp_berr  = berr_a && !samp_retry;
   assign samp_vpa   = vpa_a && !dtack_a && !berr_a;
+
+  // An autovectored interrupt acknowledge is not an M6800 cycle.
+  //
+  // UM 5.1.4: "the interrupt acknowledge cycle can be autovectored. The
+  // interrupt acknowledge cycle is the same, except the interrupting device
+  // asserts VPA instead of DTACK." UM 6.3.4 says the same from the other side,
+  // listing DTACK, AVEC/VPA and BERR as the three ways to "terminate the vector
+  // acquisition". So VPA acts here exactly where DTACK acts, on the same edge,
+  // and the cycle is four clocks like any other.
+  //
+  // Appendix B.2 contradicts both: "the processor (or external circuitry)
+  // asserts VMA and completes a normal M6800 read cycle", and warns that
+  // "since VMA is asserted during an autovector operation, care should be taken
+  // to prevent an unintended access to the device". It is followed here only as
+  // far as its own hedge allows -- the external circuitry may assert VMA; this
+  // processor does not. Three things decide it against the appendix: the two
+  // normative sections above, the fact that no transfer happens at all (the
+  // vector is generated internally, so there is nothing for E to synchronise),
+  // and a machine. doc/divergences.md records the contradiction and the
+  // measurement.
+  logic cyc_is_iack;
+  assign cyc_is_iack = (cyc_kind == rd68011_pkg::CT_IACK);
+
   // An M6800 cycle leaves the wait loop only when it is aligned with E.
   assign samp_done  = dtack_a || samp_berr || samp_retry ||
+                      (samp_vpa && cyc_is_iack) ||
                       (term_vpa && vma_asserted && e_last_high);
 
   always_comb begin
@@ -708,8 +732,11 @@ module rd68011_biu #(
 
   // -- VMA: asserted once the cycle is synchronised with E, negated entering
   //    S7 (appendix B). Falling-edge domain throughout.
+  // Not for an autovectored interrupt acknowledge: there is no transfer to
+  // synchronise, and appendix B's own warning about an unintended access to the
+  // device is reason enough not to strobe one. See samp_done above.
   assign vma_set = samp_edge && (term_vpa || samp_vpa) && !vma_asserted &&
-                   !e_o && e_vma_window;
+                   !e_o && e_vma_window && !cyc_is_iack;
 
   always_ff @(negedge clk or negedge rst_n) begin
     if (!rst_n)                vma_n_o <= 1'b1;

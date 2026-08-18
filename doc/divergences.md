@@ -198,6 +198,58 @@ checked the wrong signal. It took asking the specification's own question --
 how late may this arrive and still work -- and then taking a disagreement
 between two of this project's own testbenches seriously.
 
+## A bug a real machine found
+
+**An autovectored interrupt acknowledge waited for the E clock.** Reported from a
+Sun-2 FPGA replica: the core boots a real Sun-2 boot PROM through the whole
+power-on diagnostic, memory sizing, MMU map setup and the serial banner, takes
+twelve bus-error probes at exactly the addresses another core takes them at --
+and then dies at the machine's first timer interrupt, on an FC=7 cycle at
+`fffffe`. The machine asserts VPA for CPU space; the cycle was not terminated;
+the machine's twelve-clock bus timeout fired instead, and a bus error during
+interrupt acknowledge took the core apart.
+
+Measured here rather than inferred: an autovectored acknowledge took **15.5
+clocks** after VPA, where one terminated by DTACK takes two. The bus unit
+treated VPA as a request for the M6800 handshake whatever the cycle was, so
+`samp_done` could only be reached through `term_vpa && vma_asserted &&
+e_last_high`, and the acknowledge sat in the wait loop until E came round.
+
+**The manual contradicts itself here, and it is worth recording which way.**
+
+- UM 5.1.4: "the interrupt acknowledge cycle can be autovectored. The interrupt
+  acknowledge cycle **is the same**, except the interrupting device asserts VPA
+  instead of DTACK."
+- UM 6.3.4, from the other side: DTACK, AVEC/VPA and BERR are the three ways to
+  "terminate the vector acquisition".
+- Appendix B.2: "the processor (or external circuitry) asserts VMA and completes
+  a normal M6800 read cycle", and "since VMA is asserted during an autovector
+  operation, care should be taken to prevent an unintended access to the device".
+
+Two normative sections against one appendix, and the appendix hedges -- *or
+external circuitry*. Three things settle it their way. The sections are the ones
+about bus cycles and about interrupts. Nothing is transferred at all, the vector
+being generated internally, so there is nothing for E to synchronise. And a
+machine that shipped with real MC68010s and a twelve-clock watchdog could not
+have worked against a fifteen-clock acknowledge.
+
+So VPA now acts where DTACK acts, on the same sampling edge, and the acknowledge
+is four clocks like any other cycle. VMA is not asserted for it -- appendix B's
+own warning about an unintended access is reason enough not to strobe a device
+that was never being addressed. External circuitry remains free to assert VMA,
+which is all the appendix actually claims.
+
+`sim/tb/bus_m6800_tb.sv` had an autovector case throughout, quoting UM 5.1.4 in
+its own comment, and it passed the whole time: it checked the end code, which was
+correctly `CE_AVEC`, and never how long the cycle took. It now checks the
+duration and that no VMA appears, and reverting the fix makes both fail.
+
+Worth recording *how* it was found, because nothing here could have: the
+reference vectors have no bus, Musashi has no bus, the directed test checked the
+end code and not the clock, and no program in `sim/programs/` takes an
+autovectored interrupt. It took someone running real code on a real machine's
+PROM.
+
 ## Not yet implemented
 
 Nothing. Every instruction, every exception and both of the MC68010's own
