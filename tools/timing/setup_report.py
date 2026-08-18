@@ -69,6 +69,30 @@ JUDGED = {
 # Rows whose limit lives in the CSV under a different number.
 CSV_SPEC = {'48*late': '48*'}
 
+# Judged, but derived rather than bisected: the measurements the other rows
+# already produce settle these two, and a bisection for them would only
+# rediscover the same numbers.
+#
+# 31, "DTACK Asserted to Data-In Valid", is a maximum the system is allowed. The
+# worst case is an acknowledge as late as specification 47 permits, followed by
+# read data as late as 31 permits after it:
+#
+#     latest legal DTACK  = (the edge that acts on DTACK) - (47 min)
+#     latest legal data   = that + (31 max)
+#
+# and the processor is conformant if that is no later than the latest data it
+# was measured to accept, which is what the 27 bisection found.
+#
+# 29A, "AS, DS Negated to Data-In High Impedance", is also a maximum the system
+# is allowed: how long a slave may keep driving the data bus after the strobes
+# negate. Nothing the processor samples is at risk -- it read the data two
+# states earlier -- so its only exposure is driving the bus into a slave that
+# has not let go. It next drives on a write, at the falling edge entering S3,
+# and the strobes negated at the falling edge entering S7 of the cycle before:
+# S7 to S0, S1, S2, S3 is four half clocks, two whole periods, and that ruler is
+# what sim/tb/bus_rw_tb.sv checks. So the room is 2 x period - (29A max).
+DERIVED = ('31', '29A')
+
 # Measured and reported, deliberately not judged. See doc/ac-timing.md: the
 # number this produces contradicts sim/tb/bus_error_tb.sv, which drives the bus
 # unit directly and sees a late bus error recognised where this, driving the
@@ -134,8 +158,54 @@ def main(argv=None):
             print('%s: %g ns matches no grade' % (path, period))
             failed += 1
             continue
-        g = grades[0]
+        # More than one grade can share a cycle time -- 16 and 16.67 MHz are
+        # both 60 ns, and differ only in the limit columns. One recording is
+        # evidence about both, so judge it against each rather than the first.
+        for g in grades:
+            failed += report(sp, design, period, rows, g)
 
+    print('setup/hold: %s' % ('%d limit(s) not met' % failed if failed
+                              else 'every limit met'))
+    return 1 if failed else 0
+
+
+def derived(sp, rows, g, period):
+    """Specifications 31 and 29A, settled from the other rows. See DERIVED."""
+    failed = 0
+    by = {r['spec']: r for r in rows}
+
+    # 31: the latest legal acknowledge, plus the latest legal data after it,
+    # against the latest data the processor was measured to accept.
+    lim31 = sp.limits('read-write', '31', g)[1]
+    s47, s27 = by.get('47'), by.get('27')
+    if lim31 is not None and s47 and s27 and 'edge' in s47 and 'latest' in s27:
+        min47 = sp.limits('read-write', '47', g)[0]
+        if min47 is not None:
+            want = (s47['edge'] - min47) + lim31
+            ok = want <= s27['latest'] + 1e-6
+            print('%-5s %-26s %10.3f %s%8.3f  %s (derived)'
+                  % ('31', 'late data it accepts', s27['latest'], '>=', want,
+                     'ok' if ok else 'FAIL'))
+            if not ok:
+                failed += 1
+
+    # 29A: two whole clock periods before the processor drives the bus itself.
+    lim29a = sp.limits('read-write', '29A', g)[1]
+    if lim29a is not None:
+        got = 2.0 * period
+        ok = got >= lim29a - 1e-6
+        print('%-5s %-26s %10.3f %s%8.3f  %s (derived)'
+              % ('29A', 'bus release it allows', got, '>=', lim29a,
+                 'ok' if ok else 'FAIL'))
+        if not ok:
+            failed += 1
+    return failed
+
+
+def report(sp, design, period, rows, g):
+    """One design at one grade. Returns how many limits it missed."""
+    failed = 0
+    if 1:
         print('=' * 70)
         print('%s at %s MHz (%g ns)' % (design, g, period))
         print('=' * 70)
@@ -169,6 +239,8 @@ def main(argv=None):
             if not ok:
                 failed += 1
 
+        failed += derived(sp, rows, g, period)
+
         # The sampling instants, which are the comparable numbers rather than
         # the verdicts: where in the cycle each input is acted on, in ns from AS
         # asserting. This is what can be put beside another processor's.
@@ -193,11 +265,8 @@ def main(argv=None):
             for spec, what, e in edges:
                 print('  spec %-4s %-8s %8.3f ns  = %.2f clocks'
                       % (spec, what, e, e / period))
-
-    print()
-    print('setup/hold: %s' % ('%d limit(s) not met' % failed if failed
-                              else 'every limit met'))
-    return 1 if failed else 0
+        print()
+    return failed
 
 
 if __name__ == '__main__':

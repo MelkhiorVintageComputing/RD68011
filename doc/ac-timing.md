@@ -38,7 +38,7 @@ RTL model at all.
 |---|---|---|
 | **1 — clock to output** | 6, 6A, 7, 8, 9, 12, 18, 20, 23, 53 | Zero in a delay-free model. A **budget** on an unknown pad delay — with a ceiling *and sometimes a floor*: specification 9 is never below 3 ns at any grade |
 | **2 — output to output** | 11, 11A, 13, 14, 14A, 15, 17, 20A, 21, 21A, 22, 25, 26, 55 | The design's edge assignment, scaled by the clock period. This is the class that can be decided |
-| **3 — input** | 27, 27A, 28, 29, 29A, 30, 31, 47, 48 | Demands on the memory system, not on the processor. Measured, not judged |
+| **3 — input** | 27, 27A, 28, 29, 29A, 30, 31, 47, 48 | Demands on the memory system. What the processor *requires* of it is measured by bisection and judged -- see below |
 
 Class 1 having a *floor* matters and is easy to miss. Treating those limits as
 ceilings alone makes every design conformant and the tool useless.
@@ -271,10 +271,63 @@ the identical measurement run against the other core.
 | 27 | read-data setup it needs | 0.025 ns | ≤ 10 | ok |
 | 29 | read-data hold it needs | 0.000 ns | ≤ 0 | ok |
 | 28 | stale DTACK it tolerates | 375.0 ns | ≥ 240 | ok |
+| 48\* | late BERR window it accepts | 125.1 ns | ≥ 80 | ok |
+| 31 | late data it accepts | 312.5 ns | ≥ 267.5 | ok, derived |
+| 29A | bus release it allows | 250.0 ns | ≥ 187 | ok, derived |
 
 The measured setups are the bisection's own resolution, which is the right
 answer for a delay-free model: it needs no setup, and what matters is that its
 requirement is nowhere near the 10 ns the specification allows the system.
+
+**And at every grade**, because the limits and the spacings both scale with the
+period and a recording is only evidence about the grade it was taken at. The
+five cycle times cover six grades: 16 and 16.67 MHz are both 60 ns and differ
+only in the limit columns, so that one recording is judged twice.
+
+| grade | 47 | 27 | 28 | 31 | 29A |
+|---|--:|--:|--:|--:|--:|
+| 8 | 0.028 ≤ 10 | 0.025 ≤ 10 | 375.0 ≥ 240 | 312.5 ≥ 267.5 | 250 ≥ 187 |
+| 10 | 0.022 ≤ 10 | 0.020 ≤ 10 | 300.0 ≥ 190 | 250.0 ≥ 205.0 | 200 ≥ 150 |
+| 12.5 | 0.018 ≤ 10 | 0.016 ≤ 10 | 240.0 ≥ 150 | 200.0 ≥ 160.0 | 160 ≥ 120 |
+| 16.67 | 0.013 ≤ 10 | 0.012 ≤ 7 | 180.0 ≥ 110 | 150.0 ≥ 120.0 | 120 ≥ 90 |
+| 16 | 0.013 ≤ 5 | 0.012 ≤ 5 | 180.0 ≥ 110 | 150.0 ≥ 135.0 | 120 ≥ 90 |
+| 20 | 0.011 ≤ 5 | 0.010 ≤ 5 | 150.0 ≥ 95 | 125.0 ≥ 112.0 | 100 ≥ 75 |
+
+Every limit met at every grade. The tightest are specification 31 at 20 and
+16 MHz, with 13.0 and 15.0 ns of room; everything else has tens of nanoseconds.
+Specification 48\* is judged at 8, 10 and 12.5 MHz -- 125.1 ≥ 80, 100.1 ≥ 55,
+80.1 ≥ 35 -- and reported without a verdict above that, because the manual gives
+it no limit there.
+
+The limit columns are not a smooth progression and the table is not tidying
+them: 47 allows 10 ns down to 16.67 MHz and 5 at 16 and 20, while 27 goes 10,
+10, 10, 7, 5, 5. That is what the CSV says, and the 16 MHz column being
+*tighter* than the faster 16.67 MHz one is the manual's, not a transcription
+error -- `tools/timing/specs.py` records the defects it does correct, and this
+is not one of them.
+
+### Two that are derived rather than bisected
+
+Specifications 31 and 29A are settled by the measurements the other rows already
+produce, so bisecting for them would only rediscover the same numbers.
+
+**31, *DTACK Asserted to Data-In Valid*** is a maximum the system is allowed:
+how long after acknowledging it may take to present the data. The worst case is
+an acknowledge as late as specification 47 permits followed by data as late as
+31 permits after it, and the processor is conformant if that is no later than
+the latest data the 27 bisection found it accepts. At 8 MHz: the edge that acts
+on DTACK is 187.5 ns after AS, 47 obliges the system to be 10 ns early, so the
+latest legal acknowledge is 177.5 ns; 90 ns later is 267.5; and the processor
+accepts data up to 312.475. 45 ns of room.
+
+**29A, *AS, DS Negated to Data-In High Impedance***, is also a maximum the
+system is allowed: how long a slave may keep driving after the strobes negate.
+Nothing the processor samples is at risk, since it read the data two states
+earlier; its only exposure is driving the bus into a slave that has not let go.
+It next drives on a write at the falling edge entering S3, and the strobes
+negated at the falling edge entering S7 of the cycle before -- four half clocks,
+two whole periods. That ruler is what `sim/tb/bus_rw_tb.sv` checks, so the room
+is `2 x period` minus the limit, between 25 ns at 20 MHz and 63 ns at 8.
 
 ### The sampling instants, and the comparison
 
@@ -402,7 +455,7 @@ same code as ours.
   table entry rather than new code.
 - Real pad models. Every delay here is a free variable bounded by the manual,
   not a number from a process.
-- Setup and hold at the other five grades. `make timing-setup` measures them at
-  8 MHz, which is the grade the thresholds are judged against; the bisections
-  are per-grade already, so the rest is runs rather than code.
-- Specifications 29A and 31, which are measured and reported but not judged.
+- Specification 30, *AS, DS Negated to BERR Negated*, and 27A. Neither has a
+  bisection and neither is derived from one.
+- Specification 48\* above 12.5 MHz, where the manual gives no limit. The
+  window is measured and printed there, with no verdict attached.

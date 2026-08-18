@@ -24,6 +24,11 @@
   // specification 28 measurement deliberately makes it slow -- see there.
   real   base_dtack_assert;
 
+  // The threshold measure_setup last found, so a later measurement can be
+  // placed relative to it rather than at a constant tuned for one grade.
+  real   last_setup_thresh;
+  bit    last_setup_found;
+
   // Which cycle the late bus error is applied to; -1 while nothing is
   // measuring it. Set by measure_late_berr and honoured in knob_defaults.
   int    berr_on_cycle;
@@ -200,6 +205,8 @@
     bit  found;
     begin
       bisect(id, lo, hi, 1'b1, thresh, found);
+      last_setup_thresh = thresh;
+      last_setup_found  = found;
       if (!found) begin
         $display("MEASURE %s %s none %0.3f nothing changed between %0.3f and %0.3f",
                  spec, what, thresh, lo, hi);
@@ -328,6 +335,7 @@
 
   task automatic setup_main(input string which);
     real period;
+    real dtack_late;
     begin
       timing_config();
       if (!$value$plusargs("image=%s", image)) image = "bus_probe.hex";
@@ -354,6 +362,10 @@
       // 47: how late DTACK may arrive, measured from AS asserting, and the
       //     clock edge that therefore acts on it.
       measure_setup("47", "dtack", K_DTACK_ASSERT, 0.0, 2.0 * g_spacing);
+      // Keep it: 48* below needs a *late* acknowledge, and the latest one that
+      // still works is this. A constant would only be late at one grade.
+      dtack_late = last_setup_found ? (last_setup_thresh - 2.0 * resolution)
+                                    : (period / 2.0);
 
       // 27: the same for read data, which is latched later than the
       //     acknowledge is sampled, so the range has to reach further.
@@ -384,7 +396,7 @@
       // the late acknowledge that the specification is about, since 48* is a
       // maximum the system is allowed to take.
       measure_late_berr("48*", 20.0, 6, 0.0, 1.0, 12);
-      measure_late_berr("48*late", 180.0, 6, 0.0, 1.0, 12);
+      measure_late_berr("48*late", dtack_late, 6, 0.0, 1.0, 12);
 
       $display("PASS: setup measurements for %s", which);
       $finish;

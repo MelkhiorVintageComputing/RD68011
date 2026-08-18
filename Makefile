@@ -436,9 +436,12 @@ timing-setup: dirs $(SUSKADIR)/bus_probe.hex
 	@iverilog $(IVFLAGS) $(TIMINC) -o $(TIMDIR)/setup.vvp -s rd68011_setup_tb \
 	    $(RTL) $(TIMMODELS) sim/tb/timing/rd68011_setup_tb.sv 2>&1 | \
 	    grep -v 'sorry:' || true
-	@cd $(TIMDIR) && vvp setup.vvp +image=bus_probe.hex +period=125 \
-	    +timeout=20000000 2>&1 | grep -E '^(#|MEASURE|PASS|FAIL)' > ours.setup
-	@python3 tools/timing/setup_report.py $(TIMDIR)/ours.setup
+	@cd $(TIMDIR) && for p in $(TIMPERIODS); do \
+	    vvp setup.vvp +image=bus_probe.hex +period=$$p \
+	        +timeout=20000000 2>&1 | \
+	        grep -E '^(#|MEASURE|PASS|FAIL)' > ours-$$p.setup; done
+	@python3 tools/timing/setup_report.py \
+	    $(addprefix $(TIMDIR)/ours-,$(addsuffix .setup,$(TIMPERIODS)))
 
 timing: timing-check timing-duty timing-setup
 
@@ -521,7 +524,7 @@ xsim-setup: $(XSIMDIR)/.libs $(SUSKADIR)/bus_probe.hex timing-setup
 	    -testplusarg "image=bus_probe.hex" -testplusarg "period=125" \
 	    -testplusarg "timeout=20000000" 2>&1 | \
 	    grep -E '^(# design|# golden|MEASURE|PASS|FAIL)' > suska.setup
-	@python3 tools/timing/setup_report.py $(TIMDIR)/ours.setup \
+	@python3 tools/timing/setup_report.py $(TIMDIR)/ours-125.setup \
 	    $(XSIMDIR)/suska.setup || true
 
 check: ucode-check lint audit sim programs timing-check timing-setup
