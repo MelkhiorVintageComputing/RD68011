@@ -310,16 +310,19 @@ module rd68011_biu #(
   // acquisition". So VPA acts here exactly where DTACK acts, on the same edge,
   // and the cycle is four clocks like any other.
   //
-  // Appendix B.2 contradicts both: "the processor (or external circuitry)
-  // asserts VMA and completes a normal M6800 read cycle", and warns that
-  // "since VMA is asserted during an autovector operation, care should be taken
-  // to prevent an unintended access to the device". It is followed here only as
-  // far as its own hedge allows -- the external circuitry may assert VMA; this
-  // processor does not. Three things decide it against the appendix: the two
-  // normative sections above, the fact that no transfer happens at all (the
-  // vector is generated internally, so there is nothing for E to synchronise),
-  // and a machine. doc/divergences.md records the contradiction and the
-  // measurement.
+  // Appendix B.2 describes something else, and the difference is the whole
+  // point: sections 5 and 6 are the native bus and native exceptions, while
+  // appendix B is the M6800 compatibility mode. VPA is the one pin doing two
+  // jobs -- "this is an M6800 peripheral, run the synchronous cycle" outside
+  // CPU space, and "autovector this acknowledge" inside it. What appendix B
+  // says about VMA belongs to its own mode, where an M6800 peripheral is being
+  // addressed; it does not describe the native autovector, and it hedges in any
+  // case ("the processor *or external circuitry*"). Later parts split the pin
+  // in two, VPA and AVEC, precisely to remove the ambiguity this one carries.
+  //
+  // So no VMA here, and nothing for E to synchronise: the vector is generated
+  // internally and no transfer happens at all. doc/divergences.md has the
+  // measurement that found it.
   logic cyc_is_iack;
   assign cyc_is_iack = (cyc_kind == rd68011_pkg::CT_IACK);
 

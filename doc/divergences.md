@@ -215,29 +215,32 @@ treated VPA as a request for the M6800 handshake whatever the cycle was, so
 `samp_done` could only be reached through `term_vpa && vma_asserted &&
 e_last_high`, and the acknowledge sat in the wait loop until E came round.
 
-**The manual contradicts itself here, and it is worth recording which way.**
+**Two modes, not a contradiction, and reading it as one is how the bug got
+written.** Sections 5 and 6 document the native MC68000 bus cycles and native
+exception processing. Appendix B documents the M6800 compatibility mode. VPA is
+a single pin doing two jobs:
 
-- UM 5.1.4: "the interrupt acknowledge cycle can be autovectored. The interrupt
-  acknowledge cycle **is the same**, except the interrupting device asserts VPA
-  instead of DTACK."
-- UM 6.3.4, from the other side: DTACK, AVEC/VPA and BERR are the three ways to
-  "terminate the vector acquisition".
-- Appendix B.2: "the processor (or external circuitry) asserts VMA and completes
-  a normal M6800 read cycle", and "since VMA is asserted during an autovector
-  operation, care should be taken to prevent an unintended access to the device".
+- outside CPU space: *this is an M6800 peripheral*, so run the synchronous
+  cycle -- assert VMA, align with E (appendix B);
+- during an interrupt acknowledge: *autovector this* -- UM 5.1.4, "the
+  interrupt acknowledge cycle **is the same**, except the interrupting device
+  asserts VPA instead of DTACK", and UM 6.3.4, which lists DTACK, AVEC/VPA and
+  BERR as the three ways to "terminate the vector acquisition".
 
-Two normative sections against one appendix, and the appendix hedges -- *or
-external circuitry*. Three things settle it their way. The sections are the ones
-about bus cycles and about interrupts. Nothing is transferred at all, the vector
-being generated internally, so there is nothing for E to synchronise. And a
-machine that shipped with real MC68010s and a twelve-clock watchdog could not
-have worked against a fifteen-clock acknowledge.
+What appendix B.2 says about VMA -- "the processor (or external circuitry)
+asserts VMA and completes a normal M6800 read cycle" -- belongs to its own mode,
+where an M6800 peripheral really is being addressed. It is not a description of
+the native autovector, and it hedges in any case. Later parts split the pin in
+two, VPA for the M6800 mode and AVEC for the native one, precisely to remove
+the ambiguity the single pin carries; the manual's own "when VPA (or AVEC) is
+asserted" in 5.1.4 is the same distinction showing through.
 
-So VPA now acts where DTACK acts, on the same sampling edge, and the acknowledge
-is four clocks like any other cycle. VMA is not asserted for it -- appendix B's
-own warning about an unintended access is reason enough not to strobe a device
-that was never being addressed. External circuitry remains free to assert VMA,
-which is all the appendix actually claims.
+The bus unit had applied the appendix's behaviour to both jobs. Now VPA acts
+where DTACK acts, on the same sampling edge, and the acknowledge is four clocks
+like any other cycle. No VMA is asserted for it -- there is nothing to
+synchronise, the vector being generated internally, and appendix B's own warning
+about "an unintended access to the device" is reason enough not to strobe one
+that was never being addressed.
 
 `sim/tb/bus_m6800_tb.sv` had an autovector case throughout, quoting UM 5.1.4 in
 its own comment, and it passed the whole time: it checked the end code, which was
