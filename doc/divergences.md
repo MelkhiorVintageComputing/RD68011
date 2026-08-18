@@ -253,6 +253,60 @@ end code and not the clock, and no program in `sim/programs/` takes an
 autovectored interrupt. It took someone running real code on a real machine's
 PROM.
 
+## A second bug the same machine found
+
+**Level seven was recognised as a level, so it was taken for ever.** With the
+acknowledge fixed, the same report came back with a bus trace: the handler is
+entered correctly -- right vector number, right frame, right vector address,
+right handler address -- fetches the first two words of its first instruction,
+and is then interrupted again before that instruction retires. Three
+acknowledges 4.8 us apart, the stack eight bytes lower each time. The
+instruction that would have cleared the interrupting device never runs, so the
+request stays asserted, so it happens again.
+
+The manual does not quite say what to do here, and the gap is where the bug
+lived.
+
+- UM 3.5: "Level seven, which cannot be masked, has the highest priority", and
+  "these signals must remain asserted until the processor signals interrupt
+  acknowledge ... for that request to be recognized".
+- UM section 6: "interrupts are inhibited for all priority levels less than or
+  equal to the current priority", and processing starts only "if the priority of
+  the pending interrupt is greater than the current processor priority".
+
+Read section 6 as a comparison and level seven is inhibited the moment it is
+taken, because taking it sets the mask to seven and seven is not greater than
+seven -- which contradicts 3.5. Take 3.5 at its word and add level seven to the
+comparison, which is what this design did, and a device that holds its request
+as 3.5 instructs is acknowledged at every instruction boundary until the stack
+runs down through memory.
+
+Neither is right, because **level seven is an edge and the others are levels**.
+A transition to seven is always recognised, whatever the mask -- that is what
+unmaskable means -- and the line merely sitting at seven is not a new request.
+Both sentences then hold at once, and a device that holds its request until the
+acknowledge, as 3.5 requires, gets exactly one.
+
+`irq7_edge` is that transition, set on the change to seven, cleared when the
+interrupt it raised is taken, and cleared if the request goes away before it
+can be -- a request withdrawn early is one the processor may forget rather than
+invent an acknowledge for. Levels one to six are unchanged and still compared
+against the mask.
+
+`sim/tb/core_exception_tb.sv` holds the line at seven and checks that the
+handler's first instruction actually runs and that only one frame is pushed.
+Putting the level test back fails it twice over, and instructively: the store
+never happens, and the sentinel eight bytes below the frame comes back as
+`0x2700` -- the status register of a second frame, the stack already on its way
+down.
+
+The first report's `0x7C2700` turned out to be this too, at one remove. The
+stack descends eight bytes per acknowledge; after some hundreds of passes it
+reaches the vector table and the pushed frame overwrites it, and the next vector
+fetch reads back the frame that was just written there -- the format word
+`0x007C` and the status register `0x2700` -- and the core jumps to `0x007C2700`.
+A correct vector read of a vector table the runaway stack had already eaten.
+
 ## Not yet implemented
 
 Nothing. Every instruction, every exception and both of the MC68010's own

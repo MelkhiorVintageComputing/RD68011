@@ -263,6 +263,44 @@ module core_exception_tb;
     ipl_n_i   = 3'b111;
     mem_waits = 8'd0;
 
+    // ---- A level seven request that stays asserted -------------------------
+    //
+    // The case a real machine found. A periodic source holds its request at
+    // seven until the handler writes to a clear register, which is what UM 3.5
+    // tells it to do: "these signals must remain asserted until the processor
+    // signals interrupt acknowledge". Recognise that as a level and the
+    // acknowledge never ends -- taking it sets the mask to seven, the line is
+    // still seven, and the next instruction boundary acknowledges it again,
+    // for ever. The handler's first instruction never retires, so the source is
+    // never cleared, and the stack walks down through memory until it reaches
+    // the vector table and eats it.
+    //
+    // So: hold the line at seven and check the handler actually runs.
+    core_reset();
+    poke_l(23'h000000, SSP0);
+    poke_l(23'h000002, PC0);
+    poke_l(23'h00003E, H_TRAP3);         // autovector 31 at byte $7C
+    poke_w(H_TRAP3[23:1],        16'h31FC);  // MOVE.W #$1234,($0900).W
+    poke_w(H_TRAP3[23:1] + 23'd1, 16'h1234);
+    poke_w(H_TRAP3[23:1] + 23'd2, 16'h0900);
+    poke_w(H_TRAP3[23:1] + 23'd3, 16'h60FE);  // then branch to self
+    poke_w(23'h000480, 16'h0000);        // $0900 starts clear
+    // A sentinel eight bytes below the one frame this should push. A second
+    // acknowledge would write its format word straight over it.
+    poke_w((SSP0 - 32'd16) >> 1, 16'hA5A5);
+    poke_w(23'h000800, 16'h60FE);        // 1000: branch to self
+    iack_auto = 1'b1;
+    core_start();
+    repeat (40) @(posedge clk);
+    ipl_n_i = ~3'd7;                     // and it never goes away
+    repeat (4000) @(posedge clk);
+    expect_u32("level seven held: the handler's first instruction runs",
+               {16'd0, mem.peek(23'h000480)}, 32'h0000_1234);
+    // One frame, not hundreds. Eight bytes below it must be untouched.
+    expect_u32("level seven held: it is acknowledged once, not repeatedly",
+               {16'd0, mem.peek((SSP0 - 32'd16) >> 1)}, 32'h0000_A5A5);
+    ipl_n_i = 3'b111;
+
     // ---- A vectored interrupt ---------------------------------------------
     core_reset();
     poke_l(23'h000000, SSP0);

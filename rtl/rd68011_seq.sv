@@ -755,8 +755,31 @@ module rd68011_seq (
   logic [7:0] irq_vec;
   logic       irq_auto;
 
-  assign irq_level   = ~ipl_sync_n;
-  assign irq_pending = (irq_level == 3'd7) ||
+  assign irq_level = ~ipl_sync_n;
+
+  // Level seven is an edge, and the others are levels. UM 3.5 says level seven
+  // "cannot be masked"; UM section 6 says "interrupts are inhibited for all
+  // priority levels less than or equal to the current priority" and that
+  // processing starts only when the pending level is *greater* than the mask.
+  // Read as a comparison those two cannot both hold: taking a level seven sets
+  // the mask to seven, and seven is not greater than seven, so either it is
+  // inhibited from then on or it is not inhibited at all.
+  //
+  // It is neither, because level seven is recognised on the *transition* to it
+  // rather than on the line sitting there. That is what makes it unmaskable --
+  // a new request always gets in, whatever the mask -- without making it
+  // perpetual. Read as a level, a device that holds the line at seven, as UM
+  // 3.5 requires it to until the acknowledge, is re-acknowledged at every
+  // instruction boundary for ever: the handler's first instruction never
+  // retires, the source is never cleared, and the stack walks down through
+  // memory. That is not a thought experiment; doc/divergences.md has the trace.
+  //
+  // `irq7_edge` is that transition, held until the interrupt is taken, and
+  // dropped if the request goes away before it can be.
+  logic [2:0] irq_prev;
+  logic       irq7_edge;
+
+  assign irq_pending = irq7_edge ||
                        (irq_level > sr[rd68011_pkg::SR_I0+2 -: 3]);
 
   // The vector number: the one the device put on the bus, or the autovector
@@ -1631,6 +1654,8 @@ module rd68011_seq (
       cur_addr   <= 32'd0;
       cur_ssw    <= 16'd0;
       irq_taken   <= 3'd0;
+      irq_prev    <= 3'd0;
+      irq7_edge   <= 1'b0;
       trace_armed <= 1'b0;
       irq_from_stop <= 1'b0;
       // UM 5.5: the interrupt level is initialised to seven and, on the
@@ -1671,6 +1696,16 @@ module rd68011_seq (
         irq_taken     <= irq_level;
         irq_from_stop <= `UF(uw, STOP);
       end
+
+      // The level seven edge. Set on the transition to seven, cleared when the
+      // interrupt it raised is taken, and cleared if the request goes away
+      // first -- UM 3.5 requires a device to hold its request until the
+      // acknowledge, so a request withdrawn before then is one the processor
+      // is entitled to forget rather than to invent an acknowledge for.
+      irq_prev <= irq_level;
+      if (irq_level != 3'd7)                              irq7_edge <= 1'b0;
+      else if (irq_prev != 3'd7)                          irq7_edge <= 1'b1;
+      else if (commit && take_irq && (irq_level == 3'd7)) irq7_edge <= 1'b0;
       if (commit && (f_seq == rd68011_ucode_pkg::U_SEQ_DECODE)) begin
         trace_armed <= take_trace ? 1'b0 : sr_nxt[rd68011_pkg::SR_T];
       end
