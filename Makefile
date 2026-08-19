@@ -35,7 +35,7 @@ YOSYS    := yosys
 # Vivado: a part with room for the core plus a testbench harness.
 XPART    ?= xc7a100tcsg324-1
 
-.PHONY: suska-ssw all lint lint-iverilog lint-verilator lint-yosys synth sim check clean dirs \
+.PHONY: suska-ssw suska-fault all lint lint-iverilog lint-verilator lint-yosys synth sim check clean dirs \
         ucode ucode-check model-check harte harte-all \
         audit impl programs suska cosim \
         timing timing-events timing-check timing-duty timing-setup \
@@ -308,6 +308,26 @@ suska-ssw: dirs $(PROGDIR)/p06_ssw.hex
 	@cd $(SUSKADIR) && ghdl -e $(GHDLFLAGS) wf68k10_ssw_tb 2>/dev/null; \
 	    ghdl -r $(GHDLFLAGS) wf68k10_ssw_tb --stop-time=20ms 2>&1 | \
 	    grep -o 'SSW suska: .*'
+
+# Instruction continuation on the Suska core: does RTE come back from a format
+# $$8 frame? sim/programs/p03_fault.S completes a faulted access in software and
+# returns through RTE, which is UM 6.3.9.2's alternative to rerunning the cycle
+# and the MC68010's reason for existing. It passes on RD68011 via `make
+# programs`. doc/ssw.md records what each core does.
+suska-fault: dirs $(PROGDIR)/p03_fault.hex
+	@echo "== instruction continuation: RD68011 =="
+	@vvp $(BUILD)/program_tb.vvp +prog=$(PROGDIR)/p03_fault.hex \
+	    +timeout=2000000 +berr=4096 2>&1 | grep -vi 'sorry:'
+	@echo "== instruction continuation: Suska WF68K10 =="
+	@mkdir -p $(SUSKADIR)
+	@cp $(PROGDIR)/p03_fault.hex $(SUSKADIR)/
+	@cd $(SUSKADIR) && for u in $(SUSKAUNIT); do \
+	    ghdl -a $(GHDLFLAGS) $(CURDIR)/$(SUSKASRC)/$$u.vhd >/dev/null 2>&1 || true; done
+	@cd $(SUSKADIR) && ghdl -a $(GHDLFLAGS) \
+	    $(CURDIR)/sim/suska/wf68k10_p03_tb.vhd 2>&1 | grep -i '^.*error' || true
+	@cd $(SUSKADIR) && ghdl -e $(GHDLFLAGS) wf68k10_p03_tb 2>/dev/null; \
+	    ghdl -r $(GHDLFLAGS) wf68k10_p03_tb --stop-time=40ms 2>&1 | \
+	    grep -o 'P03 suska: .*'
 
 suska: dirs $(SUSKADIR)/bus_probe.hex
 	@echo "== suska cross-check =="
