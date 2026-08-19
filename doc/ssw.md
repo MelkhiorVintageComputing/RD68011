@@ -8,6 +8,8 @@ implementations measured against it.
 ```sh
 make programs           # sim/programs/p06_ssw.S, on RD68011
 make suska-ssw          # the identical image on both processors
+make suska-fault        # and p03_fault.S, which returns through RTE
+make suska-rte          # which half of instruction continuation is missing
 ```
 
 ## What the manual says
@@ -133,3 +135,73 @@ half, so HB=1 is the reading that would help a handler completing the access in
 software. Nothing in this project needs it yet, `sim/programs/p03_fault.S`
 completes only word accesses, and asserting either value would be asserting more
 than UM figure 6-9 says. It is masked in `p06_ssw.S` and recorded here instead.
+
+# Instruction continuation, which is the other half
+
+The special status word only matters because something reads it. `RTE` on a
+format $8 frame is the thing that does: it reloads the processor's internal
+state and either reruns the faulted cycle or, if the handler set RR, does not.
+`sim/programs/p03_fault.S` is that path written the way an operating system
+writes it -- UM 6.3.9.2's "alternate method of handling a bus error" -- and it
+is worth asking the same question of it.
+
+**RD68011 passes all six checks**: a faulted read, a faulted write, a fault
+inside a MOVEM continued mid-transfer, an address error completed the same way,
+registers unharmed across the handler, and a sixteen-iteration faulting loop.
+
+**Suska raises a format error**, vector 14, on the first one -- before and after
+`Inputs/suska-ssw-fix.patch`, so it is a separate defect and not a consequence
+of the status word being wrong. Two things came out of chasing it.
+
+## Its own version stamp is written and read at different offsets
+
+Not the format nibble, which `VALIDATE_FRAME` accepts. The frame is rejected one
+state later by a self-consistency check on Suska's processor-version stamp:
+
+| | |
+|---|---|
+| `wf68k10_top.vhd`, the stacking mux | `VERSION when STACK_POS = 14`, which is frame offset `$18` |
+| `wf68k10_exception_handler.vhd`, `ADR_OFFSET` | a long read at `$1A` for `EXAMINE_VERSION` |
+
+One word apart and overlapping, so the comparison is `VERSION` against
+`VERSION(15:0)` concatenated with whatever is at `$1C`. It can never match, and
+the mismatch is what sets the format-error flag. No `RTE` from a format $8 frame
+can succeed on that core, with RR set or clear.
+
+`Inputs/suska-rte-fix.patch` moves both to `$1C`, two lines, and applies on top
+of the status-word patch. Worth knowing before adopting it: **figure 6-8 puts
+the version number at `$1A`**, and `$18` is the *instruction input buffer*,
+which UM 6.3.9.2 tells handlers to write -- so Suska's read was right and its
+write was in the wrong place. The patch moves both because Suska's stamp is 32
+bits and cannot sit in a word at `$1A`, and long writes only land on four-byte
+offsets. `$1C` is inside the implementation-defined internal information, so it
+is legal but not what the figure draws. This design puts its own version word at
+offset 26 = `$1A` (`rd68011_pkg.sv`, `FRAME_VERSION_OFF`), which is the
+conforming position.
+
+## And RR is not implemented at all
+
+With the frame accepted, `RTE` returns -- and nothing on the return path reads
+the special status word at `$08`, the data output buffer at `$10` or the data
+input buffer at `$14`. RR, IF and DF are never decoded; the core resumes at the
+stacked program counter and re-executes the faulted instruction. That is close
+to a processor rerun and it is not software completion.
+
+So `p03_fault.S` still cannot pass on Suska even with both patches: its fault
+window is permanent by design, so a rerun faults again and loops. The two
+failures look identical from p03 alone, which is why `sim/suska/rte_probe.S`
+exists -- it arms the fault one at a time, so a rerun succeeds and the question
+"does RTE accept the frame" can be asked separately from "does it honour RR".
+
+| | pristine | + status-word patch | + RTE patch |
+|---|---|---|---|
+| `rte_probe` checks 1-2, RR clear | format error | format error | **pass** |
+| `rte_probe` check 3, RR set | -- | -- | saw `1234`: the cycle was rerun |
+| `p06_ssw` | fails check 1 | passes | passes |
+| `p03_fault` | format error | format error | loops |
+| 400-cycle bus trace | -- | identical | identical |
+
+None of this is a divergence for RD68011 to resolve; it is recorded because the
+same programs answer the question for both processors, and because a reader
+comparing the two cores should know that the second one's instruction
+continuation is absent rather than merely inaccurate.

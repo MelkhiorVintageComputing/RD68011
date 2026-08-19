@@ -1,0 +1,22 @@
+--- a/wf68k10_exception_handler.vhd
++++ b/wf68k10_exception_handler.vhd
+@@ -456,7 +456,7 @@
+                   x"00000004" when NEXT_EX_STATE = RESTORE_PC and EXCEPTION = EX_RESET else
+                   x"00000002" when NEXT_EX_STATE = RESTORE_PC else
+                   x"00000006" when NEXT_EX_STATE = VALIDATE_FRAME else
+-                  x"0000001A" when NEXT_EX_STATE = EXAMINE_VERSION else
++                  x"0000001C" when NEXT_EX_STATE = EXAMINE_VERSION else -- Where BUILD_STACK writes the version stamp.
+                   x"0000001E" when NEXT_EX_STATE = READ_BOTTOM else 
+                   INT_VECT when NEXT_EX_STATE = UPDATE_PC else x"00000000"; -- Default is top of the stack (STATUS).
+ 
+--- a/wf68k10_top.vhd
++++ b/wf68k10_top.vhd
+@@ -589,7 +589,7 @@
+                 FAULT_ADR(15 downto 0) & x"0000" when STACK_POS = 8 else
+                 OUTBUFFER when STACK_POS = 10 else
+                 INBUFFER when STACK_POS = 12 else
+-                VERSION when STACK_POS = 14 else            
++                VERSION when STACK_POS = 16 else -- Offset $1C: the version stamp, inside the internal information.
+                 DEBUG_STAMP when STACK_POS = 18 else
+                 DEBUG_STAMP when DEBUG_TRIGGER = '1' and STACK_POS = 20 else (others => '0');
+ 

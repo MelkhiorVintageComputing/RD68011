@@ -35,7 +35,7 @@ YOSYS    := yosys
 # Vivado: a part with room for the core plus a testbench harness.
 XPART    ?= xc7a100tcsg324-1
 
-.PHONY: suska-ssw suska-fault all lint lint-iverilog lint-verilator lint-yosys synth sim check clean dirs \
+.PHONY: suska-ssw suska-fault suska-rte all lint lint-iverilog lint-verilator lint-yosys synth sim check clean dirs \
         ucode ucode-check model-check harte harte-all \
         audit impl programs suska cosim \
         timing timing-events timing-check timing-duty timing-setup \
@@ -314,6 +314,33 @@ suska-ssw: dirs $(PROGDIR)/p06_ssw.hex
 # returns through RTE, which is UM 6.3.9.2's alternative to rerunning the cycle
 # and the MC68010's reason for existing. It passes on RD68011 via `make
 # programs`. doc/ssw.md records what each core does.
+$(SUSKADIR)/rte_probe.hex: sim/suska/rte_probe.S sim/programs/rd68011.inc \
+                           sim/programs/link.ld | dirs
+	@mkdir -p $(SUSKADIR)
+	@m68k-linux-gnu-gcc $(MCFLAGS) -c -x assembler-with-cpp \
+	    -o $(SUSKADIR)/rte_probe.o $<
+	@m68k-linux-gnu-ld -T sim/programs/link.ld -o $(SUSKADIR)/rte_probe.elf \
+	    $(SUSKADIR)/rte_probe.o 2>&1 | grep -v 'RWX permissions' || true
+	@m68k-linux-gnu-objcopy -O binary $(SUSKADIR)/rte_probe.elf \
+	    $(SUSKADIR)/rte_probe.bin
+	@python3 tools/bin2hex.py $(SUSKADIR)/rte_probe.bin > $@
+
+# Which half of instruction continuation is missing. p03_fault asks two
+# questions at once -- does RTE accept a format $8 frame, and does it honour
+# the rerun flag -- and a core that fails the second looks exactly like a core
+# that fails the first, because the fault window never goes away and the rerun
+# loops. This arms the fault one at a time so the two can be told apart.
+# Inputs/suska-rte-fix.md is what it was written to establish.
+suska-rte: dirs $(SUSKADIR)/rte_probe.hex
+	@echo "== which half of instruction continuation: Suska WF68K10 =="
+	@cd $(SUSKADIR) && for u in $(SUSKAUNIT); do \
+	    ghdl -a $(GHDLFLAGS) $(CURDIR)/$(SUSKASRC)/$$u.vhd >/dev/null 2>&1 || true; done
+	@cd $(SUSKADIR) && ghdl -a $(GHDLFLAGS) \
+	    $(CURDIR)/sim/suska/wf68k10_rte_probe_tb.vhd 2>&1 | grep -i '^.*error' || true
+	@cd $(SUSKADIR) && ghdl -e $(GHDLFLAGS) wf68k10_rte_probe_tb 2>/dev/null; \
+	    ghdl -r $(GHDLFLAGS) wf68k10_rte_probe_tb --stop-time=40ms 2>&1 | \
+	    grep -o 'PROBE suska: .*'
+
 suska-fault: dirs $(PROGDIR)/p03_fault.hex
 	@echo "== instruction continuation: RD68011 =="
 	@vvp $(BUILD)/program_tb.vvp +prog=$(PROGDIR)/p03_fault.hex \
