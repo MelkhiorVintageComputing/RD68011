@@ -247,6 +247,31 @@
     end
   end
 
+  // -- When an interrupt may be taken -----------------------------------------
+  //
+  // The whole rule, in one place. UM 3.5 makes level seven unmaskable and UM
+  // section 6 makes every other level a comparison against the mask, so an
+  // interrupt is legitimate only if the line is at seven or is above the mask
+  // -- and it must be legitimate *at the instant it is taken*, because that is
+  // the instant the level is latched and the level is what the acknowledge
+  // carries and what the handler's mask becomes.
+  //
+  // Stated here rather than in rtl/ because rtl/ has no assertions in it and
+  // has to elaborate under yosys and Vivado as well; stated in the harness
+  // rather than in one testbench because it then holds for every program, every
+  // reference vector and every co-simulated instruction, not just for the
+  // directed cases that provoked it. doc/divergences.md has what it caught.
+  always @(posedge clk) begin
+    if (rst_n && dut.u_seq.commit && dut.u_seq.take_irq) begin
+      if (!((dut.u_seq.irq_level == 3'd7) ||
+            (dut.u_seq.irq_level > dut.u_seq.sr[10:8]))) begin
+        $display("FAIL: interrupt taken at level %0d with the mask at %0d",
+                 dut.u_seq.irq_level, dut.u_seq.sr[10:8]);
+        errors = errors + 1;
+      end
+    end
+  end
+
   // -- Checking ---------------------------------------------------------------
   task automatic expect_tr(input int i, input logic [31:0] addr,
                            input logic [2:0] fc, input logic rw,

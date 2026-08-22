@@ -301,6 +301,117 @@ module core_exception_tb;
                {16'd0, mem.peek((SSP0 - 32'd16) >> 1)}, 32'h0000_A5A5);
     ipl_n_i = 3'b111;
 
+    // ---- A level seven request withdrawn before it can be taken ------------
+    //
+    // The third bug this area has produced, and again a real machine saw it
+    // first: one unexplained vector 24 on a system whose only always-unmasked
+    // source is at level seven.
+    //
+    // `irq7_edge` is cleared in the clocked block but read combinationally, so
+    // for one clock it describes a request that has already gone -- and the
+    // level latched alongside it is the new one, which is zero. STOP makes that
+    // one clock a certainty rather than a race: with no bus cycle in flight
+    // every clock retires, and STOP is an interrupt point, so the window cannot
+    // be missed.
+    //
+    // Nothing should happen at all. UM 3.5 requires a device to hold its
+    // request until the acknowledge, so a request withdrawn before then is one
+    // the processor may forget -- what it may not do is acknowledge a level the
+    // request never carried.
+    core_reset();
+    poke_l(23'h000000, SSP0);
+    poke_l(23'h000002, PC0);
+    poke_l(23'h000030, H_LINEA);         // autovector 0 would be vector 24, $60
+    poke_l(23'h00003E, H_TRAP3);         // autovector 31 at byte $7C
+    poke_w(H_LINEA[23:1], 16'h60FE);
+    poke_w(H_TRAP3[23:1], 16'h60FE);
+    poke_w(23'h000800, 16'h4E72);        // 1000: STOP #$2700, mask stays seven
+    poke_w(23'h000801, 16'h2700);
+    poke_w(23'h000802, 16'h4AFC);        // 1004: ILLEGAL, never reached
+    iack_auto = 1'b1;
+    core_start();
+    repeat (60) @(posedge clk);
+    expect_u32("level seven withdrawn: stopped before the pulse",
+               dut.u_seq.ir_pc, PC0);
+    // Forget the cycles that got here; from now on any cycle at all is one too
+    // many, because a stopped core that ignores a request runs none.
+    ntr = 0;
+    @(negedge clk); ipl_n_i = ~3'd7;     // exactly one clock at seven
+    @(negedge clk); ipl_n_i = 3'b111;
+    repeat (200) @(posedge clk);
+    expect_int("level seven withdrawn: no acknowledge cycle", ntr, 0);
+    expect_u32("level seven withdrawn: still stopped", dut.u_seq.ir_pc, PC0);
+    expect_u32("level seven withdrawn: the mask is untouched",
+               {29'd0, dut.u_seq.sr[10:8]}, 32'd7);
+
+    // ---- ... and the same, at every phase of an instruction stream ---------
+    //
+    // The same withdrawal against a running core rather than a stopped one, so
+    // the case is not a STOP artefact. The window is one clock and an
+    // instruction boundary has to land in it, so the pulse is swept across the
+    // loop instead of being placed. The mask is what tells: a level zero taken
+    // here sets it to zero.
+    for (i = 0; i < 12; i = i + 1) begin
+      core_reset();
+      poke_l(23'h000000, SSP0);
+      poke_l(23'h000002, PC0);
+      poke_l(23'h000030, H_LINEA);
+      poke_l(23'h00003E, H_TRAP3);
+      poke_w(H_LINEA[23:1], 16'h60FE);
+      poke_w(H_TRAP3[23:1], 16'h60FE);
+      poke_w(23'h000800, 16'h4E71);      // 1000: NOP
+      poke_w(23'h000801, 16'h4E71);      // 1002: NOP
+      poke_w(23'h000802, 16'h4E71);      // 1004: NOP
+      poke_w(23'h000803, 16'h4E71);      // 1006: NOP
+      poke_w(23'h000804, 16'h60F6);      // 1008: BRA 1000
+      iack_auto = 1'b1;
+      core_start();
+      repeat (60) @(posedge clk);
+      repeat (i)  @(posedge clk);
+      @(negedge clk); ipl_n_i = ~3'd7;
+      @(negedge clk); ipl_n_i = 3'b111;
+      repeat (120) @(posedge clk);
+      expect_u32("level seven withdrawn while running: the mask is untouched",
+                 {29'd0, dut.u_seq.sr[10:8]}, 32'd7);
+    end
+
+    // ---- A level seven request that arrives while the mask is below it -----
+    //
+    // The companion to the held-at-seven case above, entered the other way. A
+    // mask below seven means the *level* term takes the interrupt in the very
+    // clock the line first reads seven -- and the edge is set in that same
+    // clock, by a priority chain that sets before it clears. The edge then
+    // survives into the handler, whose first instruction boundary takes a
+    // second interrupt for the same request: two frames, two acknowledges.
+    //
+    // Checked the way the held-at-seven case is: the handler's store has to
+    // happen, and the sentinel eight bytes below the one frame has to survive.
+    core_reset();
+    poke_l(23'h000000, SSP0);
+    poke_l(23'h000002, PC0);
+    poke_l(23'h00003E, H_TRAP3);         // autovector 31 at byte $7C
+    poke_w(H_TRAP3[23:1],         16'h31FC); // MOVE.W #$1234,($0900).W
+    poke_w(H_TRAP3[23:1] + 23'd1, 16'h1234);
+    poke_w(H_TRAP3[23:1] + 23'd2, 16'h0900);
+    poke_w(H_TRAP3[23:1] + 23'd3, 16'h60FE); // then branch to self
+    poke_w(23'h000480, 16'h0000);        // $0900 starts clear
+    poke_w((SSP0 - 32'd16) >> 1, 16'hA5A5);
+    poke_w(23'h000800, 16'h4E72);        // 1000: STOP #$2000, mask zero
+    poke_w(23'h000801, 16'h2000);
+    poke_w(23'h000802, 16'h4AFC);        // 1004: ILLEGAL, never reached
+    iack_auto = 1'b1;
+    core_start();
+    repeat (60) @(posedge clk);
+    ipl_n_i = ~3'd7;                     // and held, as UM 3.5 requires
+    repeat (600) @(posedge clk);
+    expect_u32("level seven under a low mask: the handler's first instruction runs",
+               {16'd0, mem.peek(23'h000480)}, 32'h0000_1234);
+    expect_u32("level seven under a low mask: it is acknowledged once",
+               {16'd0, mem.peek((SSP0 - 32'd16) >> 1)}, 32'h0000_A5A5);
+    expect_u32("level seven under a low mask: the mask is raised to seven",
+               {29'd0, dut.u_seq.sr[10:8]}, 32'd7);
+    ipl_n_i = 3'b111;
+
     // ---- A vectored interrupt ---------------------------------------------
     core_reset();
     poke_l(23'h000000, SSP0);

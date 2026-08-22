@@ -241,7 +241,8 @@ to 45 ns of room on the binding constraint.
 ### Bugs this found
 
 Worth listing because each was found by exactly one thing and would have
-survived everything else — and two of them by something outside the five:
+survived everything else — and four of them by something outside the five: the
+AC-timing work, a real machine, and someone reading the source:
 
 - A faulted write did not record its data output buffer, so a handler completing
   the access itself read the *previous* write's — found by a program, not by a
@@ -252,6 +253,10 @@ survived everything else — and two of them by something outside the five:
 - An autovectored interrupt acknowledge waited on the E clock, costing 15.5
   clocks; found by a real machine.
 - Level 7 was recognised as a level rather than an edge, so it re-took forever.
+- That edge then outlived its request by one clock, so a withdrawn level-7
+  request was acknowledged as level *0* and the handler entered with the mask
+  at zero; found by someone reading the RTL, after a real machine took one
+  unexplained vector 24.
 
 ---
 

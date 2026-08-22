@@ -776,10 +776,20 @@ module rd68011_seq (
   //
   // `irq7_edge` is that transition, held until the interrupt is taken, and
   // dropped if the request goes away before it can be.
+  //
+  // It is a *qualifier* on the line being at seven now, not a memory of it
+  // having been. The flag is cleared in the clocked block below and read here
+  // combinationally, so on its own it describes the request for one clock
+  // longer than the request exists -- and an interrupt taken in that clock
+  // latches the level it reads, which is the new one. Zero, if the device let
+  // go. Testing the line as well as the edge makes "dropped if the request goes
+  // away before it can be" take effect in the clock it happens rather than the
+  // one after, and makes the level that justifies an interrupt the level that
+  // is acknowledged, which is the whole of what the part guarantees here.
   logic [2:0] irq_prev;
   logic       irq7_edge;
 
-  assign irq_pending = irq7_edge ||
+  assign irq_pending = (irq7_edge && (irq_level == 3'd7)) ||
                        (irq_level > sr[rd68011_pkg::SR_I0+2 -: 3]);
 
   // The vector number: the one the device put on the bus, or the autovector
@@ -1702,10 +1712,18 @@ module rd68011_seq (
       // first -- UM 3.5 requires a device to hold its request until the
       // acknowledge, so a request withdrawn before then is one the processor
       // is entitled to forget rather than to invent an acknowledge for.
+      //
+      // Taking it comes first in the chain, ahead of setting it. The two can
+      // want the same clock: with the mask below seven the *level* term of
+      // `irq_pending` takes the request in the very clock the line first reads
+      // seven, which is also the clock the transition is seen. Set there and
+      // the flag outlives the acknowledge that answered it, and the handler's
+      // first instruction boundary takes a second interrupt for the one
+      // request -- the failure doc/divergences.md describes, by another route.
       irq_prev <= irq_level;
-      if (irq_level != 3'd7)                              irq7_edge <= 1'b0;
-      else if (irq_prev != 3'd7)                          irq7_edge <= 1'b1;
-      else if (commit && take_irq && (irq_level == 3'd7)) irq7_edge <= 1'b0;
+      if (commit && take_irq && (irq_level == 3'd7)) irq7_edge <= 1'b0;
+      else if (irq_level != 3'd7)                    irq7_edge <= 1'b0;
+      else if (irq_prev != 3'd7)                     irq7_edge <= 1'b1;
       if (commit && (f_seq == rd68011_ucode_pkg::U_SEQ_DECODE)) begin
         trace_armed <= take_trace ? 1'b0 : sr_nxt[rd68011_pkg::SR_T];
       end

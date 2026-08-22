@@ -288,10 +288,11 @@ Both sentences then hold at once, and a device that holds its request until the
 acknowledge, as 3.5 requires, gets exactly one.
 
 `irq7_edge` is that transition, set on the change to seven, cleared when the
-interrupt it raised is taken, and cleared if the request goes away before it
-can be -- a request withdrawn early is one the processor may forget rather than
-invent an acknowledge for. Levels one to six are unchanged and still compared
-against the mask.
+interrupt it raised is taken, and read only while the line is still at seven --
+a request withdrawn early is one the processor may forget rather than invent an
+acknowledge for. That last clause was originally the clearing rule alone, which
+is what the next section is about. Levels one to six are unchanged and still
+compared against the mask.
 
 `sim/tb/core_exception_tb.sv` holds the line at seven and checks that the
 handler's first instruction actually runs and that only one frame is pushed.
@@ -306,6 +307,84 @@ reaches the vector table and the pushed frame overwrites it, and the next vector
 fetch reads back the frame that was just written there -- the format word
 `0x007C` and the status register `0x2700` -- and the core jumps to `0x007C2700`.
 A correct vector read of a vector table the runaway stack had already eaten.
+
+## A third bug, in the edge that fixed the second
+
+**The edge outlived its request by one clock, and the interrupt was then taken
+as level 0.** Reported from outside the project, found by reading rather than by
+simulating, and prompted by a single unexplained vector 24 on a machine whose
+only always-unmasked source is at level seven -- taken at an arbitrary point in
+a program that had just lowered the interrupt mask for the first time.
+
+`irq7_edge` is cleared in a clocked block and read combinationally, so for one
+clock it described a request that had already gone. The level is sampled in that
+same clock, from the same `irq_level`:
+
+```systemverilog
+assign irq_pending = irq7_edge || (irq_level > sr[SR_I0+2 -: 3]);
+...
+if (commit && take_irq) irq_taken <= irq_level;
+```
+
+so an interrupt taken in that clock latched the level it read, which was zero.
+The edge is the only route to a zero there: the other term requires
+`irq_level > mask`, hence at least one. Three things followed, in increasing
+order of harm -- an acknowledge with `A3-A1 = 000`, an autovector of `24 + 0`,
+which is the spurious vector's number reached by a route that is not spurious
+interrupt, and a handler entered with the mask at **zero**, so interruptible by
+everything including the level that raised it. The part can do none of the
+three: it commits to a level and acknowledges *that* level, and a request
+withdrawn afterwards gives a spurious interrupt, never a different one.
+
+**And a second defect in the same three lines**, which the report did not
+mention. The chain set the flag before it could clear it:
+
+```systemverilog
+if      (irq_level != 3'd7)                         irq7_edge <= 1'b0;
+else if (irq_prev != 3'd7)                          irq7_edge <= 1'b1;   // wins
+else if (commit && take_irq && (irq_level == 3'd7)) irq7_edge <= 1'b0;
+```
+
+With the mask below seven the *level* term takes the request in the very clock
+the line first reads seven -- which is also the clock the transition is seen, so
+arm two fired and the flag survived the acknowledge that answered it. The
+handler's first instruction boundary then took a second interrupt for the one
+request: two frames, two acknowledges. That is the previous section's failure
+arriving by the other door, in the one case its test does not cover -- it enters
+with the reset mask of seven, so the level term never fires there.
+
+Both are one-clock races. `STOP` makes them certain rather than narrow: with no
+bus cycle in flight every clock retires, and `STOP` is an interrupt point, so
+every stopped clock is a chance to take one. That is what makes them testable.
+
+The fix is two lines. The edge is qualified by the line, so it is a condition on
+the request being there now rather than a memory of it having been:
+
+```systemverilog
+assign irq_pending = (irq7_edge && (irq_level == 3'd7)) ||
+                     (irq_level > sr[SR_I0+2 -: 3]);
+```
+
+and taking the interrupt comes first in the clearing chain, ahead of setting it.
+The first also closes the general case where the line drops from seven to a
+level at or below the mask: the stale edge used to take that level and lower the
+mask to it.
+
+`sim/tb/core_exception_tb.sv` has three cases: a one-clock level-seven pulse
+against a stopped core with the mask at seven, which must leave it stopped and
+run no cycle at all; the same pulse against a running core, swept across twelve
+phases of a `NOP` loop so an instruction boundary lands in the window; and a
+held level-seven request arriving while the mask is zero, checked by the
+sentinel eight bytes below the one frame it may push. Before the fix the first
+parks the core in the vector-24 handler with the mask at zero, two of the twelve
+sweep offsets do the same, and the sentinel comes back as `0x2700`.
+
+The permanent guard is in `sim/tb/rd68011_core_harness.svh` rather than in a
+test: whenever an interrupt is taken, the level must be seven or above the mask.
+That is the whole rule, stated once, and being in the harness it holds for every
+directed test, every reference vector, every program and every co-simulated
+instruction. It is not in `rtl/` because `rtl/` carries no assertions and has to
+elaborate under yosys and Vivado as well.
 
 ## Not yet implemented
 
