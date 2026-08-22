@@ -74,6 +74,34 @@ module core_exception_tb;
     end
   endtask
 
+  // A program that gives the two stack pointers different values, drops into
+  // user mode, and traps. `handler` is the one instruction the trap handler
+  // runs, so the caller chooses between parking there and returning.
+  task automatic user_mode_trap(input logic [15:0] handler);
+    int k;
+    begin
+      core_reset();
+      poke_l(23'h000000, SSP0);
+      poke_l(23'h000002, PC0);
+      poke_l(23'h000046, H_TRAP3);       // vector 35, TRAP #3
+      poke_w(H_TRAP3[23:1], handler);
+      //  1000: MOVEA.L #$00005000,A0
+      //  1006: MOVE    A0,USP
+      //  1008: MOVE    #$0700,SR        user mode, and the mask left at seven
+      //  100C: TRAP    #3
+      //  100E: BRA     self             where RTE comes back to
+      poke_w(23'h000800, 16'h207C);  poke_l(23'h000801, USP0);
+      poke_w(23'h000803, 16'h4E60);
+      poke_w(23'h000804, 16'h46FC);  poke_w(23'h000805, 16'h0700);
+      poke_w(23'h000806, 16'h4E43);
+      poke_w(23'h000807, 16'h60FE);
+      // Four sentinel words where a frame on the user stack would go.
+      for (k = 0; k < 4; k = k + 1)
+        poke_w(23'((USP0 - 32'd8) >> 1) + 23'(k), 16'hA5A5);
+      core_start();
+    end
+  endtask
+
   initial begin
     errors = 0;
     core_reset();
@@ -452,6 +480,48 @@ module core_exception_tb;
     // where execution would have gone had it not stopped.
     check_frame("STOP woken", SSP0 - 32'd8, 16'h2000, PC0 + 32'd4, 8'd29);
     ipl_n_i = 3'b111;
+
+    // ---- The stack a user-mode exception uses ------------------------------
+    //
+    // UM 6.2.5 puts the two halves of this in different steps. In the first,
+    // "an internal copy is made of the status register. After the copy is made,
+    // the S bit of the status register is set"; in the third, "the current
+    // program counter value and the saved copy of the status register are
+    // stacked using the SSP". So an exception taken in user mode moves the
+    // supervisor stack pointer and leaves the user one exactly where it was,
+    // and the status register in the frame is the one from before the S bit
+    // went up.
+    //
+    // Every other test in this file starts in supervisor mode, where the two
+    // pointers are the same pointer and the rule says nothing. This one gives
+    // them different values and checks which one moved.
+    user_mode_trap(16'h60FE);            // the handler parks, so the frame sits
+    run_until_pc(H_TRAP3, 800);
+    expect_u32("user-mode TRAP: supervisor mode entered",
+               {31'd0, dut.u_seq.sr[13]}, 32'd1);
+    expect_u32("user-mode TRAP: the supervisor stack moved",
+               dut.u_seq.ssp, SSP0 - 32'd8);
+    expect_u32("user-mode TRAP: the user stack pointer did not",
+               dut.u_seq.usp, USP0);
+    check_frame("user-mode TRAP", SSP0 - 32'd8, 16'h0700, PC0 + 32'd14, 8'd35);
+    // A frame written to the wrong stack would have landed on these.
+    for (i = 0; i < 4; i = i + 1)
+      expect_u32("user-mode TRAP: nothing written under the user stack",
+                 {16'd0, mem.peek(23'((USP0 - 32'd8) >> 1) + 23'(i))},
+                 32'h0000_A5A5);
+
+    // ---- ... and RTE hands it back ----------------------------------------
+    // UM 6.1.3 names RTE as one of the four ways back to user mode. The S bit
+    // comes out of the frame, so A7 becomes the user stack pointer again --
+    // which is still where the program left it.
+    user_mode_trap(16'h4E73);            // the handler is an RTE
+    run_until_pc(PC0 + 32'd14, 1200);
+    expect_u32("user-mode TRAP: RTE returns to user mode",
+               {31'd0, dut.u_seq.sr[13]}, 32'd0);
+    expect_u32("user-mode TRAP: the supervisor stack is back",
+               dut.u_seq.ssp, SSP0);
+    expect_u32("user-mode TRAP: and the user stack never moved",
+               dut.u_seq.usp, USP0);
 
     core_done("core_exception_tb");
   end
