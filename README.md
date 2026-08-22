@@ -241,8 +241,9 @@ to 45 ns of room on the binding constraint.
 ### Bugs this found
 
 Worth listing because each was found by exactly one thing and would have
-survived everything else — and five of them by something outside the five: the
-AC-timing work, a real machine, and someone reading the source:
+survived everything else — and six of them by something outside the five: the
+AC-timing work, a real machine, someone reading the source, and asking what the
+tests did not cover:
 
 - A faulted write did not record its data output buffer, so a handler completing
   the access itself read the *previous* write's — found by a program, not by a
@@ -263,6 +264,13 @@ AC-timing work, a real machine, and someone reading the source:
   register A7 is. Found by the same machine, this time running an operating
   system: the stray write faults inside exception processing and halts the
   CPU.
+- A trace exception was taken after instructions that were never executed —
+  after an illegal one, after a privileged one refused in user mode, after an
+  interrupt displaced the next instruction, and after a bus error aborted one.
+  Each pushed a second frame, so the *first* handler was traced instead of run.
+  Found by asking which parts of the design nothing tested: the reference sweep
+  skips every vector whose reference took an exception, and trace had one
+  directed test.
 
 ---
 

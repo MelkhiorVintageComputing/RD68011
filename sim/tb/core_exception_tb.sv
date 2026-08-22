@@ -33,7 +33,9 @@ module core_exception_tb;
   localparam logic [31:0] H_LINEF   = 32'h0000_2200;
   localparam logic [31:0] H_TRAPV   = 32'h0000_2300;
   localparam logic [31:0] H_TRAP3   = 32'h0000_2400;
-  localparam logic [31:0] H_AUTO5   = 32'h0000_2500;
+  localparam logic [31:0] H_TRACE   = 32'h0000_2500;
+  localparam logic [31:0] H_PRIV    = 32'h0000_2600;
+  localparam logic [31:0] H_AUTO5   = 32'h0000_2700;
 
   int i;
 
@@ -241,6 +243,220 @@ module core_exception_tb;
     check_frame("trace", SSP0 - 32'd8, 16'hA700, PC0 + 32'd6, 8'd9);
     expect_u32("trace: the trace bit is cleared for the handler",
                {31'd0, dut.u_seq.sr[15]}, 32'd0);
+
+    // ---- ... and the instructions a trace exception must NOT follow --------
+    //
+    // UM 6.3.8, in one paragraph, is the whole specification of when the
+    // exception above happens: "If the instruction is not executed because an
+    // interrupt is taken or because the instruction is illegal or privileged,
+    // the trace exception does not occur. The trace exception also does not
+    // occur if the instruction is aborted by a reset, bus error, or address
+    // error exception. If the instruction is executed and an interrupt is
+    // pending on completion, the trace exception is processed before the
+    // interrupt exception. During the execution of the instruction, if an
+    // exception is forced by that instruction, the exception processing for
+    // the instruction exception occurs before that of the trace exception."
+    //
+    // Every clause of it is below. Three of them were wrong -- an instruction
+    // that never ran left the arming behind, so a second frame was pushed for
+    // an instruction the processor had refused to execute, and the handler for
+    // the *first* exception was traced instead of running. doc/divergences.md
+    // has what that costs a debugger.
+    //
+    // The reference vectors cannot arbitrate any of this -- harte_tb skips
+    // every test whose reference took an exception -- but they can be counted:
+    // of the ILLEGAL_LINEA vectors with T set, 1319 of 1319 push six bytes,
+    // which is one frame and not two.
+
+    // An illegal instruction is not executed, so nothing follows its frame.
+    core_reset();
+    poke_l(23'h000000, SSP0);
+    poke_l(23'h000002, PC0);
+    poke_l(23'h000008, H_ILLEGAL);       // vector 4
+    poke_l(23'h000012, H_TRACE);         // vector 9
+    poke_w(H_ILLEGAL[23:1], 16'h60FE);
+    poke_w(H_TRACE[23:1],   16'h60FE);
+    poke_w(23'h000800, 16'h46FC);        // 1000: MOVE #$A700,SR  (trace on)
+    poke_w(23'h000801, 16'hA700);
+    poke_w(23'h000802, 16'h4AFC);        // 1004: ILLEGAL
+    core_start();
+    repeat (400) @(posedge clk);
+    expect_u32("traced ILLEGAL: the illegal handler runs, untraced",
+               dut.u_seq.ir_pc, H_ILLEGAL);
+    expect_u32("traced ILLEGAL: one frame, not two",
+               dut.u_seq.ssp, SSP0 - 32'd8);
+    check_frame("traced ILLEGAL", SSP0 - 32'd8, 16'hA700, PC0 + 32'd4, 8'd4);
+
+    // Line A and line F are unimplemented instructions, which is the same
+    // rule reached through the other two vectors.
+    core_reset();
+    poke_l(23'h000000, SSP0);
+    poke_l(23'h000002, PC0);
+    poke_l(23'h000014, H_LINEA);         // vector 10
+    poke_l(23'h000012, H_TRACE);
+    poke_w(H_LINEA[23:1], 16'h60FE);
+    poke_w(23'h000800, 16'h46FC);
+    poke_w(23'h000801, 16'hA700);
+    poke_w(23'h000802, 16'hA000);        // 1004: line A
+    core_start();
+    repeat (400) @(posedge clk);
+    expect_u32("traced line A: the line A handler runs, untraced",
+               dut.u_seq.ir_pc, H_LINEA);
+    expect_u32("traced line A: one frame, not two",
+               dut.u_seq.ssp, SSP0 - 32'd8);
+    check_frame("traced line A", SSP0 - 32'd8, 16'hA700, PC0 + 32'd4, 8'd10);
+
+    core_reset();
+    poke_l(23'h000000, SSP0);
+    poke_l(23'h000002, PC0);
+    poke_l(23'h000016, H_LINEF);         // vector 11
+    poke_l(23'h000012, H_TRACE);
+    poke_w(H_LINEF[23:1], 16'h60FE);
+    poke_w(23'h000800, 16'h46FC);
+    poke_w(23'h000801, 16'hA700);
+    poke_w(23'h000802, 16'hF000);        // 1004: line F
+    core_start();
+    repeat (400) @(posedge clk);
+    expect_u32("traced line F: the line F handler runs, untraced",
+               dut.u_seq.ir_pc, H_LINEF);
+    expect_u32("traced line F: one frame, not two",
+               dut.u_seq.ssp, SSP0 - 32'd8);
+    check_frame("traced line F", SSP0 - 32'd8, 16'hA700, PC0 + 32'd4, 8'd11);
+
+    // A privileged instruction in user mode is refused before it does
+    // anything, so it is not executed either. $8700 is trace on, supervisor
+    // off -- STOP is what the manual names as the example of a privileged
+    // instruction a user program may not run.
+    core_reset();
+    poke_l(23'h000000, SSP0);
+    poke_l(23'h000002, PC0);
+    poke_l(23'h000010, H_PRIV);          // vector 8
+    poke_l(23'h000012, H_TRACE);
+    poke_w(H_PRIV[23:1], 16'h60FE);
+    poke_w(23'h000800, 16'h46FC);        // 1000: MOVE #$8700,SR  (user, T on)
+    poke_w(23'h000801, 16'h8700);
+    poke_w(23'h000802, 16'h4E72);        // 1004: STOP, privileged
+    poke_w(23'h000803, 16'h2700);
+    core_start();
+    repeat (400) @(posedge clk);
+    expect_u32("traced privileged: the privilege handler runs, untraced",
+               dut.u_seq.ir_pc, H_PRIV);
+    expect_u32("traced privileged: one frame, not two",
+               dut.u_seq.ssp, SSP0 - 32'd8);
+    check_frame("traced privileged", SSP0 - 32'd8, 16'h8700, PC0 + 32'd4, 8'd8);
+
+    // An instruction displaced by an interrupt is not executed either. The
+    // mask drops to zero with the line already asserted, so the interrupt is
+    // taken at that boundary and the NOP behind it never runs -- and the
+    // interrupt handler must run untraced, which is what the arming got wrong.
+    core_reset();
+    poke_l(23'h000000, SSP0);
+    poke_l(23'h000002, PC0);
+    poke_l(23'h000032, H_TRAP3);         // autovector 25 = level 1, byte $64
+    poke_l(23'h000012, H_TRACE);
+    poke_w(H_TRAP3[23:1], 16'h60FE);
+    poke_w(23'h000800, 16'h46FC);        // 1000: MOVE #$A000,SR  (T on, mask 0)
+    poke_w(23'h000801, 16'hA000);
+    poke_w(23'h000802, 16'h4E71);        // 1004: NOP, which never runs
+    poke_w(23'h000803, 16'h60FE);
+    iack_auto = 1'b1;
+    ipl_n_i   = ~3'd1;                   // asserted before the mask ever drops
+    core_start();
+    repeat (400) @(posedge clk);
+    expect_u32("interrupt over a traced instruction: the handler runs untraced",
+               dut.u_seq.ir_pc, H_TRAP3);
+    expect_u32("interrupt over a traced instruction: one frame, not two",
+               dut.u_seq.ssp, SSP0 - 32'd8);
+    check_frame("interrupt over a traced instruction",
+                SSP0 - 32'd8, 16'hA000, PC0 + 32'd4, 8'd25);
+    ipl_n_i = 3'b111;
+
+    // ---- ... and the two orderings it does follow -------------------------
+    //
+    // An instruction that *is* executed and finds an interrupt waiting is
+    // traced first, and the interrupt is taken at the trace handler's own
+    // first boundary. The line is raised part way through a DIVU, which is
+    // long enough to raise it inside.
+    core_reset();
+    poke_l(23'h000000, SSP0);
+    poke_l(23'h000002, PC0);
+    poke_l(23'h000032, H_TRAP3);         // autovector 25
+    poke_l(23'h000012, H_TRACE);         // vector 9
+    poke_w(H_TRAP3[23:1], 16'h60FE);
+    poke_w(H_TRACE[23:1], 16'h60FE);
+    poke_w(23'h000800, 16'h46FC);        // 1000: MOVE #$A000,SR  (T on, mask 0)
+    poke_w(23'h000801, 16'hA000);
+    poke_w(23'h000802, 16'h80FC);        // 1004: DIVU #7,D0
+    poke_w(23'h000803, 16'h0007);
+    poke_w(23'h000804, 16'h60FE);
+    iack_auto = 1'b1;
+    core_start();
+    run_until_pc(PC0 + 32'd4, 400);      // the DIVU is the instruction in hand
+    repeat (20) @(posedge clk);          // well inside it
+    ipl_n_i = ~3'd1;
+    repeat (400) @(posedge clk);
+    expect_u32("traced DIVU with an interrupt waiting: the interrupt handler",
+               dut.u_seq.ir_pc, H_TRAP3);
+    expect_u32("traced DIVU with an interrupt waiting: two frames",
+               dut.u_seq.ssp, SSP0 - 32'd16);
+    // D0 is zero, so the quotient is zero and Z is set: $x004.
+    check_frame("traced DIVU: the trace frame, pushed first",
+                SSP0 - 32'd8, 16'hA004, PC0 + 32'd8, 8'd9);
+    check_frame("traced DIVU: the interrupt frame, pushed second",
+                SSP0 - 32'd16, 16'h2004, H_TRACE, 8'd25);
+    ipl_n_i = 3'b111;
+
+    // An exception the instruction forces is processed before the trace, and
+    // not instead of it: TRAP #3 was executed, so both frames are pushed and
+    // the trace handler is what ends up running.
+    core_reset();
+    poke_l(23'h000000, SSP0);
+    poke_l(23'h000002, PC0);
+    poke_l(23'h000046, H_TRAP3);         // vector 35
+    poke_l(23'h000012, H_TRACE);
+    poke_w(H_TRAP3[23:1], 16'h60FE);
+    poke_w(H_TRACE[23:1], 16'h60FE);
+    poke_w(23'h000800, 16'h46FC);
+    poke_w(23'h000801, 16'hA700);
+    poke_w(23'h000802, 16'h4E43);        // 1004: TRAP #3
+    core_start();
+    repeat (400) @(posedge clk);
+    expect_u32("traced TRAP: the trace handler runs, not the trap handler",
+               dut.u_seq.ir_pc, H_TRACE);
+    expect_u32("traced TRAP: two frames", dut.u_seq.ssp, SSP0 - 32'd16);
+    check_frame("traced TRAP: the trap frame, pushed first",
+                SSP0 - 32'd8, 16'hA700, PC0 + 32'd6, 8'd35);
+    check_frame("traced TRAP: the trace frame, pushed second",
+                SSP0 - 32'd16, 16'h2700, H_TRAP3, 8'd9);
+
+    // ---- A traced STOP does not stop ---------------------------------------
+    //
+    // PRM section 6, STOP: "A trace exception occurs if instruction tracing is
+    // enabled ... when the STOP instruction begins execution." So the status
+    // register is loaded, the trace exception is taken, and the processor is
+    // not stopped at all -- which is the whole point, since a debugger single
+    // stepping through a STOP would otherwise never come back.
+    //
+    // The MC68000 vectors show no frame here, and are skipped for it; the
+    // reason is in doc/divergences.md.
+    core_reset();
+    poke_l(23'h000000, SSP0);
+    poke_l(23'h000002, PC0);
+    poke_l(23'h000012, H_TRACE);         // vector 9
+    poke_w(H_TRACE[23:1], 16'h60FE);
+    poke_w(23'h000800, 16'h46FC);        // 1000: MOVE #$A700,SR
+    poke_w(23'h000801, 16'hA700);
+    poke_w(23'h000802, 16'h4E72);        // 1004: STOP #$2700
+    poke_w(23'h000803, 16'h2700);
+    poke_w(23'h000804, 16'h60FE);        // 1008: branch to self
+    core_start();
+    repeat (400) @(posedge clk);
+    expect_u32("traced STOP: the trace handler, not the stopped state",
+               dut.u_seq.ir_pc, H_TRACE);
+    // The status register STOP loaded, and the instruction after it -- the
+    // one the processor would have gone on to, exactly as when an interrupt
+    // wakes a STOP.
+    check_frame("traced STOP", SSP0 - 32'd8, 16'h2700, PC0 + 32'd8, 8'd9);
 
     // ---- An autovectored interrupt ----------------------------------------
     core_reset();

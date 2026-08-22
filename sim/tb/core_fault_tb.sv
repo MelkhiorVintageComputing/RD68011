@@ -32,6 +32,7 @@ module core_fault_tb;
   localparam logic [31:0] H_FORMAT  = 32'h0000_2200;
   localparam logic [31:0] H_SPUR    = 32'h0000_2300;
   localparam logic [31:0] H_DONE    = 32'h0000_2400;
+  localparam logic [31:0] H_TRACE   = 32'h0000_2500;
 
   // Where a frame lands, and the offsets into it.
   localparam logic [31:0] FRAME = SSP0 - 32'd58;
@@ -296,6 +297,68 @@ module core_fault_tb;
                dut.u_seq.ssp, SSP0);
     expect_int("prefetch continued: the faulted fetch was attempted twice",
                hits(24'h001008), 2);
+
+    // ======================================================================
+    // A traced instruction aborted by a bus error
+    // ======================================================================
+    // UM 6.3.8: "The trace exception also does not occur if the instruction is
+    // aborted by a reset, bus error, or address error exception." The handler
+    // has to run, and it has to run untraced -- a debugger single stepping
+    // through a page fault otherwise loses its own handler to a trace frame
+    // before the first instruction of it executes.
+    setup();
+    poke_l(23'h000012, H_TRACE);                      // vector 9
+    poke_w(H_TRACE[23:1], 16'h60FE);
+    //  1000: MOVE.L #$00004000,A0
+    //  1006: MOVE #$A700,SR        trace on, from here
+    //  100A: MOVE.W (A0),D1        faults
+    poke_w(23'h000800, 16'h207C);  poke_l(23'h000801, 32'h0000_4000);
+    poke_w(23'h000803, 16'h46FC);  poke_w(23'h000804, 16'hA700);
+    poke_w(23'h000805, 16'h3210);
+    poke_w(23'h002000, 16'hBEEF);
+    berr_en   = 1'b1;
+    berr_addr = 23'h002000;
+    core_start();
+    run_until_pc(H_BUSERR, 900);
+    repeat (300) @(posedge clk);
+    expect_u32("traced bus error: the handler runs, untraced",
+               dut.u_seq.ir_pc, H_BUSERR);
+    expect_u32("traced bus error: one frame, not two",
+               dut.u_seq.ssp, SSP0 - 32'd58);
+
+    // ======================================================================
+    // ... and the trace it owes is taken once RTE has finished the instruction
+    // ======================================================================
+    // The instruction was not abandoned, only suspended: the frame carries the
+    // status register it was running under, so when RTE puts that back and the
+    // access completes, the instruction has been executed under trace and the
+    // exception is due.
+    setup();
+    poke_l(23'h000012, H_TRACE);
+    poke_w(H_TRACE[23:1], 16'h60FE);
+    poke_w(23'h000800, 16'h207C);  poke_l(23'h000801, 32'h0000_4000);
+    poke_w(23'h000803, 16'h46FC);  poke_w(23'h000804, 16'hA700);
+    poke_w(23'h000805, 16'h3210);
+    poke_w(23'h000806, 16'h4EF9);  poke_l(23'h000807, H_DONE);
+    poke_w(23'h002000, 16'hBEEF);
+    poke_w(H_BUSERR[23:1], 16'h4E73);                 // the handler is an RTE
+    berr_en   = 1'b1;
+    berr_addr = 23'h002000;
+    core_start();
+    run_until_pc(H_BUSERR, 900);
+    berr_en = 1'b0;
+    run_until_pc(H_TRACE, 900);
+    expect_u32("traced bus error continued: the read completed",
+               dut.u_seq.regs[1], 32'h0000_BEEF);
+    // RTE popped the whole 58-byte frame before it resumed, so the trace frame
+    // is back at the top of the stack, and its PC is the instruction after the
+    // one that faulted.
+    expect_u32("traced bus error continued: the trace frame's PC",
+               {mem.peek((SSP0 - 32'd8 + 32'd2) >> 1),
+                mem.peek((SSP0 - 32'd8 + 32'd4) >> 1)},
+               32'h0000_100C);
+    expect_u32("traced bus error continued: one trace frame on the stack",
+               dut.u_seq.ssp, SSP0 - 32'd8);
 
     // ======================================================================
     // MOVEM faulting partway through, continued to completion

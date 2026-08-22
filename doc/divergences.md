@@ -466,6 +466,128 @@ point of them.
 No harness invariant. "A frame word went to the wrong stack" is only visible if
 you know where the other stack is, and nothing at the pins does.
 
+## Four bugs in one register, found by asking what was untested
+
+**A trace exception was taken after instructions that were never executed.**
+Nobody reported these. They came out of asking whether the reproduction written
+for a faulted prefetch had siblings -- what else the tests did not reach. The
+answer was the whole exception surface:
+the sweep skips every vector whose reference took an exception, for the reason
+in *How the sweep tells an exception apart* above, so exceptions are checked by
+directed tests alone -- and trace had exactly one, a traced `NOP`.
+
+UM 6.3.8 is the entire specification of when the trace exception happens, and it
+is one paragraph:
+
+> If the T bit is set (on) at the beginning of the execution of an instruction,
+> a trace exception is generated after the instruction is completed. If the
+> instruction is not executed because an interrupt is taken or because the
+> instruction is illegal or privileged, the trace exception does not occur. The
+> trace exception also does not occur if the instruction is aborted by a reset,
+> bus error, or address error exception. If the instruction is executed and an
+> interrupt is pending on completion, the trace exception is processed before
+> the interrupt exception. During the execution of the instruction, if an
+> exception is forced by that instruction, the exception processing for the
+> instruction exception occurs before that of the trace exception.
+
+Every "does not occur" in it was wrong here. Measured on the core, both frames
+read out of memory:
+
+| under trace | was | should be |
+|---|---|---|
+| `ILLEGAL`, line A, line F | the illegal frame, **then a trace frame** | one frame |
+| a privileged instruction in user mode | the privilege frame, **then a trace frame** | one frame |
+| an interrupt taken instead of the next instruction | the interrupt frame, **then a trace frame** | one frame |
+| an instruction aborted by a bus error | the format $8 frame, **then a trace frame** | one frame |
+
+In each case the second frame's program counter is the *first* handler's own
+entry point: the debugger's trace handler ran in place of the illegal-instruction
+handler, the interrupt handler and the bus-error handler, before any of them
+executed a single instruction. For a monitor that single steps, that is the
+mechanism it is built on failing exactly where it is needed.
+
+One line behind all four (`rtl/rd68011_seq.sv`):
+
+```systemverilog
+if (commit && (f_seq == U_SEQ_DECODE))
+  trace_armed <= take_trace ? 1'b0 : sr_nxt[SR_T];
+```
+
+`trace_armed` says the instruction now running began with T set. It was armed at
+every instruction boundary and disarmed only by the trace itself, so nothing
+cancelled it when the instruction that followed never ran -- the arming outlived
+the instruction it belonged to and was spent on the handler instead.
+
+The fix is that same assignment written out as the four cases the manual gives:
+`fault` cancels it, a microword carrying the new `notrace` bit cancels it, an
+interrupt at a boundary cancels it, and `U_SEQ_RESUME` -- `RTE` picking a
+faulted instruction back up -- restores it from the status register the frame
+saved, which is the T the instruction was running under. `trace_armed` therefore
+needs no place of its own in the sixteen internal words; `doc/checkpoint.md`
+records why.
+
+The `notrace` bit is set by `raise_exception()` in `tools/ucode/program.py` at
+exactly four call sites -- illegal, line A, line F and privilege violation --
+because only the microcode knows which exception it is taking. The other six
+call sites keep the arming deliberately: `TRAP`, `TRAPV`, `CHK` and divide by
+zero are exceptions the instruction *forced*, which the same paragraph puts
+before the trace and not instead of it.
+
+**What the reference can say.** It cannot compare these, but it can be counted:
+of the `ILLEGAL_LINEA` vectors with T set, 1319 of 1319 push six bytes, which is
+one frame and not two; `ILLEGAL_LINEF`, 1232 of 1232; `STOP` and `RESET` with T
+set in user mode, six bytes likewise.
+
+**Two things were already right**, and are now pinned in
+`sim/tb/core_exception_tb.sv` rather than left to be assumed: a traced `TRAP #3`
+pushes the trap frame and then the trace frame, and an instruction that
+completes under trace with an interrupt waiting is traced first and interrupted
+second. The second is the ordering table 6-1 gives, and nothing had ever
+exercised it.
+
+### And a `STOP` under trace now traces instead of stopping
+
+PRM section 6, `STOP`: "A trace exception occurs if instruction tracing is
+enabled (T0 = 1, T1 = 0) when the STOP instruction begins execution." This
+design used to load the status register and stop for ever, because `take_trace`
+was an instruction-boundary test and a `STOP` never reaches another boundary --
+`take_irq` had the extra term and `take_trace` did not. Single stepping into a
+`STOP` never came back.
+
+`take_trace` now carries the same `STOP` term. The program counter the frame
+gets is the interrupt path's, `IRQPC`, because a `STOP` does no prefetch and
+`ir_pc` is still the `STOP`'s own address; the flag that selects it was called
+`irq_from_stop` and is now `exc_from_stop`, set for either exception.
+
+The MC68000 vectors show **no** frame for this: `STOP` with T and S set ends
+with the stack untouched in all 598 of them. They do not contradict the PRM so
+much as stop earlier. A vector records one instruction, and a trace exception
+belongs to the boundary *after* it, which is where both the reference and
+`sim/tb/harte_tb.sv` stop looking -- the sweep never sees a trace exception
+anywhere, and `RESET` with T set in supervisor mode says the same thing in the
+same way, 617 vectors of it. `harte_tb` counts the stopped microword as an
+instruction boundary so that a `STOP` is captured like any other instruction, so
+the sweep neither notices this change nor fails on it. The manual in `Inputs/doc/` is the golden reference and it is explicit, so
+it is followed; the check is `sim/tb/core_exception_tb.sv`'s traced `STOP`, which
+asserts the vector 9 frame with the instruction *after* the `STOP` in it.
+
+### Where the tests are
+
+`sim/tb/core_exception_tb.sv`, beside the traced `NOP` that was the only one:
+traced `ILLEGAL`, line A and line F; a traced privileged instruction; an
+interrupt that displaces a traced instruction; the two orderings above; and the
+traced `STOP`. `sim/tb/core_fault_tb.sv` has the fourth cancel -- a traced
+instruction aborted by a bus error, whose handler must run untraced -- and its
+other half, that `RTE` continuing the instruction pays the trace afterwards,
+because the instruction was suspended and not abandoned. Nineteen of these fail
+before the fix.
+
+There is no harness-wide invariant for this one. The rule the level-seven fix
+guards -- an interrupt is legitimate only at a level above the mask -- is
+visible in one line of state at the moment it is taken. "The instruction was
+actually executed" is not: it is the absence of another exception, which no
+single edge can see. The directed cases are the statement.
+
 ## Not yet implemented
 
 Nothing. Every instruction, every exception and both of the MC68010's own

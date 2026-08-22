@@ -36,7 +36,7 @@ def u(comment='', **kw):
                      'bus', 'asel', 'fc', 'pf', 'rsel', 'wsel', 'size', 'easel',
                      'ccr', 'aupd', 'aeasel', 'dhi', 'sh', 'shone',
                      'bitimm', 'vec', 'vsel', 'rstreq', 'stop',
-                     'divst', 'divsg', 'mop', 'mdown', 'hb', 'g0', 'lp',
+                     'divst', 'divsg', 'mop', 'mdown', 'hb', 'g0', 'lp', 'notrace',
                      'goto'):
             raise KeyError('no microword field %r' % k)
     goto = kw.pop('goto', None)
@@ -2072,15 +2072,22 @@ def exception_tail():
     refill_from(SRC['T1'])
 
 
-def raise_exception(name, vector, use_next_pc, vsel=0):
-    """Set up the three things the shared tail needs, and jump to it."""
+def raise_exception(name, vector, use_next_pc, vsel=0, notrace=0, pc_src=None):
+    """Set up the three things the shared tail needs, and jump to it.
+
+    `notrace` marks the exceptions UM 6.3.8 says a trace exception does not
+    follow, because the instruction was refused rather than executed. `pc_src`
+    overrides which program counter is stacked, for the one exception whose
+    answer depends on where it was taken from.
+    """
     u(comment='the vector table address',
       asrc=SRC['VBR'], bsrc=SRC['VECOFF'], alu=ALU['ADD'], dst=DST['T0'],
-      vec=vector, vsel=vsel)
+      vec=vector, vsel=vsel, notrace=notrace)
     # The instruction's own address for a fault, the next instruction's for an
     # exception the instruction asked for (UM section 6).
     u(comment='the program counter to stack',
-      asrc=SRC['IRC_PC'] if use_next_pc else SRC['IR_PC'],
+      asrc=pc_src if pc_src is not None
+                  else (SRC['IRC_PC'] if use_next_pc else SRC['IR_PC']),
       alu=ALU['A'], dst=DST['T1'])
     u(comment='the format and vector word', goto='except',
       asrc=SRC['FMTVEC'], alu=ALU['A'], dst=DST['DBUF'],
@@ -2091,15 +2098,15 @@ def traps():
     # The unrecognised opcodes. `illegal` is where the decoder sends anything
     # with no pattern, so it has to be an exception now rather than a stall.
     label('illegal_exc')
-    raise_exception('illegal', 4, False)
+    raise_exception('illegal', 4, False, notrace=1)
     opcode('0100101011111100', 'illegal_exc', 'ILLEGAL')
 
     label('line_a')
-    raise_exception('line_a', 10, False)
+    raise_exception('line_a', 10, False, notrace=1)
     opcode('1010------------', 'line_a', 'line A')
 
     label('line_f')
-    raise_exception('line_f', 11, False)
+    raise_exception('line_f', 11, False, notrace=1)
     opcode('1111------------', 'line_f', 'line F')
 
     # TRAP #n takes vector 32+n and stacks the following instruction.
@@ -2143,7 +2150,7 @@ def privileged(lbl):
 
 def priv_violation():
     label('priv_violation')
-    raise_exception('privilege', 8, False)
+    raise_exception('privilege', 8, False, notrace=1)
 
 
 def rte():
@@ -2554,9 +2561,15 @@ def interrupt():
 
 
 def trace():
-    """The trace exception, taken after an instruction that ran with T set."""
+    """The trace exception, taken after an instruction that ran with T set.
+
+    The program counter is the interrupt path's, not the ordinary one: taken at
+    an instruction boundary the two are the same, but a STOP executed with T set
+    traces without ever advancing the pipe, and then the address to stack is the
+    instruction after the STOP (PRM section 6, STOP).
+    """
     label('trace')
-    raise_exception('trace', 9, False)
+    raise_exception('trace', 9, False, pc_src=SRC['IRQPC'])
 
 
 # ==========================================================================

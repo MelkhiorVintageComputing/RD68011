@@ -151,10 +151,11 @@ SRC = {
     'CCRVAL':   31,   # its low byte, zero-extended
     'USP':      32,   # the user stack pointer, for MOVE USP
     'IRQVEC':   33,   # the interrupt vector: from the bus, or the autovector
-    # The program counter an interrupt stacks. Normally the instruction that
-    # was about to run, but an interrupt that wakes a STOP stacks the
-    # instruction after the STOP -- which the pipe never advanced to, because
-    # STOP does no prefetch at all.
+    # The program counter an exception taken at an instruction boundary
+    # stacks. Normally the instruction that was about to run, but one taken out
+    # of a STOP stacks the instruction after the STOP -- which the pipe never
+    # advanced to, because STOP does no prefetch at all. Both the interrupt and
+    # the trace path use it, since both can be taken from a stopped processor.
     'IRQPC':    34,
     'DIVRES':   35,   # {remainder, quotient}, as PRM section 4 places them
     # The control register MOVEC's extension word names: SFC, DFC, USP or VBR
@@ -529,6 +530,10 @@ FIELDS = [
     ('g0',    1,  None),   # enter group 0 processing: a fault from here on is
                            # a double bus fault. RTE sets it once it has
                            # committed to reloading a long frame (UM 6.4).
+    ('notrace', 1, None), # this exception is one the instruction did not
+                           # survive: illegal, unimplemented or privileged. UM
+                           # 6.3.8 says a trace exception does not follow those,
+                           # because the instruction was never executed.
     ('lp',    2,  LP),     # loop mode: what this microword does about it
 ]
 
@@ -566,6 +571,7 @@ DEFAULTS = {
     'mdown': 0,
     'hb':    0,
     'g0':    0,
+    'notrace': 0,
     'lp':    LP['NONE'],
 }
 

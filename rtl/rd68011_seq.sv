@@ -345,7 +345,7 @@ module rd68011_seq (
   logic [31:0] a_bus, b_bus, y;  // the ALU result bus and its two sources
   logic        cc_true;          // the condition the cc field selects
   logic  [2:0] irq_taken;        // the level being serviced, latched
-  logic        irq_from_stop;    // this interrupt woke a STOP
+  logic        exc_from_stop;    // this exception was taken out of a STOP
   logic  [7:0] vec_num;          // the vector an exception is taking
   logic [31:0] bit_mask;         // one bit, for the bit operations
   logic [31:0] mul_res;          // the multiplier's answer
@@ -655,7 +655,7 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_ASRC_CCRVAL:   a_bus = {24'd0, 3'd0, sr[4:0]};
       rd68011_ucode_pkg::U_ASRC_USP:      a_bus = usp;
       rd68011_ucode_pkg::U_ASRC_IRQVEC:   a_bus = {8'd0, 20'hFFFFF, irq_taken, 1'b1};
-      rd68011_ucode_pkg::U_ASRC_IRQPC:    a_bus = irq_from_stop ? pc : ir_pc;
+      rd68011_ucode_pkg::U_ASRC_IRQPC:    a_bus = exc_from_stop ? pc : ir_pc;
       rd68011_ucode_pkg::U_ASRC_DIVRES:   a_bus = {div_r, div_q};
       rd68011_ucode_pkg::U_ASRC_MULRES:   a_bus = mul_res;
       rd68011_ucode_pkg::U_ASRC_LOOPIR:   a_bus = {16'd0, loop_ir};
@@ -699,7 +699,7 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_BSRC_CCRVAL:   b_bus = {24'd0, 3'd0, sr[4:0]};
       rd68011_ucode_pkg::U_BSRC_USP:      b_bus = usp;
       rd68011_ucode_pkg::U_BSRC_IRQVEC:   b_bus = {8'd0, 20'hFFFFF, irq_taken, 1'b1};
-      rd68011_ucode_pkg::U_BSRC_IRQPC:    b_bus = irq_from_stop ? pc : ir_pc;
+      rd68011_ucode_pkg::U_BSRC_IRQPC:    b_bus = exc_from_stop ? pc : ir_pc;
       rd68011_ucode_pkg::U_BSRC_DIVRES:   b_bus = {div_r, div_q};
       default:                            b_bus = 32'd0;
     endcase
@@ -1313,8 +1313,14 @@ module rd68011_seq (
   assign take_irq   = irq_pending && !(loop_active && loop_ph) &&
                       ((f_seq == rd68011_ucode_pkg::U_SEQ_DECODE) ||
                        `UF(uw, STOP));
+  // A STOP is a boundary for this as well as for an interrupt. PRM section 6,
+  // STOP: "A trace exception occurs if instruction tracing is enabled [...]
+  // when the STOP instruction begins execution" -- so a STOP reached under
+  // trace loads the status register and then traces, rather than stopping.
+  // Without it a debugger single stepping into a STOP never comes back.
   assign take_trace = trace_armed &&
-                      (f_seq == rd68011_ucode_pkg::U_SEQ_DECODE);
+                      ((f_seq == rd68011_ucode_pkg::U_SEQ_DECODE) ||
+                       `UF(uw, STOP));
 
   // Where a fault goes. UM 6.3.9.1: a fault during the exception processing
   // of a reset, a bus error or an address error is a double bus fault and the
@@ -1688,7 +1694,7 @@ module rd68011_seq (
       irq_prev    <= 3'd0;
       irq7_edge   <= 1'b0;
       trace_armed <= 1'b0;
-      irq_from_stop <= 1'b0;
+      exc_from_stop <= 1'b0;
       // UM 5.5: the interrupt level is initialised to seven and, on the
       // MC68010, the vector base register is cleared. The supervisor bit is
       // set because reset always leaves the processor in supervisor mode.
@@ -1723,9 +1729,15 @@ module rd68011_seq (
       end
       // The level is latched as the interrupt is taken: it has to survive the
       // acknowledge cycle, which is what decides the vector.
-      if (commit && take_irq) begin
-        irq_taken     <= irq_level;
-        irq_from_stop <= `UF(uw, STOP);
+      if (commit && take_irq) irq_taken <= irq_level;
+      // Which program counter the frame gets. A STOP does no prefetch, so an
+      // exception taken out of one has to stack the instruction after it from
+      // `pc` rather than from `ir_pc`, which is still the STOP's own address.
+      // Both exceptions that can be taken there need it: an interrupt, and --
+      // since PRM section 6 makes a STOP under trace trace rather than stop --
+      // the trace.
+      if (commit && (take_irq || take_trace)) begin
+        exc_from_stop <= `UF(uw, STOP);
       end
 
       // The level seven edge. Set on the transition to seven, cleared when the
@@ -1745,8 +1757,45 @@ module rd68011_seq (
       if (commit && take_irq && (irq_level == 3'd7)) irq7_edge <= 1'b0;
       else if (irq_level != 3'd7)                    irq7_edge <= 1'b0;
       else if (irq_prev != 3'd7)                     irq7_edge <= 1'b1;
-      if (commit && (f_seq == rd68011_ucode_pkg::U_SEQ_DECODE)) begin
-        trace_armed <= take_trace ? 1'b0 : sr_nxt[rd68011_pkg::SR_T];
+      // The whole of UM 6.3.8's rule about when a trace exception happens, in
+      // the one register the rule is made of. `trace_armed` says that the
+      // instruction now running started with T set; a trace is owed only if
+      // that instruction is actually *executed*.
+      //
+      //   "If the instruction is not executed because an interrupt is taken or
+      //    because the instruction is illegal or privileged, the trace
+      //    exception does not occur. The trace exception also does not occur if
+      //    the instruction is aborted by a reset, bus error, or address error
+      //    exception."
+      //
+      // So the arming is cancelled by each of those, and each has its own arm
+      // below. Left uncancelled, the arming outlives the instruction it
+      // belonged to and the *handler* for the first exception is traced before
+      // its first instruction runs -- which is what doc/divergences.md
+      // describes.
+      if (fault) begin
+        // A bus error or an address error. The instruction is suspended rather
+        // than abandoned, and the arming comes back on the RESUME arm below,
+        // out of the status register the frame saved.
+        trace_armed <= 1'b0;
+      end else if (commit && `UF(uw, NOTRACE)) begin
+        // Illegal, unimplemented, or privileged: the microcode refused the
+        // instruction, so there is nothing for a trace to follow.
+        trace_armed <= 1'b0;
+      end else if (commit && (f_seq == rd68011_ucode_pkg::U_SEQ_DECODE)) begin
+        // An instruction boundary. An interrupt taken here displaces the
+        // instruction that was about to run, so its arming is cancelled too --
+        // and the handler runs untraced, as entering it with T clear says it
+        // should.
+        trace_armed <= (take_trace || take_irq) ? 1'b0
+                                                : sr_nxt[rd68011_pkg::SR_T];
+      end else if (retire && (f_seq == rd68011_ucode_pkg::U_SEQ_RESUME)) begin
+        // RTE picking a faulted instruction back up. This microword is the one
+        // that restores the status register, so the restored value is in
+        // `sr_nxt`; its T bit is the T the instruction was running under, which
+        // is exactly the arming the fault cancelled. The frame carries it, so
+        // `trace_armed` needs no place of its own in doc/checkpoint.md.
+        trace_armed <= sr_nxt[rd68011_pkg::SR_T];
       end
       // MOVE An,USP reaches the user stack pointer from supervisor mode, so
       // it cannot go through the ordinary A7 path.

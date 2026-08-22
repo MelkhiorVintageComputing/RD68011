@@ -140,7 +140,8 @@ less than that. Anyone chasing a few hundred picoseconds should re-run the
 baseline rather than trust a number in a document -- including these.
 
 **What the previews cost.** Deleting `rd68011_ureq_rom` and widening the
-microword from 103 bits to 145 is **+342 Slice LUTs, +2.7 %** -- and 77 *fewer*
+microword from 103 bits to 145 -- it is 146 now, one more for `notrace` -- is
+**+342 Slice LUTs, +2.7 %** -- and 77 *fewer*
 registers, because the router had less reason to replicate. The 8192-entry
 21-bit store it replaced was worth more than the 42 bits added.
 
@@ -170,7 +171,7 @@ is left is the read at `upc`, whose address is already a register, so a block RA
 with a registered output holds exactly the same value at the same time and costs
 no clock.
 
-It is **6664 LUTs, 51 % of the design**. 6674 words of 145 bits is 968 kbit,
+It is **6664 LUTs, 51 % of the design**. 6674 words of 146 bits is 974 kbit,
 which in 1024x36 mode is about 35 of the part's 135 block RAMs. So it would
 roughly halve the LUT count and buy no frequency at all. It would also need the
 no-initialisation-outside-reset rule bent, because a block RAM output register

@@ -119,6 +119,7 @@ here or it does not exist.
 | `sfc`, `dfc` | Architectural registers, not per-instruction state. A fault does not change them and RTE does not have to put them back; MOVEC is what writes them. |
 | the divider's `q`, `rem`, `den`, `count`, `neg_q`, `neg_r`, `signed_r` | A division does no bus cycle, so it cannot fault. The microcode waits on `busy` and only then goes near memory. |
 | `vbr`, `usp`, `ssp`, `regs` | Architectural. |
+| `trace_armed` | UM 6.3.8's arming -- the T bit as the instruction began. A fault cancels it, and `RTE` puts it back from the frame's own saved status register at SP+0, whose T bit is that same value, so it needs no word of its own. |
 
 ### The fault machinery, added in P6
 

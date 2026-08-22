@@ -8,7 +8,7 @@
 
 package rd68011_ucode_pkg;
 
-  localparam int UW    = 145;   // microword width
+  localparam int UW    = 146;   // microword width
   localparam int RQW   = 21;   // request preview width
   localparam int UADDR = 13;   // micro-address width
 
@@ -422,20 +422,24 @@ package rd68011_ucode_pkg;
   localparam int U_G0_LSB = 100;
   localparam int U_G0_W   = 1;
 
-  // lp: 2 bits at 101
-  localparam int U_LP_LSB = 101;
+  // notrace: 1 bits at 101
+  localparam int U_NOTRACE_LSB = 101;
+  localparam int U_NOTRACE_W   = 1;
+
+  // lp: 2 bits at 102
+  localparam int U_LP_LSB = 102;
   localparam int U_LP_W   = 2;
   localparam logic [1:0] U_LP_NONE = 2'd0;
   localparam logic [1:0] U_LP_CHK = 2'd1;
   localparam logic [1:0] U_LP_ENTER = 2'd2;
   localparam logic [1:0] U_LP_EXIT = 2'd3;
 
-  // rq0: 21 bits at 103
-  localparam int U_RQ0_LSB = 103;
+  // rq0: 21 bits at 104
+  localparam int U_RQ0_LSB = 104;
   localparam int U_RQ0_W   = 21;
 
-  // rq1: 21 bits at 124
-  localparam int U_RQ1_LSB = 124;
+  // rq1: 21 bits at 125
+  localparam int U_RQ1_LSB = 125;
   localparam int U_RQ1_W   = 21;
 
   // Entry points the RTL needs by name.
