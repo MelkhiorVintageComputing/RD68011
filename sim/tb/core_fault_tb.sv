@@ -198,6 +198,49 @@ module core_fault_tb;
                hits(24'h004000), 2);
 
     // ======================================================================
+    // Continuation when the faulted cycle was a prefetch
+    // ======================================================================
+    // Every continuation above resumes a data access. A prefetch is the other
+    // half, and the frame carries the machinery for it: UM 6.3.9.2 lists the
+    // instruction input buffer among the words a handler may need, and figure
+    // 6-9's IF bit exists to say that the fetch, not the operand, is what
+    // faulted. The instruction in flight is aborted along with the fetch that
+    // was running ahead of it, so RTE has to finish that one *and* deliver the
+    // word the fetch was for.
+    setup();
+    //  1000: NOP
+    //  1002: NOP
+    //  1004: MOVE.W #$1234,D0     in flight when the fetch ahead of it faults
+    //  1008: MOVE.W #$5678,D1     the fetch of the word at 1008 is the fault
+    //  100C: JMP to the handler-done marker
+    poke_w(23'h000800, 16'h4E71);
+    poke_w(23'h000801, 16'h4E71);
+    poke_w(23'h000802, 16'h303C);  poke_w(23'h000803, 16'h1234);
+    poke_w(23'h000804, 16'h323C);  poke_w(23'h000805, 16'h5678);
+    poke_w(23'h000806, 16'h4EF9);  poke_l(23'h000807, H_DONE);
+    poke_w(H_BUSERR[23:1], 16'h4E73);
+    berr_en   = 1'b1;
+    berr_addr = 23'h000804;
+    core_start();
+    run_until_pc(H_BUSERR, 900);
+    check_frame("prefetch fault", 8'd2, 32'h0000_1008);
+    // A read, an instruction fetch, in program space -- the same status word
+    // the address error on a fetch produces, arrived at from the other cause.
+    expect_u32("prefetch fault: special status word",
+               {16'd0, fw(8)},
+               {16'd0, 8'b0010_0001, 5'd0, rd68011_pkg::FC_SUPER_P});
+    berr_en = 1'b0;
+    run_until_pc(H_DONE, 900);
+    expect_u32("prefetch continued: the aborted instruction finished",
+               dut.u_seq.regs[0], 32'h0000_1234);
+    expect_u32("prefetch continued: the instruction the fetch was for ran",
+               dut.u_seq.regs[1], 32'h0000_5678);
+    expect_u32("prefetch continued: the stack pointer is back",
+               dut.u_seq.ssp, SSP0);
+    expect_int("prefetch continued: the faulted fetch was attempted twice",
+               hits(24'h001008), 2);
+
+    // ======================================================================
     // MOVEM faulting partway through, continued to completion
     // ======================================================================
     setup();
