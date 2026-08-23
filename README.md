@@ -224,9 +224,10 @@ found the bugs the others did.
 | **Co-simulation** | `make cosim` compares PC, SR and all sixteen registers against Musashi before every instruction | **93991 instructions, every register the same** |
 | **A second core** | `make suska` runs the Suska WF68K10, an unrelated VHDL MC68010, under ghdl and compares bus transactions | 79 data accesses, same addresses, same order |
 
-Plus the ones that ask whether any of it can be built: `make lint` elaborates
-every module under **iverilog, Verilator, yosys and Vivado** — the intersection
-of what those four accept is the language this project is written in — and
+Plus the ones that ask whether any of it can be built: every module elaborates
+under **iverilog, Verilator, yosys, Vivado, Quartus and Questa** — the
+intersection of what those six accept is the language this project is written
+in, `make lint` runs the three that need no vendor installation — and
 `make audit` proves, in the source *and* in the yosys netlist, that not one of
 1379 flip-flops initialises outside reset.
 
@@ -301,7 +302,7 @@ tests did not cover:
 | `sim/models/` | bus-slave models |
 | `sim/programs/` | real code, built and run on the core |
 | `sim/suska/` | harnesses that run the same programs on the Suska VHDL core |
-| `scripts/` | Vivado synthesis, implementation, timing and path-analysis scripts |
+| `scripts/` | Vivado and Quartus synthesis, implementation, timing and path-analysis scripts |
 | `doc/` | pinout, coding standard, compliance, divergence and implementation reports |
 | `Inputs/` | manuals, reference implementations, external test vectors — **immutable** |
 
@@ -371,19 +372,21 @@ register takes its value from the reset branch of its `always_ff`, and
 `make audit` proves it.
 
 **Portable SystemVerilog only.** The RTL must elaborate under iverilog,
-Verilator, yosys and Vivado. `make lint` is the gate; yosys is the strictest and
-therefore defines the subset.
+Verilator, yosys, Vivado, Quartus and Questa. `make lint` is the gate for the
+three that need no vendor installation; yosys is the strictest and therefore
+defines the subset.
 
 ---
 
 ## Building
 
 Requires iverilog 12.0, Verilator 5.032, yosys 0.52, `m68k-linux-gnu` binutils
-and gcc, and — for the optional targets — ghdl and Vivado 2025.2.
+and gcc, and — for the optional targets — ghdl, Vivado 2025.2, and Quartus
+Prime Lite 25.1 with Questa Altera Starter Edition 2025.2.
 
 ```sh
 make ucode      # regenerate the microcode ROMs from tools/ucode/
-make lint       # elaborate every module under all four tools
+make lint       # elaborate every module under the three always-available tools
 make audit      # prove no register initialises outside reset
 make sim        # the directed testbenches
 make programs   # build sim/programs/ and run them
@@ -394,6 +397,8 @@ make suska      # compare bus transactions against the Suska VHDL core
 make timing     # AC-specification conformance
 make synth impl # Vivado synthesis, then place and route
 make paths      # what limits the frequency, unreachable routes excluded
+make lint-questa lint-quartus   # two more front-ends, from the Altera tools
+make quartus    # ... and the MAX 10 fit, for a second frequency
 make check      # the gate: ucode-check, lint, audit, sim, programs, AC timing
 ```
 

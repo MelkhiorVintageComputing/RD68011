@@ -138,45 +138,6 @@ module harte_tb;
   logic        ae_seen;
   logic [31:0] ae_got;
 
-  // The bus cycles, in order. Used both by an ordinary comparison and by an
-  // address-error one, where the reference's list has been cut short at the
-  // access that never reached the bus.
-  task automatic compare_cycles();
-    int i;
-    begin
-      if (ntr !== nvtr) begin
-        if (firstfail == 0) begin
-          $display("    %0d bus cycles, reference says %0d", ntr, nvtr);
-          for (i = 0; i < ntr; i = i + 1) begin
-            $display("      ours %0d: %s fc=%0d %06h", i,
-                     tr_rw[i] ? "read " : "write", tr_fc[i],
-                     {tr_addr[i], 1'b0});
-          end
-          for (i = 0; i < nvtr; i = i + 1) begin
-            $display("      ref  %0d: %s fc=%0d %06h", i,
-                     (vtr_k[i] == 2) ? "read " : "write", vtr_fc[i],
-                     {vtr_a[i], 1'b0});
-          end
-        end
-        ok = 1'b0;
-      end else begin
-        for (i = 0; i < ntr; i = i + 1) begin
-          if (tr_addr[i] !== vtr_a[i] || tr_fc[i] !== vtr_fc[i][2:0] ||
-              tr_rw[i] !== (vtr_k[i] == 2)) begin
-            if (firstfail == 0) begin
-              $display("    cycle %0d: %s fc=%0d %06h, ref %s fc=%0d %06h",
-                       i, tr_rw[i] ? "read " : "write", tr_fc[i],
-                       {tr_addr[i], 1'b0},
-                       (vtr_k[i] == 2) ? "read " : "write", vtr_fc[i],
-                       {vtr_a[i], 1'b0});
-            end
-            ok = 1'b0;
-          end
-        end
-      end
-    end
-  endtask
-
   always @(posedge clk) begin
     if (!rst_n) begin
       ae_seen <= 1'b0;
@@ -245,6 +206,48 @@ module harte_tb;
   logic ok;
   logic skipped;
   string why;
+
+  // Below the per-test arrays it reads, not above them: Questa rejects a
+  // variable used before its declaration, where iverilog and Verilator
+  // invent an implicit net and carry on.
+  // The bus cycles, in order. Used both by an ordinary comparison and by an
+  // address-error one, where the reference's list has been cut short at the
+  // access that never reached the bus.
+  task automatic compare_cycles();
+    int i;
+    begin
+      if (ntr !== nvtr) begin
+        if (firstfail == 0) begin
+          $display("    %0d bus cycles, reference says %0d", ntr, nvtr);
+          for (i = 0; i < ntr; i = i + 1) begin
+            $display("      ours %0d: %s fc=%0d %06h", i,
+                     tr_rw[i] ? "read " : "write", tr_fc[i],
+                     {tr_addr[i], 1'b0});
+          end
+          for (i = 0; i < nvtr; i = i + 1) begin
+            $display("      ref  %0d: %s fc=%0d %06h", i,
+                     (vtr_k[i] == 2) ? "read " : "write", vtr_fc[i],
+                     {vtr_a[i], 1'b0});
+          end
+        end
+        ok = 1'b0;
+      end else begin
+        for (i = 0; i < ntr; i = i + 1) begin
+          if (tr_addr[i] !== vtr_a[i] || tr_fc[i] !== vtr_fc[i][2:0] ||
+              tr_rw[i] !== (vtr_k[i] == 2)) begin
+            if (firstfail == 0) begin
+              $display("    cycle %0d: %s fc=%0d %06h, ref %s fc=%0d %06h",
+                       i, tr_rw[i] ? "read " : "write", tr_fc[i],
+                       {tr_addr[i], 1'b0},
+                       (vtr_k[i] == 2) ? "read " : "write", vtr_fc[i],
+                       {vtr_a[i], 1'b0});
+            end
+            ok = 1'b0;
+          end
+        end
+      end
+    end
+  endtask
 
   task automatic rd(output int v);
     int code;

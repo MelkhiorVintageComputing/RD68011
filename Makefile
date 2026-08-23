@@ -35,7 +35,16 @@ YOSYS    := yosys
 # Vivado: a part with room for the core plus a testbench harness.
 XPART    ?= xc7a100tcsg324-1
 
+# Quartus: the largest MAX 10, which is the largest part the Lite edition
+# supports that this core fits in. `make quartus` reports against it.
+AFAMILY  ?= MAX 10
+APART    ?= 10M50DAF484C7G
+# How many cores the fitter may take. Quartus warns when this is not said, and
+# the default is all of them.
+AJOBS    ?= 8
+
 .PHONY: suska-ssw suska-fault suska-rte all lint lint-iverilog lint-verilator lint-yosys synth sim check clean dirs \
+        lint-questa lint-quartus quartus \
         ucode ucode-check model-check harte harte-all \
         audit impl programs suska cosim \
         timing timing-events timing-check timing-duty timing-setup \
@@ -102,6 +111,89 @@ lint-yosys: dirs
 	                 hierarchy -check -top $(XTOP); \
 	                 synth -top $(XTOP); \
 	                 stat"
+
+# ---------------------------------------------------------------------------
+# Two more front-ends, from the Altera installation.
+#
+# Neither is part of `lint` or `check`, for the reason `synth` is not: they need
+# a vendor installation that a machine checking this project out will not
+# necessarily have. What they add is independence -- Questa and Quartus share no
+# parser with iverilog, Verilator, yosys or Vivado, and between them they found
+# both of the defects doc/coding-standard.md now records.
+#
+# Point QUESTA_ROOTDIR or QUARTUS_ROOTDIR at another installation to use it.
+#
+# Questa compiles and elaborates only. vsim wants a node-locked licence file
+# that this machine does not have, so nothing here simulates under it.
+# ---------------------------------------------------------------------------
+QUESTA_ROOTDIR  ?= /opt/Altera/questa_fse
+QUARTUS_ROOTDIR ?= /opt/Altera/quartus
+
+QUESTA  = QUESTA_ROOTDIR=$(QUESTA_ROOTDIR) $(CURDIR)/scripts/questa.sh
+QUARTUS = QUARTUS_ROOTDIR=$(QUARTUS_ROOTDIR) $(CURDIR)/scripts/altera.sh
+
+QUESTADIR  := $(BUILD)/questa
+QUARTUSDIR := $(BUILD)/quartus
+
+lint-questa: dirs
+	@echo "== questa =="
+	@rm -rf $(QUESTADIR) && mkdir -p $(QUESTADIR)
+	@cd $(QUESTADIR) && $(QUESTA) vlib work > vlib.log 2>&1
+	@cd $(QUESTADIR) && $(QUESTA) vlog -sv -lint -work work \
+	    $(addprefix $(CURDIR)/,$(RTL)) > vlog.log 2>&1 || \
+	    { grep -E '^\*\* (Error|Warning)' vlog.log; \
+	      echo "lint-questa: vlog failed, see $(QUESTADIR)/vlog.log"; exit 1; }
+	@grep -qE '^\*\* (Error|Warning)' $(QUESTADIR)/vlog.log && \
+	    { grep -E '^\*\* (Error|Warning)' $(QUESTADIR)/vlog.log; \
+	      echo "lint-questa: not clean"; exit 1; } || true
+	@cd $(QUESTADIR) && $(QUESTA) vopt -work work $(TOP) -o $(TOP)_opt \
+	    > vopt.log 2>&1 || \
+	    { grep -E '^\*\* (Error|Warning)' vopt.log; \
+	      echo "lint-questa: vopt failed, see $(QUESTADIR)/vopt.log"; exit 1; }
+	@echo "lint-questa: compiled and elaborated clean"
+
+# Analysis and synthesis only -- the front-end, not the fit.
+#
+# quartus_map returns 0 on the one thing that matters most here, so the grep is
+# the gate and not the exit code: a package-scoped constant inside an
+# instantiation's port expression becomes an implicit one-bit net and a
+# Warning (10236), which is a netlist that quietly stops matching the source.
+# doc/coding-standard.md has the reproduction.
+lint-quartus: dirs
+	@echo "== quartus $(APART) =="
+	@rm -rf $(QUARTUSDIR) && mkdir -p $(QUARTUSDIR)
+	@printf '%s\n' $(addprefix $(CURDIR)/,$(RTL)) > $(BUILD)/rtl.f
+	@cd $(QUARTUSDIR) && $(QUARTUS) quartus_sh -t $(CURDIR)/scripts/quartus.tcl \
+	    "$(AFAMILY)" $(APART) $(XTOP) $(CURDIR) map $(AJOBS) > map.log 2>&1 || \
+	    { grep -E '^(RD68011|Error)' map.log; \
+	      echo "lint-quartus: failed, see $(QUARTUSDIR)/map.log"; exit 1; }
+	@grep -E '^Error' $(QUARTUSDIR)/map.log && \
+	    { echo "lint-quartus: errors above"; exit 1; } || true
+	@grep -E 'Implicit Net warning' $(QUARTUSDIR)/map.log && \
+	    { echo "lint-quartus: an implicit net is a mis-parse, not a style point"; \
+	      exit 1; } || true
+	@grep -E '^RD68011' $(QUARTUSDIR)/map.log
+
+# The fit, for a second post-route frequency on an architecture that shares
+# nothing with the Artix-7. Slow -- tens of minutes -- so it is not in `check`,
+# exactly as `impl` is not.
+quartus: dirs
+	@echo "== quartus place and route: $(XTOP) on $(APART) =="
+	@rm -rf $(QUARTUSDIR) && mkdir -p $(QUARTUSDIR)
+	@printf '%s\n' $(addprefix $(CURDIR)/,$(RTL)) > $(BUILD)/rtl.f
+	@cd $(QUARTUSDIR) && $(QUARTUS) quartus_sh -t $(CURDIR)/scripts/quartus.tcl \
+	    "$(AFAMILY)" $(APART) $(XTOP) $(CURDIR) fit $(AJOBS) > fit.log 2>&1 || \
+	    { grep -E '^(RD68011|Error)' fit.log; \
+	      echo "quartus: failed, see $(QUARTUSDIR)/fit.log"; exit 1; }
+	@grep -E 'Implicit Net warning' $(QUARTUSDIR)/fit.log && \
+	    { echo "quartus: an implicit net is a mis-parse, not a style point"; \
+	      exit 1; } || true
+	@cd $(QUARTUSDIR) && $(QUARTUS) quartus_sta -t $(CURDIR)/scripts/quartus_sta.tcl \
+	    > sta.log 2>&1 || \
+	    { grep -E '^(RD68011|Error)' sta.log; \
+	      echo "quartus: timing analysis failed, see $(QUARTUSDIR)/sta.log"; exit 1; }
+	@grep -E '^RD68011' $(QUARTUSDIR)/fit.log $(QUARTUSDIR)/sta.log | sed 's|^.*RD68011|RD68011|'
+	@python3 tools/quartus_report.py $(QUARTUSDIR)/rd68011.fit.rpt
 
 # ---------------------------------------------------------------------------
 # Vivado synthesis. Slow, so it is not part of `check`.

@@ -218,17 +218,27 @@ The negative-edge flops in that list are the bus interface's output stage,
 which is negedge-clocked on purpose — one bus state is half a clock period, and
 `doc/bus-timing-compliance.md` explains why.
 
-## Four tools, one subset
+## Six tools, one subset
 
 `make lint` elaborates every module under iverilog 12.0, Verilator 5.032 and
-yosys 0.52; `make synth` adds Vivado 2025.2. The intersection of what those
-four accept is the language this project is written in, and
-`doc/coding-standard.md` is the record of where the edges are — every entry in
-it was found by trying it here.
+yosys 0.52; `make synth` adds Vivado 2025.2, `make lint-quartus` adds Quartus
+Prime Lite 25.1 and `make lint-questa` adds Questa Altera Starter Edition
+2025.2. The intersection of what those six accept is the language this project
+is written in, and `doc/coding-standard.md` is the record of where the edges
+are — every entry in it was found by trying it here.
 
 yosys is the strictest and therefore the one that defines the subset. The lint
 target runs a full `synth`, not just `read_verilog`, so anything
 unsynthesisable is caught there rather than half an hour later in Vivado.
+
+The last three each need a vendor installation, so none of them is in `make
+check`. What they buy is independence: six front-ends that share no parser.
+The two Altera ones were added last and each found something on its first run —
+Quartus a mis-parse of package scope inside an instantiation port expression
+that produced a silently wrong netlist, Questa a set of variables the
+testbenches read above their own declarations. Both are in
+`doc/coding-standard.md`, and `make lint-quartus` greps for the Quartus one
+because that tool's exit code does not report it.
 
 ## What is not covered
 

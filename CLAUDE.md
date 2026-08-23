@@ -50,8 +50,10 @@ See `doc/pinout.md`.
 
 ### Portable SystemVerilog only
 
-The RTL must elaborate under **iverilog, Verilator, yosys and Vivado**. See
-`doc/coding-standard.md` for the permitted subset. `make lint` is the gate.
+The RTL must elaborate under **iverilog, Verilator, yosys, Vivado, Quartus and Questa**.
+See `doc/coding-standard.md` for the permitted subset. `make lint` is the gate for the
+three that need no vendor installation; `make synth`, `make lint-quartus` and
+`make lint-questa` are the other three, and they are not in `make check` for that reason.
 
 ## Layout
 
@@ -94,7 +96,7 @@ The PDFs have reconstructed outlines and are best read with
 ## Building and checking
 
 ```sh
-make lint     # elaborate every rtl module under all four tools
+make lint     # elaborate every rtl module under the three always-available tools
 make sim      # directed testbenches (iverilog)
 make harte    # one SingleStepTests opcode file: make harte OP=MOVE.w N=200
 make harte-all  # the whole sweep, every opcode file the ISA covers
@@ -110,6 +112,9 @@ make xsim-timing  # the AC measurement applied to both processors, under xsim
 make xsim-setup   # ... and where each of them samples its inputs
 make ucode    # regenerate the microcode ROMs from tools/ucode/
 make audit    # prove no register initialises outside reset
+make lint-questa  # a fifth front-end: Questa compiles and elaborates the RTL
+make lint-quartus # a sixth: Quartus analysis and synthesis, MAX 10
+make quartus  # ... and the fit, for a second post-route frequency
 make synth    # Vivado synthesis + timing report
 make impl     # place and route, for the timing number that means something
 make paths    # what actually limits the frequency, with the unreachable routes excluded
@@ -118,6 +123,9 @@ make check    # ucode-check, lint, audit, sim, programs and the timing gates
 
 ## Tooling notes
 
-- iverilog 12.0, Verilator 5.032, yosys 0.52, ghdl, Vivado 2025.2.
+- iverilog 12.0, Verilator 5.032, yosys 0.52, ghdl, Vivado 2025.2, and — in
+  `/opt/Altera` — Quartus Prime Lite 25.1 (Cyclone V and MAX 10 installed) with Questa
+  Altera Starter Edition 2025.2. Questa's `vlog`/`vopt` need no licence; `vsim` does, and
+  this machine has none, so nothing simulates under Questa.
 - `m68k-linux-gnu-gcc` / `-as` / `-objcopy` build test programs; `-m68010` works.
 - No gtkwave — dump VCD and inspect with a text tool or an external viewer.

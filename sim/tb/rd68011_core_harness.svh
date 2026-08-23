@@ -57,6 +57,21 @@
   logic  [7:0] mem_waits;
   logic        mem_m6800;
 
+  // Interrupt acknowledge. A cycle in CPU space with the function code all
+  // ones is answered either with VPA, which asks for the autovector for the
+  // level, or with DTACK and a vector number on the data bus (UM 5.1.4).
+  //
+  // Declared here, above the first assignment that reads them: Questa rejects a
+  // variable used before its declaration, where iverilog and Verilator invent
+  // an implicit net and carry on.
+  logic       iack_auto;      // 1: answer with VPA
+  logic [7:0] iack_vector;
+  wire        is_iack;
+  // With `iack_berr` set, nothing answers the acknowledge cycle and BERR
+  // terminates it -- which UM 6.3.4 makes a spurious interrupt, not a bus
+  // error.
+  logic       iack_berr;
+
   assign dbus = d_oe     ? d_o       : 16'bz;
   assign dbus = mem_d_oe ? mem_d_out : 16'bz;
   // The interrupting device puts its vector number on the low byte.
@@ -68,18 +83,8 @@
 
   logic mem_dtack_n, mem_vpa_n;
 
-  // Interrupt acknowledge. A cycle in CPU space with the function code all
-  // ones is answered either with VPA, which asks for the autovector for the
-  // level, or with DTACK and a vector number on the data bus (UM 5.1.4).
-  logic       iack_auto;      // 1: answer with VPA
-  logic [7:0] iack_vector;
-  wire        is_iack;
   assign is_iack = !as_n_o && (fc_o == 3'b111);
 
-  // With `iack_berr` set, nothing answers the acknowledge cycle and BERR
-  // terminates it -- which UM 6.3.4 makes a spurious interrupt, not a bus
-  // error.
-  logic iack_berr;
   assign dtack_n_i = mem_dtack_n & ~(is_iack && !iack_auto && !iack_berr);
   assign vpa_n_i   = mem_vpa_n   & ~(is_iack &&  iack_auto && !iack_berr);
 

@@ -861,24 +861,38 @@ module rd68011_seq (
   rd68011_loop_rom u_loop_rom (.op (ir_nxt), .is_loop (loop_op_ok));
 
 
+  // Everything a port connection below needs, named here rather than written
+  // into the connection itself. A package-scoped constant inside an
+  // instantiation's port expression is where Quartus stops resolving the scope:
+  // it invents a one-bit implicit net called `U_SH_LSB` or `SR_X` and carries
+  // on with a warning, so the netlist quietly stops matching the source. On the
+  // right of an `assign` it reads them correctly. doc/coding-standard.md has the
+  // seven-line reproduction.
+  logic mul_start, mul_signed;
+  assign mul_signed = (f_alu == rd68011_ucode_pkg::U_ALU_MULS);
+  assign mul_start  = commit && ((f_alu == rd68011_ucode_pkg::U_ALU_MULU) ||
+                                 mul_signed);
+
   rd68011_mul u_mul (
       .clk       (clk),
       .rst_n     (rst_n),
-      .start     (commit && ((f_alu == rd68011_ucode_pkg::U_ALU_MULU) ||
-                             (f_alu == rd68011_ucode_pkg::U_ALU_MULS))),
-      .is_signed (f_alu == rd68011_ucode_pkg::U_ALU_MULS),
+      .start     (mul_start),
+      .is_signed (mul_signed),
       .a         (a_bus[15:0]),
       .b         (b_bus[15:0]),
       .result    (mul_res)
   );
 
   logic        div_busy, div_ovf;
+  logic        div_start, div_signed;
+  assign div_start  = commit && `UF(uw, DIVST);
+  assign div_signed = `UF(uw, DIVSG);
 
   rd68011_divider u_divider (
       .clk       (clk),
       .rst_n     (rst_n),
-      .start     (commit && `UF(uw, DIVST)),
-      .is_signed (`UF(uw, DIVSG)),
+      .start     (div_start),
+      .is_signed (div_signed),
       .dividend  (b_bus),
       .divisor   (a_bus[15:0]),
       .busy      (div_busy),
@@ -889,13 +903,17 @@ module rd68011_seq (
 
   logic [31:0] sh_out;
   logic        sh_c, sh_v, sh_xupd;
+  logic  [2:0] sh_sel;
+  logic        sr_x;
+  assign sh_sel = `UF(uw, SH);
+  assign sr_x   = sr[rd68011_pkg::SR_X];
 
   rd68011_shifter u_shifter (
-      .sh    (`UF(uw, SH)),
+      .sh    (sh_sel),
       .size  (f_size),
       .count (shift_count),
       .din   (b_bus),
-      .x_in  (sr[rd68011_pkg::SR_X]),
+      .x_in  (sr_x),
       .dout  (sh_out),
       .c_out (sh_c),
       .v_out (sh_v),
@@ -906,7 +924,7 @@ module rd68011_seq (
 
   rd68011_alu u_alu (
       .op (f_alu), .size (f_size), .a (a_bus), .b (b_bus),
-      .x_in (sr[rd68011_pkg::SR_X]), .y (alu_y),
+      .x_in (sr_x), .y (alu_y),
       .n_out (n_flag_alu), .z_out (z_flag_alu), .v_out (v_flag),
       .c_out (c_flag)
   );

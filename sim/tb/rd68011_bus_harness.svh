@@ -61,8 +61,10 @@
   // sequencer has exactly the same information at exactly the same moment.
   logic        req_pending;
   logic        req_chain;      // hold the request through the acknowledge
-  wire         req_valid = req_pending && !(req_last && !req_chain);
+  // Declared before req_valid reads it: Questa rejects a variable used above
+  // its declaration, where iverilog and Verilator invent an implicit net.
   logic        req_last;
+  wire         req_valid = req_pending && !(req_last && !req_chain);
   logic  [2:0] req_kind;
   logic  [2:0] req_fc;
   logic [23:1] req_addr;

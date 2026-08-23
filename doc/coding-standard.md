@@ -1,8 +1,14 @@
 # RD68011 coding standard
 
-The RTL must elaborate under **iverilog 12.0, Verilator 5.032, yosys 0.52 and Vivado
-2025.2**. That intersection, not the SystemVerilog LRM, is the language this project is
-written in. `make lint` runs the first three; `make synth` runs the fourth.
+The RTL must elaborate under **iverilog 12.0, Verilator 5.032, yosys 0.52, Vivado 2025.2,
+Quartus Prime Lite 25.1 and Questa Altera Starter Edition 2025.2**. That intersection, not
+the SystemVerilog LRM, is the language this project is written in.
+
+`make lint` runs the first three, which is why they are the ones the design is written
+against day to day. The other three need a vendor installation, so each has its own
+target: `make synth` for Vivado, `make lint-quartus` for Quartus, `make lint-questa` for
+Questa. None of the three is in `make check`, which has to work on a machine with neither
+vendor installed.
 
 Everything below marked *(measured)* was established by trying it on this machine, not
 assumed.
@@ -25,7 +31,7 @@ every time**: `rd68011_pkg::FC_SUPER_P`, `rd68011_pkg::bus_state_e`. It is verbo
 also unambiguous about where a constant came from, which for a design transcribed out of a
 manual is worth something.
 
-### Allowed — all four tools accept it *(measured)*
+### Allowed — every tool accepts it *(measured)*
 
 - `package` / `endpackage` with `localparam`, `typedef enum`, `typedef struct packed`
 - enum and packed-struct **variables** inside modules, including struct field assignment
@@ -37,7 +43,7 @@ manual is worth something.
 - Asynchronous active-low reset in the sensitivity list
 - A **posedge flop and a negedge flop combined with XOR** to make an output that
   changes on both edges (`rd68011_dedge_ff`). Only one side can change at any
-  instant, so the result is glitch-free, and all four tools infer it correctly.
+  instant, so the result is glitch-free, and every tool infers it correctly.
 
 ### Forbidden — project rules rather than tool limits
 
@@ -171,8 +177,37 @@ depends on which combinations the design happens to exercise.
 | yosys | no `import` in any form | fully-scoped references |
 | Vivado | needs the package file read before its users | `synth.tcl` sorts `rd68011_pkg.sv` first |
 | iverilog | assigning a ternary of two enum values to an enum variable is "This assignment requires an explicit cast" | use `if`/`else` inside the case item |
-| iverilog | `unique`/`unique0` on a case are parsed but ignored, with a "sorry" note per occurrence | harmless; keep them for the other three tools |
+| iverilog | `unique`/`unique0` on a case are parsed but ignored, with a "sorry" note per occurrence | harmless; keep them for the other five |
 | iverilog | adjacent string literals do not concatenate (`"a" "b"` is a syntax error) | write one string |
-| all four | a testbench that samples `retire` just after the rising edge misses the end of a bus-cycle microword, because the bus unit's output stage is negedge-clocked and the acknowledge only settles in the second half of the clock | sample instruction boundaries on the *falling* edge, as `rd68011_core_harness.svh` does |
+| Quartus | a package-scoped constant inside a module instantiation's **port expression** is not resolved: it becomes an implicit one-bit net named after the constant, `Warning (10236)`, and the netlist quietly stops matching the source | hoist the expression into a named signal and connect that; see below |
+| Questa | a variable read above its own declaration is `(vlog-2730) Undefined variable`, then `(vlog-2388) already declared in this scope` at the declaration | declare before first use; iverilog and Verilator invent an implicit net instead |
+| all of them | a testbench that samples `retire` just after the rising edge misses the end of a bus-cycle microword, because the bus unit's output stage is negedge-clocked and the acknowledge only settles in the second half of the clock | sample instruction boundaries on the *falling* edge, as `rd68011_core_harness.svh` does |
 
 Add to this table whenever a tool surprises you. It is cheaper than rediscovering it.
+
+### The Quartus one, in full *(measured)*
+
+It is the only quirk in the table whose failure mode is a **wrong netlist rather than an
+error**, so it gets the reproduction written out. Seven lines, on Quartus Prime Lite
+25.1, `10M50DAF484C7G`:
+
+```systemverilog
+package p; localparam int K = 3; endpackage
+module sub (input logic [3:0] a, output logic [3:0] y); assign y = a; endmodule
+module minitop (input logic [7:0] w, output logic [3:0] y1, output logic [3:0] y2);
+  logic [3:0] hoisted;
+  assign hoisted = w[p::K +: 4];
+  sub u1 (.a (w[p::K +: 4]), .y (y1));   // Warning (10236): implicit net for "K"
+  sub u2 (.a (hoisted),      .y (y2));   // clean
+endmodule
+```
+
+`quartus_map` returns 0 either way. `quartus_syn`, the newer engine that might handle it,
+refuses to run: "The Quartus Prime Pro Edition Design Software must be installed."
+
+It cost this design nine sites in `rtl/rd68011_seq.sv` -- the multiplier's two `f_alu`
+comparisons, the divider's and shifter's `` `UF(uw, …) `` field selects, and `SR_X` on the
+shifter's and ALU's `x_in`. All of them are now `assign`ed to a named signal above the
+instance. That is why `make lint-quartus` greps for `Implicit Net warning` and fails on
+it: the exit code would not have caught any of them.
+
