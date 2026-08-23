@@ -24,6 +24,7 @@ module core_fault_tb;
 `include "rd68011_core_harness.svh"
 
   localparam logic [31:0] SSP0 = 32'h0000_3000;
+  localparam logic [31:0] USP0 = 32'h0000_5000;
   localparam logic [31:0] PC0  = 32'h0000_1000;
 
   localparam logic [31:0] H_BUSERR  = 32'h0000_2000;
@@ -53,6 +54,21 @@ module core_fault_tb;
       for (int k = 0; k < ntr; k = k + 1)
         if ({tr_addr[k], 1'b0} == addr) n = n + 1;
       hits = n;
+    end
+  endfunction
+
+  // Where the frame started. A frame is written top down, so the first write
+  // in supervisor data space is its topmost word, and the address of that one
+  // cycle is the whole of what the report this checks was made from.
+  function automatic logic [31:0] first_super_write();
+    logic [31:0] a;
+    begin
+      a = 32'hFFFF_FFFF;
+      for (int k = 0; k < ntr; k = k + 1)
+        if ((a === 32'hFFFF_FFFF) && (tr_rw[k] === 1'b0) &&
+            (tr_fc[k] === rd68011_pkg::FC_SUPER_D))
+          a = {8'd0, tr_addr[k], 1'b0};
+      first_super_write = a;
     end
   endfunction
 
@@ -104,6 +120,47 @@ module core_fault_tb;
       expect_u32({what, ": our version number"},
                  {28'd0, ver[13:10]},
                  {28'd0, rd68011_pkg::FRAME_VERSION});
+    end
+  endtask
+
+  // Drop to user mode with the two stack pointers far apart, paint the words
+  // under the user stack, and run an access that faults.
+  task automatic user_fault(input logic [15:0] op, input logic [31:0] ea,
+                            input logic [23:1] fault_at);
+    int k;
+    begin
+      setup();
+      //  1000: MOVEA.L #USP0,A0
+      //  1006: MOVE    A0,USP
+      //  1008: MOVE    #$0700,SR       user mode, the mask left at seven
+      //  100C: MOVE.W  D0,ea           the access that faults
+      //  1012: BRA     self
+      poke_w(23'h000800, 16'h207C);  poke_l(23'h000801, USP0);
+      poke_w(23'h000803, 16'h4E60);
+      poke_w(23'h000804, 16'h46FC);  poke_w(23'h000805, 16'h0700);
+      poke_w(23'h000806, op);        poke_l(23'h000807, ea);
+      poke_w(23'h000809, 16'h60FE);
+      for (k = 0; k < 8; k = k + 1)
+        poke_w(23'((USP0 - 32'd16) >> 1) + 23'(k), 16'hA5A5);
+      berr_en   = 1'b1;
+      berr_addr = fault_at;
+      core_start();
+    end
+  endtask
+
+  task automatic check_user_frame(input string what);
+    int k;
+    begin
+      expect_u32({what, ": the frame begins at the top of the supervisor stack"},
+                 first_super_write(), SSP0 - 32'd2);
+      expect_u32({what, ": the supervisor stack pointer fell by 58"},
+                 dut.u_seq.ssp, SSP0 - 32'd58);
+      expect_u32({what, ": the user stack pointer did not move"},
+                 dut.u_seq.usp, USP0);
+      for (k = 0; k < 8; k = k + 1)
+        expect_u32({what, ": the words under the user stack are untouched"},
+                   {16'd0, mem.peek(23'((USP0 - 32'd16) >> 1) + 23'(k))},
+                   32'h0000_A5A5);
     end
   endtask
 
@@ -492,6 +549,28 @@ module core_fault_tb;
                {22'd0, 8'd24, 2'b00});
     expect_u32("spurious interrupt: not halted",
                {31'd0, halt_n_oe}, 32'd0);
+
+    // ======================================================================
+    // A fault taken from user mode stacks entirely on the supervisor stack
+    // ======================================================================
+    // UM 6.2.5 puts the S bit up in step one and the frame on the supervisor
+    // stack in step three, so no part of a frame is ever a user-stack access.
+    //
+    // Reported from a Sun-2 replica running SunOS 4.0.3: the topmost word of
+    // the frame went to USP-2, carrying the supervisor function code but the
+    // user stack pointer's address. Neither stack pointer shows it afterwards
+    // -- USP is never written -- so the only witness is the memory under the
+    // user stack, and that is what these check. On a demand-paged system that
+    // page is often not present, the stray write faults inside exception
+    // processing, and the machine takes a double bus fault and halts.
+    user_fault(16'h33C0, 32'h0000_6000, 23'h003000);
+    run_until_pc(H_BUSERR, 900);
+    check_user_frame("user-mode bus error");
+
+    // The address error path builds the same frame from the same microcode.
+    user_fault(16'h33C0, 32'h0000_6001, 23'h7FFFFF);
+    run_until_pc(H_ADDRERR, 900);
+    check_user_frame("user-mode address error");
 
     if (errors == 0) $display("PASS: core_fault_tb");
     else             $display("FAIL: core_fault_tb, %0d errors", errors);

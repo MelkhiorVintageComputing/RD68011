@@ -386,6 +386,86 @@ directed test, every reference vector, every program and every co-simulated
 instruction. It is not in `rtl/` because `rtl/` carries no assertions and has to
 elaborate under yosys and Vivado as well.
 
+## A fourth bug the same machine found
+
+**The topmost word of a fault frame went to the user stack.** Reported from the
+same Sun-2 replica, now running SunOS 4.0.3 rather than the boot PROM, and dying
+every time at the first instruction of `/sbin/init` with nothing on the console
+but `Watchdog reset!`.
+
+The kernel deliberately runs a brand-new process in the kernel's own MMU context
+so that its first access faults and the handler can allocate one. That intended
+bus error is taken from user mode. Of the twenty-nine words of the format $8
+frame, twenty-eight went to the supervisor stack and the first one -- the word
+at `SP+56`, written first because the frame is written top down -- went to
+`USP-2`. On a demand-paged system the page under a fresh process's stack pointer
+is usually not present, so the stray write faults *inside* exception processing:
+double bus fault, halt, watchdog.
+
+The fingerprint was on the bus, and it names the cause exactly:
+
+```
+A=100000 FC=1 RW=0      the faulting user data write
+A=02fffe FC=5 RW=0      the first frame word: USP-2, with the supervisor code
+A=000fe0 FC=5 RW=0      the rest of the frame, correctly on the SSP
+```
+
+One cycle carrying the supervisor function code and the user stack pointer's
+address. The function code and the address come from different places.
+
+Everything in a bus request is built from the *next* microword, because the bus
+unit latches the whole request on the edge that ends the previous cycle --
+`rd68011_seq.sv` says so in a comment above the block that does it, and the
+function code follows the rule: it is derived from `sr_nxt`, deliberately, with
+`MOVE to SR` named as the case where it shows. The address register the next
+microword indexes through was the one field that did not: `n_ea_base` read the
+register file through `RDREG`, and `RDREG` resolves index 15 to `sr[S] ? ssp :
+usp` -- the S bit as it is *now*.
+
+For every other microword pair those two agree. Exception entry is the pair
+where they do not. `fault_exception()` in `tools/ucode/program.py` sets S in one
+microword and issues the first frame push in the very next one, so the push's
+address is computed while `sr[S]` is still the user-mode zero, and its function
+code while `sr_nxt[S]` is already one. From the second push onward `sr[S]` has
+caught up and everything agrees, which is why exactly one word is misplaced.
+
+The stack pointers show nothing afterwards. The write-back of the pre-decrement
+happens on the push microword itself, where `sr[S]` is already one, so the
+*supervisor* stack pointer takes `SSP0-2` and the second push lands where it
+should. `USP` is never written. Only the memory under the user stack is a
+witness -- and the first version of the reporter's own test compared the two
+stack pointers, found them right, and declared the core correct.
+
+**Only the two faults, not every exception.** The report's scope said trap and
+interrupt too. They are not affected, and the tests now say so rather than
+leaving it argued: the four-word frame of `exception_tail()` has a microword
+between the one that sets S and the first bus cycle -- the one that reserves
+eight bytes -- and the pushes after it address through the latched effective
+address, not through A7. Only `fault_exception()`, which both faults share, puts
+a bus cycle directly after the S bit.
+
+The fix is one field, and it is the field being brought into line with the
+comment already above it: `n_ea_base` resolves index 15 through `sr_nxt[S]`,
+like the function code beside it. The two bypasses that hand the next microword
+a value this edge is writing are guarded to the case where the bank has not
+changed underneath them -- a write to A7 goes to whichever bank `sr[S]` names,
+so it is only the value the next microword reads if the next microword reads the
+same bank. No microcode today writes A7 and changes S in one microword; `RTE`
+restores the status register in its last microword for exactly this reason, and
+says so in its own comment.
+
+`sim/tb/core_fault_tb.sv` takes a bus error and an address error from user mode
+with the two stack pointers 8 kB apart, paints the eight words under the user
+stack, and checks three things: that the first supervisor-space write of the
+frame is at `SSP-2`, that the painted words are untouched, and that `USP` did
+not move. Four of those checks fail before the fix.
+`sim/tb/core_exception_tb.sv` does the same for an interrupt taken in user mode,
+beside the `TRAP` case already there; both pass before the fix, which is the
+point of them.
+
+No harness invariant. "A frame word went to the wrong stack" is only visible if
+you know where the other stack is, and nothing at the pins does.
+
 ## Not yet implemented
 
 Nothing. Every instruction, every exception and both of the MC68010's own

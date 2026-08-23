@@ -134,6 +134,43 @@ _start:
     | 0xC0DE sign-extended is -16162, and sixteen of those is -258592
     EXPECT_EQ_L %d0, 0xFFFC0DE0
 
+    | ------------------------------------------------------------------
+    CHECK   7                       | a fault taken from user mode
+    | ------------------------------------------------------------------
+    | UM 6.2.5 puts the S bit up in step one and stacks the frame "using the
+    | SSP" in step three, so no part of a frame is ever a user-stack access.
+    | Reported from a machine running an operating system: the topmost word of
+    | the frame went to USP-2 instead. On a demand-paged system the page under
+    | a fresh process's stack pointer is usually not resident, so that write
+    | faults inside exception processing and the machine halts.
+    |
+    | Neither stack pointer shows it -- USP is never written -- so the only
+    | witness is the memory underneath, which is what this paints and reads
+    | back. Last check in the program, because it ends in user mode: `pass`
+    | and `fail` write to data space and need no privilege.
+    lea     user_stack_top,%a1
+    move.l  %a1,%usp
+    move.w  #0xA5A5,%d0
+    moveq   #7,%d1
+1:  move.w  %d0,-(%a1)              | eight words under the user stack
+    dbf     %d1,1b
+
+    clr.w   fault_count
+    andi.w  #0xDFFF,%sr             | to user mode, and stay there
+    movea.l #DEVICE,%a0
+    move.w  (%a0),%d1               | faults; the handler completes it as above
+    EXPECT_EQ_W %d1, DEVICE_VAL
+    move.w  fault_count,%d2
+    EXPECT_EQ_W %d2, 1
+
+    move.l  %sp,%d2                 | A7 is the user one, still untouched
+    EXPECT_EQ_L %d2, user_stack_top
+    lea     user_stack_top,%a1
+    moveq   #7,%d1
+1:  move.w  -(%a1),%d2
+    EXPECT_EQ_W %d2, 0xA5A5
+    dbf     %d1,1b
+
     bra     pass
 
 | ---------------------------------------------------------------------------
@@ -194,6 +231,8 @@ odd_place:  .long   0, 0
 
     .bss
     .align  2
+user_stack:  .space 256
+user_stack_top:
 fault_count: .space 2
 fault_addr:  .space 4
 fault_data:  .space 2

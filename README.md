@@ -241,7 +241,7 @@ to 45 ns of room on the binding constraint.
 ### Bugs this found
 
 Worth listing because each was found by exactly one thing and would have
-survived everything else — and four of them by something outside the five: the
+survived everything else — and five of them by something outside the five: the
 AC-timing work, a real machine, and someone reading the source:
 
 - A faulted write did not record its data output buffer, so a handler completing
@@ -257,6 +257,12 @@ AC-timing work, a real machine, and someone reading the source:
   request was acknowledged as level *0* and the handler entered with the mask
   at zero; found by someone reading the RTL, after a real machine took one
   unexplained vector 24.
+- The topmost word of a fault frame taken from *user* mode went to `USP-2`
+  rather than `SSP-2`, carrying the supervisor function code with the user
+  stack pointer's address — one microword's worth of disagreement about which
+  register A7 is. Found by the same machine, this time running an operating
+  system: the stray write faults inside exception processing and halts the
+  CPU.
 
 ---
 

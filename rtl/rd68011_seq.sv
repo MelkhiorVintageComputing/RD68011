@@ -1424,6 +1424,19 @@ module rd68011_seq (
   end
 
   assign n_ea_areg = {1'b1, n_ea_reg};
+
+  // Index 15 is A7, and which register that is comes from the *next* S bit,
+  // for the same reason the function code just below does: this is the address
+  // the next microword will put on the bus, and by then the status register is
+  // sr_nxt. Selecting on sr[S] here is what put the topmost word of a fault
+  // frame on the user stack: the microword that enters exception processing
+  // sets S, and the very next one is the first push, whose address is computed
+  // here while sr[S] is still the user-mode zero. The function code was
+  // already right, which is why the stray cycle carried the supervisor code
+  // and the user stack pointer's address.
+  `define RDREG_N(i) (((i) == 4'd15) ? (sr_nxt[rd68011_pkg::SR_S] ? ssp : usp) \
+                                     : regs[(i)])
+
   // Bypass: if this edge writes the register the next microword addresses
   // through, the next microword has to see the new value, because the register
   // file will not have it until after the edge.
@@ -1431,9 +1444,17 @@ module rd68011_seq (
   // Only when the current microword is actually retiring. Until then uw_nxt is
   // this same microword, and letting the bypass through would hand (An)+ its
   // own incremented value as the address -- addressing An+2 instead of An.
-  assign n_ea_base = (reg_we && (wreg_index == n_ea_areg))          ? reg_wdata
-                   : (commit && aupd_we && (ea_areg == n_ea_areg))  ? ea_updated
-                   : `RDREG(n_ea_areg);
+  //
+  // A write to A7 goes to the bank sr[S] names, so it is only the value the
+  // next microword reads if the bank has not changed underneath it.
+  logic n_a7_same_bank;
+  assign n_a7_same_bank = (n_ea_areg != 4'd15) ||
+                          (sr[rd68011_pkg::SR_S] == sr_nxt[rd68011_pkg::SR_S]);
+
+  assign n_ea_base =
+      (reg_we && (wreg_index == n_ea_areg) && n_a7_same_bank)         ? reg_wdata
+    : (commit && aupd_we && (ea_areg == n_ea_areg) && n_a7_same_bank) ? ea_updated
+    : `RDREG_N(n_ea_areg);
 
   always_comb begin
     unique case (n_easize)
@@ -1908,6 +1929,7 @@ module rd68011_seq (
 
   `undef UF
   `undef RDREG
+  `undef RDREG_N
   `undef RF
 
 endmodule

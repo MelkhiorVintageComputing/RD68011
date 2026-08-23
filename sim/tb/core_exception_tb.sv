@@ -33,6 +33,7 @@ module core_exception_tb;
   localparam logic [31:0] H_LINEF   = 32'h0000_2200;
   localparam logic [31:0] H_TRAPV   = 32'h0000_2300;
   localparam logic [31:0] H_TRAP3   = 32'h0000_2400;
+  localparam logic [31:0] H_AUTO5   = 32'h0000_2500;
 
   int i;
 
@@ -522,6 +523,44 @@ module core_exception_tb;
                dut.u_seq.ssp, SSP0);
     expect_u32("user-mode TRAP: and the user stack never moved",
                dut.u_seq.usp, USP0);
+
+    // ---- ... and so does an interrupt --------------------------------------
+    // The report that prompted these checks said every exception taken from
+    // user mode was affected. An interrupt reaches the shared frame tail by a
+    // different door -- the mask goes up alongside the S bit, from a different
+    // microword -- so it gets its own case rather than being argued from the
+    // TRAP one.
+    core_reset();
+    poke_l(23'h000000, SSP0);
+    poke_l(23'h000002, PC0);
+    poke_l(23'h00003A, H_AUTO5);         // vector 29, the level five autovector
+    poke_w(H_AUTO5[23:1], 16'h60FE);
+    //  1000: MOVEA.L #$00005000,A0
+    //  1006: MOVE    A0,USP
+    //  1008: MOVE    #$0000,SR          user mode, and the mask down to zero
+    //  100C: BRA     self               where the interrupt finds it
+    poke_w(23'h000800, 16'h207C);  poke_l(23'h000801, USP0);
+    poke_w(23'h000803, 16'h4E60);
+    poke_w(23'h000804, 16'h46FC);  poke_w(23'h000805, 16'h0000);
+    poke_w(23'h000806, 16'h60FE);
+    for (i = 0; i < 4; i = i + 1)
+      poke_w(23'((USP0 - 32'd8) >> 1) + 23'(i), 16'hA5A5);
+    iack_auto = 1'b1;
+    core_start();
+    run_until_pc(PC0 + 32'd12, 400);     // in user mode, and spinning
+    ipl_n_i = ~3'd5;
+    run_until_pc(H_AUTO5, 800);
+    ipl_n_i = 3'b111;
+    expect_u32("user-mode interrupt: the supervisor stack moved",
+               dut.u_seq.ssp, SSP0 - 32'd8);
+    expect_u32("user-mode interrupt: the user stack pointer did not",
+               dut.u_seq.usp, USP0);
+    check_frame("user-mode interrupt", SSP0 - 32'd8, 16'h0000,
+                PC0 + 32'd12, 8'd29);
+    for (i = 0; i < 4; i = i + 1)
+      expect_u32("user-mode interrupt: nothing written under the user stack",
+                 {16'd0, mem.peek(23'((USP0 - 32'd8) >> 1) + 23'(i))},
+                 32'h0000_A5A5);
 
     core_done("core_exception_tb");
   end
