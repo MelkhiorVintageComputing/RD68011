@@ -1,18 +1,25 @@
-# Timing numbers for the fitted RD68011, and the check that the constraints
-# actually landed on something.
+# Timing for the fitted RD68011, and the checks that are checks.
 #
 #   quartus_sta -t scripts/quartus_sta.tcl
 #
 # Invoked from the Makefile with cwd = build/quartus/, after scripts/quartus.tcl
-# has fitted the design. Prints RD68011: lines for the console, and leaves the
-# Fmax summary in rd68011.sta.rpt.
+# has fitted the design. Prints RD68011: lines for the console and writes
+# fmax.rpt, which tools/quartus_report.py reads.
 #
-# The multicycle check is the reason this is a script rather than a grep. A
-# Quartus exception whose pattern matches nothing is close to silent, and an
-# unapplied multicycle on the write-data register would cost the design a whole
-# clock of budget on a path that really has three half clocks -- making the MAX
-# 10 result pessimistic for a reason that has nothing to do with the MAX 10.
-# scripts/rd68011.sdc says the pattern; this counts what it caught.
+# What is a hard failure here and what is not:
+#
+#   * the multicycle matching nothing IS. A Quartus exception whose pattern
+#     selects no node is close to silent, and an unapplied multicycle on the
+#     write-data register would cost a whole clock of budget on a path that
+#     really has three half clocks. scripts/rd68011.sdc says the pattern; this
+#     counts what it caught.
+#   * a hold violation IS. Hold does not improve with a slower clock, so it is
+#     wrong at any frequency.
+#   * setup slack against the 48 ns in scripts/rd68011.sdc is NOT, and that is
+#     deliberate. 48 ns is the Artix-7 target, kept here so both flows report
+#     against the same period; this part does not reach it, for the reason
+#     doc/implementation.md sets out. The Makefile gates on measured Fmax
+#     instead, which is a regression test rather than an aspiration.
 
 project_open rd68011
 
@@ -28,29 +35,32 @@ if {$n == 0} {
     qexit -error
 }
 
-report_clock_fmax_summary -panel_name "Fmax Summary"
+report_clock_fmax_summary -panel_name "Fmax" -file fmax.rpt
 
 set period [get_clock_info -period [get_clocks clk]]
 
 set wns 1e9
 foreach_in_collection p [get_timing_paths -setup -npaths 1 -detail summary] {
     set wns [get_path_info $p -slack]
+    # -from and -to give node ids, not names; get_node_info turns them back.
+    puts "RD68011: the worst setup path is\
+          [get_node_info -name [get_path_info $p -from]] to\
+          [get_node_info -name [get_path_info $p -to]],\
+          [get_path_info $p -num_logic_levels] logic levels"
 }
 set whs 1e9
 foreach_in_collection p [get_timing_paths -hold -npaths 1 -detail summary] {
     set whs [get_path_info $p -slack]
 }
 
-puts "RD68011: routed worst negative slack = $wns ns (hold $whs ns)"
-puts [format "RD68011: at a period of %.3f ns, so the design runs at %.2f MHz" \
-      $period [expr {1000.0 / ($period - $wns)}]]
+puts "RD68011: routed setup slack = $wns ns against $period ns (hold $whs ns)"
 
 delete_timing_netlist
 project_close
 
-if {$wns < 0 || $whs < 0} {
-    puts "RD68011: TIMING NOT MET"
+if {$whs < 0} {
+    puts "RD68011: HOLD NOT MET, which no clock period fixes"
     qexit -error
 }
-puts "RD68011: implementation ok"
+puts "RD68011: fit measured"
 qexit -success

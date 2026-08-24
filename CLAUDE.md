@@ -114,7 +114,7 @@ make ucode    # regenerate the microcode ROMs from tools/ucode/
 make audit    # prove no register initialises outside reset
 make lint-questa  # a fifth front-end: Questa compiles and elaborates the RTL
 make lint-quartus # a sixth: Quartus analysis and synthesis, MAX 10
-make quartus  # ... and the fit, for a second post-route frequency
+make quartus  # ... and the fit, for a second post-route frequency (MAX 10)
 make synth    # Vivado synthesis + timing report
 make impl     # place and route, for the timing number that means something
 make paths    # what actually limits the frequency, with the unreachable routes excluded

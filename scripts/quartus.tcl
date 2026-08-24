@@ -50,11 +50,17 @@ set_global_assignment -name SDC_FILE $root/scripts/rd68011.sdc
 # Makefile's AJOBS chooses it.
 set_global_assignment -name NUM_PARALLEL_PROCESSORS [lindex $argv 5]
 
-# Out of context: no pad ring, no board. clk keeps a real pin so it keeps a real
-# clock network -- a virtual clock would be routed as ordinary logic and the
-# result would not mean anything.
-set_instance_assignment -name VIRTUAL_PIN ON  -to *
-set_instance_assignment -name VIRTUAL_PIN OFF -to clk
+# Real pins, not virtual ones. `VIRTUAL_PIN ON -to *` with an `OFF -to clk` after
+# it was tried and is a trap: the wildcard wins, clk becomes virtual too, its
+# clock network becomes ordinary routing across a three-quarters-full device,
+# and the fit comes back at -191 ns of slack on a 48 ns clock. The fit report
+# says "Total pins 0 / 360", which is the tell.
+#
+# So the out-of-context part is done in the SDC instead, where scripts/rd68011.sdc
+# cuts every path to and from a pin. That is what Vivado's -mode out_of_context
+# amounts to here anyway -- it inserts no buffers and the .xdc gives no input or
+# output delays, so those paths are unconstrained and out of the worst-case
+# number. Quartus would otherwise time them against a default of zero.
 
 export_assignments
 

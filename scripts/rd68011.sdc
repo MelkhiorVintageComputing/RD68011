@@ -42,3 +42,12 @@ set_multicycle_path 1 -hold  -to [get_registers {*rd68011_biu:u_biu|d_o[*]}]
 # MC68010 samples DTACK/BERR/VPA/BR/BGACK/IPL/RESET/HALT with its own
 # synchronisers (specification 47, "Asynchronous Input Setup Time"). Board-level
 # input and output delays belong in the wrapper's constraints, not here.
+#
+# Saying so explicitly is what makes this an out-of-context result, comparable
+# with the Artix-7 one. Vivado gets there by having no input or output delay in
+# the .xdc, which leaves those paths unconstrained and out of the worst-case
+# number; Quartus instead times them against a default of zero and they swamp
+# everything. Cutting them leaves the register-to-register paths, which are the
+# ones that belong to the core rather than to somebody's board.
+set_false_path -from [remove_from_collection [all_inputs] [get_ports clk]]
+set_false_path -to   [all_outputs]

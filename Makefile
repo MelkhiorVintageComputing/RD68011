@@ -42,6 +42,10 @@ APART    ?= 10M50DAF484C7G
 # How many cores the fitter may take. Quartus warns when this is not said, and
 # the default is all of them.
 AJOBS    ?= 8
+# The Fmax `make quartus` must still reach. A floor measured here, not a target:
+# doc/implementation.md says why this part gets 4.26 MHz where the Artix-7 gets
+# 21.7, and what would have to change for that to move.
+AFMAX    ?= 4.10
 
 .PHONY: suska-ssw suska-fault suska-rte all lint lint-iverilog lint-verilator lint-yosys synth sim check clean dirs \
         lint-questa lint-quartus quartus \
@@ -193,7 +197,8 @@ quartus: dirs
 	    { grep -E '^(RD68011|Error)' sta.log; \
 	      echo "quartus: timing analysis failed, see $(QUARTUSDIR)/sta.log"; exit 1; }
 	@grep -E '^RD68011' $(QUARTUSDIR)/fit.log $(QUARTUSDIR)/sta.log | sed 's|^.*RD68011|RD68011|'
-	@python3 tools/quartus_report.py $(QUARTUSDIR)/rd68011.fit.rpt
+	@python3 tools/quartus_report.py $(QUARTUSDIR)/rd68011.fit.rpt \
+	    $(QUARTUSDIR)/fmax.rpt $(AFMAX)
 
 # ---------------------------------------------------------------------------
 # Vivado synthesis. Slow, so it is not part of `check`.

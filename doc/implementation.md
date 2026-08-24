@@ -31,6 +31,59 @@ with a 50 % duty cycle:
 variation, so it is not a number to quote; 48 ns is where it closes on every
 run so far.
 
+### The same design on a MAX 10
+
+`make quartus` fits it to `10M50DAF484C7G`, the largest MAX 10 Quartus Prime
+Lite supports, with the same 48 ns clock so the two are reported against the
+same period. It is a deliberately unlike part: four-input logic elements and
+M9K blocks where the Artix-7 has six-input LUTs and 36 kbit block RAMs.
+
+| | |
+|---|--:|
+| Fmax | **4.26 MHz** |
+| Setup slack | −187 ns against 48 ns |
+| Hold slack | 0.320 ns |
+| Logic elements | 37366 (75 % of the part) |
+| Registers | 1357 |
+| Embedded 9-bit multipliers | 4 (1 %) |
+| Memory bits | 0 (of 1677312) |
+
+It fits, and it is nowhere near the frequency. **The whole of the gap is one
+generated file**, and it is worth stating precisely because it is the first
+measurement that says the design's speed is not portable.
+
+The worst path is `upc[0]` to `cur_addr[30]`, 235 ns of data delay through
+**498 logic levels**, and 940 of the nodes on it are inside `u_decode`.
+`rtl/gen/rd68011_decode_rom.sv` is a `casez` of 1401 patterns whose header says
+"the first matching pattern wins" -- it is a priority decoder by construction,
+which is how forms distinguished only by a field value are separated there
+rather than by a run-time test in the microcode. Vivado and yosys both flatten
+it. Quartus Lite builds it as written, a cascade.
+
+Measured on the decoder alone, registered on both sides, nothing else in the
+project present: **4.67 MHz**, against 4.26 for the whole core. The decoder is
+not the largest contributor to the critical path, it is very nearly all of it.
+`OPTIMIZATION_TECHNIQUE SPEED` with `OPTIMIZATION_MODE "AGGRESSIVE
+PERFORMANCE"` moves it to 4.77 MHz, so this is structural and not a flow
+setting. `quartus_syn`, the newer engine that might do better, is Pro-only.
+
+Two consequences, one for the flow and one for the design:
+
+- `make quartus` does **not** gate on setup slack against 48 ns, because that
+  number is the Artix-7's target and says nothing here. It gates on hold, which
+  no clock period fixes, and on `AFMAX` -- an Fmax floor measured on this part,
+  so a regression is caught while the known shortfall is not reported as a
+  failure every time.
+- The fix, if the MAX 10 is ever a real target, is in `tools/ucode/assemble.py`
+  rather than in `rtl/`: emit patterns that do not overlap, so the decoder is a
+  parallel case and no tool has to flatten a priority chain. The overlap earns
+  its keep in only a handful of places -- `BRA.W` before `BRA.B` is the example
+  the file's own header gives -- so resolving it at generation time is
+  bookkeeping, not a redesign. Nothing here has tried it.
+
+The fit takes the better part of two hours at 75 % utilisation, which is why
+`make quartus` is no more part of `make check` than `make impl` is.
+
 ### Where the area goes
 
 `report_utilization -hierarchical`, same run. Worth having because until it was
