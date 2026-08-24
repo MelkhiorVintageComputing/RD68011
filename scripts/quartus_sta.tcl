@@ -17,9 +17,12 @@
 #     wrong at any frequency.
 #   * setup slack against the 48 ns in scripts/rd68011.sdc is NOT, and that is
 #     deliberate. 48 ns is the Artix-7 target, kept here so both flows report
-#     against the same period; this part does not reach it, for the reason
-#     doc/implementation.md sets out. The Makefile gates on measured Fmax
-#     instead, which is a regression test rather than an aspiration.
+#     against the same period; this part comes within a couple of nanoseconds
+#     of it and does not quite make it. The Makefile gates on measured Fmax
+#     instead, which is a regression test rather than an aspiration -- and
+#     Quartus's Fmax is the better number anyway, because it scales both clock
+#     edges together, which is what this design's edge-to-edge paths need and
+#     what doc/critical-path.md says Vivado's slack extrapolation does not do.
 
 project_open rd68011
 

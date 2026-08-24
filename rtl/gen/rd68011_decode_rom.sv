@@ -5,10 +5,22 @@
 // Opcode to microcode entry point, and that entry point's
 // request preview.
 //
-// Ordered: the first matching pattern wins, which is how forms
-// distinguished only by a field value -- BRA.W is BRA.B with a
-// displacement byte of zero -- are separated here rather than by
-// a run-time test in the microcode.
+// No pattern here overlaps another, so the order of the arms does
+// not matter. The source in tools/ucode/program.py *is* ordered --
+// the first match wins, which is how forms distinguished only by a
+// field value are separated there rather than by a run-time test in
+// the microcode, BRA.W being BRA.B with a displacement byte of zero
+// -- and assemble.py resolves that order into disjoint patterns
+// here, proving over all 65536 opcodes that the two decode alike.
+//
+// Because a casez cannot say "not zero", the branch group is the
+// one that pays for it: 1401 patterns become 1440. Every other
+// pattern passes through untouched.
+//
+// Why bother, when the first match winning is what the hardware
+// wants: "ordered" synthesises as a priority chain unless the tool
+// flattens it, and not every tool does. Quartus builds it as
+// written -- doc/implementation.md has that measurement.
 //
 // The preview comes out of here rather than out of a second store
 // read at `entry`, which is what used to happen and what made the
@@ -30,7 +42,14 @@ module rd68011_decode_rom (
     casez (op)
       16'b0100111001110001: begin entry = 13'd10  ; prev = 21'h100800; end  // NOP
       16'b0110000000000000: begin entry = 13'd13  ; prev = 21'h000807; end  // BRA.W
-      16'b01100000????????: begin entry = 13'd11  ; prev = 21'h000807; end  // BRA.B
+      16'b011000001???????: begin entry = 13'd11  ; prev = 21'h000807; end  // BRA.B
+      16'b0110000001??????: begin entry = 13'd11  ; prev = 21'h000807; end  // BRA.B
+      16'b01100000001?????: begin entry = 13'd11  ; prev = 21'h000807; end  // BRA.B
+      16'b011000000001????: begin entry = 13'd11  ; prev = 21'h000807; end  // BRA.B
+      16'b0110000000001???: begin entry = 13'd11  ; prev = 21'h000807; end  // BRA.B
+      16'b01100000000001??: begin entry = 13'd11  ; prev = 21'h000807; end  // BRA.B
+      16'b011000000000001?: begin entry = 13'd11  ; prev = 21'h000807; end  // BRA.B
+      16'b0110000000000001: begin entry = 13'd11  ; prev = 21'h000807; end  // BRA.B
       16'b0111???0????????: begin entry = 13'd17  ; prev = 21'h101000; end  // MOVEQ
       16'b0001???000000???: begin entry = 13'd18  ; prev = 21'h100000; end  // MOVE.B Dn,Dn
       16'b0011???000000???: begin entry = 13'd19  ; prev = 21'h100800; end  // MOVE.W Dn,Dn
@@ -1211,10 +1230,42 @@ module rd68011_decode_rom (
       16'b0100101011111000: begin entry = 13'd4847; prev = 21'h100800; end  // TAS absw
       16'b0100101011111001: begin entry = 13'd4850; prev = 21'h180800; end  // TAS absl
       16'b0110000100000000: begin entry = 13'd4861; prev = 21'h000807; end  // BSR.W
-      16'b01100001????????: begin entry = 13'd4854; prev = 21'h000807; end  // BSR.B
+      16'b011000011???????: begin entry = 13'd4854; prev = 21'h000807; end  // BSR.B
+      16'b0110000101??????: begin entry = 13'd4854; prev = 21'h000807; end  // BSR.B
+      16'b01100001001?????: begin entry = 13'd4854; prev = 21'h000807; end  // BSR.B
+      16'b011000010001????: begin entry = 13'd4854; prev = 21'h000807; end  // BSR.B
+      16'b0110000100001???: begin entry = 13'd4854; prev = 21'h000807; end  // BSR.B
+      16'b01100001000001??: begin entry = 13'd4854; prev = 21'h000807; end  // BSR.B
+      16'b011000010000001?: begin entry = 13'd4854; prev = 21'h000807; end  // BSR.B
+      16'b0110000100000001: begin entry = 13'd4854; prev = 21'h000807; end  // BSR.B
       16'b0101????11001???: begin entry = 13'd4868; prev = 21'h000807; end  // DBcc
-      16'b0110????00000000: begin entry = 13'd4900; prev = 21'h000807; end  // Bcc.W
-      16'b0110????????????: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b01101???00000000: begin entry = 13'd4900; prev = 21'h000807; end  // Bcc.W
+      16'b011001??00000000: begin entry = 13'd4900; prev = 21'h000807; end  // Bcc.W
+      16'b0110001?00000000: begin entry = 13'd4900; prev = 21'h000807; end  // Bcc.W
+      16'b01101???1???????: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b01101???01??????: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b01101???001?????: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b01101???0001????: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b01101???00001???: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b01101???000001??: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b01101???0000001?: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b01101???00000001: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b011001??1???????: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b011001??01??????: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b011001??001?????: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b011001??0001????: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b011001??00001???: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b011001??000001??: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b011001??0000001?: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b011001??00000001: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b0110001?1???????: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b0110001?01??????: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b0110001?001?????: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b0110001?0001????: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b0110001?00001???: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b0110001?000001??: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b0110001?0000001?: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
+      16'b0110001?00000001: begin entry = 13'd4892; prev = 21'h000807; end  // Bcc.B
       16'b0100111011010???: begin entry = 13'd4909; prev = 21'h000807; end  // JMP aind
       16'b0100111011101???: begin entry = 13'd4912; prev = 21'h000807; end  // JMP adisp
       16'b0100111011110???: begin entry = 13'd4916; prev = 21'h000807; end  // JMP aidx

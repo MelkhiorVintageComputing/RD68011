@@ -258,18 +258,167 @@ def emit_urom(words):
     return '\n'.join(out)
 
 
+# The source writes don't-care as '-'; SystemVerilog's casez wants '?'. Every
+# helper below works on the normalised form, and normalising is the first thing
+# make_disjoint does -- getting this wrong is silent, because a '-' read as a
+# care bit is self-consistent and check_disjoint would agree with itself.
+def _norm(pat):
+    return pat.replace('-', '?')
+
+
+def _cube(pat):
+    """A pattern as (care, value) integers, for a fast overlap test."""
+    care = val = 0
+    for ch in pat:
+        care <<= 1
+        val <<= 1
+        if ch != '?':
+            care |= 1
+            if ch == '1':
+                val |= 1
+    return care, val
+
+
+def _overlaps(a, b):
+    both = a[0] & b[0]
+    return (a[1] & both) == (b[1] & both)
+
+
+def _encodings(pat):
+    """Every opcode the pattern matches.
+
+    By enumerating the don't-care bits rather than the whole 16-bit space: the
+    patterns cover about 55000 encodings between them, so this is thousands of
+    steps where testing every opcode against every pattern is ninety million.
+    """
+    free = [15 - i for i, ch in enumerate(pat) if ch == '?']
+    base = 0
+    for i, ch in enumerate(pat):
+        if ch == '1':
+            base |= 1 << (15 - i)
+    for m in range(1 << len(free)):
+        op = base
+        for b, bit in enumerate(free):
+            if (m >> b) & 1:
+                op |= 1 << bit
+        yield op
+
+
+def cube_minus(p, q):
+    """The encodings matching pattern `p` but not pattern `q`, as patterns.
+
+    Both are sixteen characters of '0', '1' and '?'. The result is a set of
+    disjoint patterns whose union is exactly p minus q: for each bit that q
+    cares about and p does not, one pattern that pins that bit the other way
+    from q, with the bits before it pinned q's way. Empty when q covers p.
+    """
+    out = []
+    cur = list(p)
+    for i, (a, b) in enumerate(zip(p, q)):
+        if b != '?' and a == '?':
+            piece = list(cur)
+            piece[i] = '0' if b == '1' else '1'
+            out.append(''.join(piece))
+            cur[i] = b
+    return out
+
+
+def make_disjoint(patterns):
+    """The same decode table with no pattern overlapping an earlier one.
+
+    The source in program.py is an ordered list, because that is the readable
+    way to say that BRA.W is BRA.B with a displacement byte of zero. Ordered is
+    not how it wants to be *synthesised*, though: "the first match wins" is a
+    priority chain, and a tool that builds it literally rather than flattening
+    it produces one. Quartus does exactly that -- doc/implementation.md has the
+    measurement -- so the order is resolved here instead, once, in Python.
+
+    Only the branch group actually overlaps; everything else passes through
+    untouched. The cost is that `casez` cannot say "not zero", so a byte
+    displacement that must be non-zero becomes several patterns and a Bcc that
+    must not be BRA or BSR becomes one per remaining condition.
+    """
+    out = []
+    earlier = []                        # (pattern, cube) already covered
+    for pat, target, mnem in patterns:
+        pat = _norm(pat)
+        pieces = [(pat, _cube(pat))]
+        for qpat, qcube in earlier:
+            nxt = []
+            for piece, pcube in pieces:
+                if not _overlaps(pcube, qcube):
+                    nxt.append((piece, pcube))
+                    continue
+                for r in cube_minus(piece, qpat):
+                    nxt.append((r, _cube(r)))
+            pieces = nxt
+            if not pieces:
+                break
+        for piece, _ in pieces:
+            out.append((piece, target, mnem))
+        earlier.append((pat, _cube(pat)))
+    return out
+
+
+def check_disjoint(ordered, parallel):
+    """Prove the two tables decode all 65536 opcodes the same way.
+
+    Cheap, exhaustive, and the only thing standing between a bug in
+    make_disjoint and a processor that decodes one opcode wrongly. It also
+    proves the result really is disjoint, which is what lets the emitted case
+    say `unique`.
+    """
+    want = {}
+    for pat, target, _ in ordered:
+        for op in _encodings(_norm(pat)):
+            want.setdefault(op, target)
+
+    got = {}
+    for pat, target, mnem in parallel:
+        for op in _encodings(_norm(pat)):
+            if op in got:
+                raise AssertionError(
+                    'opcode %04x matches two parallel patterns: %s and %s'
+                    % (op, got[op][1], mnem))
+            got[op] = (target, mnem)
+
+    if set(want) != set(got):
+        only = sorted(set(want) ^ set(got))[:4]
+        raise AssertionError('the two tables cover different opcodes: %s'
+                             % ' '.join('%04x' % o for o in only))
+    for op, target in want.items():
+        if got[op][0] != target:
+            raise AssertionError('opcode %04x: ordered says %r, parallel %r'
+                                 % (op, target, got[op][0]))
+
+
 def emit_decode(patterns, labels, rq):
     w = isa.req_width()
     nib = (w + 3) // 4
     ndistinct = len({rq[labels[t]] for _, t, _ in patterns})
+    parallel = make_disjoint(patterns)
+    check_disjoint(patterns, parallel)
     out = [BANNER, '',
            '// Opcode to microcode entry point, and that entry point\'s',
            '// request preview.',
            '//',
-           '// Ordered: the first matching pattern wins, which is how forms',
-           '// distinguished only by a field value -- BRA.W is BRA.B with a',
-           '// displacement byte of zero -- are separated here rather than by',
-           '// a run-time test in the microcode.',
+           '// No pattern here overlaps another, so the order of the arms does',
+           '// not matter. The source in tools/ucode/program.py *is* ordered --',
+           '// the first match wins, which is how forms distinguished only by a',
+           '// field value are separated there rather than by a run-time test in',
+           '// the microcode, BRA.W being BRA.B with a displacement byte of zero',
+           '// -- and assemble.py resolves that order into disjoint patterns',
+           '// here, proving over all 65536 opcodes that the two decode alike.',
+           '//',
+           '// Because a casez cannot say "not zero", the branch group is the',
+           ('// one that pays for it: %d patterns become %d. Every other'
+            % (len(patterns), len(parallel))),
+           '// pattern passes through untouched.',
+           '//',
+           '// Why bother, when the first match winning is what the hardware',
+           '// wants: "ordered" synthesises as a priority chain unless the tool',
+           '// flattens it, and not every tool does. Quartus builds it as',
+           '// written -- doc/implementation.md has that measurement.',
            '//',
            '// The preview comes out of here rather than out of a second store',
            '// read at `entry`, which is what used to happen and what made the',
@@ -287,12 +436,11 @@ def emit_decode(patterns, labels, rq):
            '  always_comb begin',
            '    illegal = 1\'b0;',
            '    casez (op)']
-    for pat, target, mnem in patterns:
+    for pat, target, mnem in parallel:
         if target not in labels:
             raise KeyError('opcode %s targets unknown label %r' % (mnem, target))
-        svpat = pat.replace('-', '?')
         out.append("      16'b%s: begin entry = %d'd%-4d; prev = %d'h%0*x; end  // %s"
-                   % (svpat, isa.UADDR_BITS, labels[target],
+                   % (pat, isa.UADDR_BITS, labels[target],
                       w, nib, rq[labels[target]], mnem))
     out.append('      default: begin')
     out.append("        entry   = %d'd%d;  // illegal" % (isa.UADDR_BITS,

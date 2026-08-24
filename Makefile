@@ -43,9 +43,9 @@ APART    ?= 10M50DAF484C7G
 # the default is all of them.
 AJOBS    ?= 8
 # The Fmax `make quartus` must still reach. A floor measured here, not a target:
-# doc/implementation.md says why this part gets 4.26 MHz where the Artix-7 gets
-# 21.7, and what would have to change for that to move.
-AFMAX    ?= 4.10
+# doc/implementation.md has the number and what moved it. It was 4.26 MHz until
+# the decode table stopped being a priority chain.
+AFMAX    ?= 18.50
 
 .PHONY: suska-ssw suska-fault suska-rte all lint lint-iverilog lint-verilator lint-yosys synth sim check clean dirs \
         lint-questa lint-quartus quartus \

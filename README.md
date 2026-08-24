@@ -398,8 +398,7 @@ make timing     # AC-specification conformance
 make synth impl # Vivado synthesis, then place and route
 make paths      # what limits the frequency, unreachable routes excluded
 make lint-questa lint-quartus   # two more front-ends, from the Altera tools
-make quartus    # ... and the MAX 10 fit, for a second frequency — 4.26 MHz,
-                #     and doc/implementation.md says which one file that is
+make quartus    # ... and the MAX 10 fit, for a second frequency — 19.32 MHz
 make check      # the gate: ucode-check, lint, audit, sim, programs, AC timing
 ```
 

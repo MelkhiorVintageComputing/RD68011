@@ -180,6 +180,7 @@ depends on which combinations the design happens to exercise.
 | iverilog | `unique`/`unique0` on a case are parsed but ignored, with a "sorry" note per occurrence | harmless; keep them for the other five |
 | iverilog | adjacent string literals do not concatenate (`"a" "b"` is a syntax error) | write one string |
 | Quartus | a package-scoped constant inside a module instantiation's **port expression** is not resolved: it becomes an implicit one-bit net named after the constant, `Warning (10236)`, and the netlist quietly stops matching the source | hoist the expression into a named signal and connect that; see below |
+| Quartus | an ordered `casez` -- first match wins -- is built as a priority chain and not flattened. 1401 patterns became 498 logic levels and 4.67 MHz where Vivado and yosys flatten the same source | emit disjoint patterns instead; `tools/ucode/assemble.py` resolves the order once, in Python, and proves the two tables equivalent over all 65536 opcodes |
 | Questa | a variable read above its own declaration is `(vlog-2730) Undefined variable`, then `(vlog-2388) already declared in this scope` at the declaration | declare before first use; iverilog and Verilator invent an implicit net instead |
 | all of them | a testbench that samples `retire` just after the rising edge misses the end of a bus-cycle microword, because the bus unit's output stage is negedge-clocked and the acknowledge only settles in the second half of the clock | sample instruction boundaries on the *falling* edge, as `rd68011_core_harness.svh` does |
 

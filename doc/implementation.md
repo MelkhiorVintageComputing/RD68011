@@ -40,49 +40,80 @@ M9K blocks where the Artix-7 has six-input LUTs and 36 kbit block RAMs.
 
 | | |
 |---|--:|
-| Fmax | **4.26 MHz** |
-| Setup slack | −187 ns against 48 ns |
-| Hold slack | 0.320 ns |
-| Logic elements | 37366 (75 % of the part) |
+| Fmax | **19.32 MHz** |
+| Setup slack | −1.879 ns against 48 ns |
+| Hold slack | 0.322 ns |
+| Logic elements | 35924 (72 % of the part) |
 | Registers | 1357 |
 | Embedded 9-bit multipliers | 4 (1 %) |
 | Memory bits | 0 (of 1677312) |
 
-It fits, and it is nowhere near the frequency. **The whole of the gap is one
-generated file**, and it is worth stating precisely because it is the first
-measurement that says the design's speed is not portable.
+19.32 MHz against the Artix-7's 21.7, on a part two device generations older
+and with four-input logic. It does not quite reach 48 ns -- it wants about 52 --
+and `make quartus` gates on the Fmax floor in the Makefile rather than on that
+slack, which is a regression test rather than an aspiration.
 
-The worst path is `upc[0]` to `cur_addr[30]`, 235 ns of data delay through
-**498 logic levels**, and 940 of the nodes on it are inside `u_decode`.
-`rtl/gen/rd68011_decode_rom.sv` is a `casez` of 1401 patterns whose header says
-"the first matching pattern wins" -- it is a priority decoder by construction,
-which is how forms distinguished only by a field value are separated there
-rather than by a run-time test in the microcode. Vivado and yosys both flatten
-it. Quartus Lite builds it as written, a cascade.
+Quartus's Fmax is the more trustworthy of the two frequency figures here. The
+section below on reading a frequency off a slack explains why `1000 / (period −
+slack)` is wrong for this design; Quartus computes Fmax by scaling both clock
+edges together, keeping the duty cycle, which is exactly what an edge-to-edge
+path needs.
 
-Measured on the decoder alone, registered on both sides, nothing else in the
-project present: **4.67 MHz**, against 4.26 for the whole core. The decoder is
-not the largest contributor to the critical path, it is very nearly all of it.
-`OPTIMIZATION_TECHNIQUE SPEED` with `OPTIMIZATION_MODE "AGGRESSIVE
-PERFORMANCE"` moves it to 4.77 MHz, so this is structural and not a flow
-setting. `quartus_syn`, the newer engine that might do better, is Pro-only.
+**It was 4.26 MHz.** The first fit came in a factor of four and a half lower
+than this, and the whole of the difference was one generated file. It is worth
+recording, because it is the only place so far where the design's speed turned
+out not to be portable, and because what fixed it changed no logic at all.
 
-Two consequences, one for the flow and one for the design:
+The worst path was `upc[0]` to `cur_addr[30]`, 235 ns through **498 logic
+levels**, with 940 of the nodes on it inside `u_decode`.
+`rtl/gen/rd68011_decode_rom.sv` was a `casez` of 1401 patterns whose header said
+"the first matching pattern wins" -- a priority decoder by construction, which
+is how forms distinguished only by a field value are separated there rather
+than by a run-time test in the microcode. Vivado and yosys both flatten that.
+Quartus Lite builds it as written, a cascade. Measured on the decoder alone,
+registered on both sides with nothing else present: **4.67 MHz**, against 4.26
+for the whole core -- the decoder was not the largest contributor to the
+critical path, it was very nearly all of it. `OPTIMIZATION_TECHNIQUE SPEED` with
+`OPTIMIZATION_MODE "AGGRESSIVE PERFORMANCE"` moved it to 4.77, so it was
+structural rather than a flow setting, and `quartus_syn`, the newer engine that
+might do better, is Pro-only.
 
-- `make quartus` does **not** gate on setup slack against 48 ns, because that
-  number is the Artix-7's target and says nothing here. It gates on hold, which
-  no clock period fixes, and on `AFMAX` -- an Fmax floor measured on this part,
-  so a regression is caught while the known shortfall is not reported as a
-  failure every time.
-- The fix, if the MAX 10 is ever a real target, is in `tools/ucode/assemble.py`
-  rather than in `rtl/`: emit patterns that do not overlap, so the decoder is a
-  parallel case and no tool has to flatten a priority chain. The overlap earns
-  its keep in only a handful of places -- `BRA.W` before `BRA.B` is the example
-  the file's own header gives -- so resolving it at generation time is
-  bookkeeping, not a redesign. Nothing here has tried it.
+`tools/ucode/assemble.py` now resolves the order into disjoint patterns before
+emitting them. The source in `program.py` stays ordered, because that is the
+readable way to say that `BRA.W` is `BRA.B` with a displacement byte of zero;
+`make_disjoint` subtracts each pattern from the ones before it, and
+`check_disjoint` proves over all 65536 opcodes that the two tables decode alike
+and that no two parallel patterns overlap. Only the branch group actually
+overlapped -- `BRA.B`, `BSR.B`, `Bcc.W` and `Bcc.B`, four patterns of 1401,
+530 encodings of 65536. Because a `casez` cannot say "not zero", a displacement
+byte that must be non-zero becomes eight patterns and a `Bcc` that must not be
+`BRA` or `BSR` becomes three; 1401 patterns become 1440.
 
-The fit takes the better part of two hours at 75 % utilisation, which is why
-`make quartus` is no more part of `make check` than `make impl` is.
+What that bought, all of it measured:
+
+| | ordered | disjoint |
+|---|--:|--:|
+| MAX 10, decoder alone | 4.67 MHz | **41.87 MHz** |
+| MAX 10, whole core | 4.26 MHz | **19.32 MHz** |
+| MAX 10, logic elements | 37366 (75 %) | 35924 (72 %) |
+| MAX 10, worst path | 498 logic levels | 29 |
+| MAX 10, fit time | about two hours | seven minutes |
+| Artix-7, setup slack at 48 ns | 1.994 ns | 2.009 ns |
+| Artix-7, LUTs | 14416 | 14346 |
+| Artix-7, `u_decode` LUTs | 1130 | 1080 |
+
+**On the Artix-7 it changed nothing, and that was the expectation.** The
+decoder appears in none of the 400 worst paths `make impl` reports, before or
+after; `doc/critical-path.md` records that it stopped being the limit two
+changes ago, when the next opcode began decoding early and the previews moved
+into the microword. Fifteen picoseconds is noise against the 1.3 ns spread that
+document measured between two runs of the same design. The 50 LUTs are real but
+uninteresting.
+
+The MAX 10's worst path is now `req_rdata[6]` to `cur_addr[29]` in 29 logic
+levels -- the same family as the Artix-7's, read data through the datapath into
+the next address. The two tools now agree about what limits this design, which
+they did not before.
 
 ### Where the area goes
 
