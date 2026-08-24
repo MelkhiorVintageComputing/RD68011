@@ -241,7 +241,7 @@ to 45 ns of room on the binding constraint.
 ### Bugs this found
 
 Worth listing because each was found by exactly one thing and would have
-survived everything else — and six of them by something outside the five: the
+survived everything else — and seven of them by something outside the five: the
 AC-timing work, a real machine, someone reading the source, and asking what the
 tests did not cover:
 
@@ -271,6 +271,13 @@ tests did not cover:
   Found by asking which parts of the design nothing tested: the reference sweep
   skips every vector whose reference took an exception, and trace had one
   directed test.
+- A longword read whose two bus cycles straddled a bus grant lost one of them.
+  The bus unit decided whether to start the next cycle from the arbitration
+  unit's *current* state while the output enables followed its *next* one, so on
+  the single edge where the arbiter reached `ARB_GRANT` the cycle began anyway
+  and then ran with its address bus in high impedance. Found by the same machine
+  again, netbooting with an Ethernet controller doing DMA — a corrupted pointer
+  every few thousand reads, and three different deaths from one bitstream.
 
 ---
 

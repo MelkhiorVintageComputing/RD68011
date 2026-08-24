@@ -588,6 +588,92 @@ visible in one line of state at the moment it is taken. "The instruction was
 actually executed" is not: it is the absence of another exception, which no
 single edge can see. The directed cases are the statement.
 
+## A fifth bug the same machine found, in the seam between two bus cycles
+
+**A longword read across a bus grant lost a word.** Reported from the same
+Sun-2/50 replica, netbooting, with an Intel 82586 doing DVMA through the MMU
+while the CPU runs the boot PROM. A longword read every few thousand came back
+with one half replaced by something else -- almost always a pointer, because
+`moveal (An),%a0` is what reads longwords -- and the machine then died three
+different ways from the same bitstream: a timeout bus error at a wild address,
+an illegal instruction at a PC holding ordinary code, or a double bus fault and
+the watchdog. It only bites when a second bus master is active, so a machine
+with no DMA never sees it.
+
+The report eliminated the machine before blaming the core, which is what made it
+worth taking at face value: 295,827 CPU reads on a full boot, every one checked
+against what memory held, none wrong -- and the check made to fail first, by
+re-introducing a memory-bridge bug, which turned the same boot into ten wrong
+out of the same 295,827. Correct data reaching the pins, wrong data retained.
+
+### The mechanism
+
+A 68010 longword is two bus cycles and UM 5.2.1 lets a master have the bus
+between them, so the bus unit has to decide, at the rising edge that ends S7,
+whether to start the next cycle or hand the buses over. It made that decision
+from `arb_bus_released`, built from the arbitration unit's **current** state.
+The output enables were registered from `arb_bus_released_nxt`, built from its
+**next** state -- deliberately, and `doc/bus-timing-compliance.md` explains why
+that is the right choice for them.
+
+For all but one alignment of BR the two agree. The exception is the edge on
+which the arbiter itself moves from `ARB_IDLE` to `ARB_GRANT`, because that is
+the same rising edge that ends S7 and starts the next cycle: the state machine
+looked at `ARB_IDLE`, saw no reason not to start, and went to S0; the enables
+looked at `ARB_GRANT`, saw a grant, and one clock later turned every output off.
+The cycle then ran S2 through S7 with the address bus in high impedance and the
+strobes released -- so nothing ever reached memory, and the word the transfer
+was waiting for was whatever the bus happened to carry. On this board that is
+the alternate master's data, which is why the reporter saw a plausible-looking
+wrong pointer rather than an obviously dead one.
+
+`arb_freeze` exists to prevent exactly this and does not reach it. It stops the
+arbitration state machine *changing* during S0 and S1 -- the two states in which
+AS is not yet asserted, so `arb_bus_released` cannot tell a cycle in flight from
+an idle bus -- but it says nothing about the arbiter already being in
+`ARB_GRANT` when S0 begins, and on this one edge it arrives there simultaneously.
+
+### The fix
+
+`arb_bus_released` is gone; there is one signal, and it is the next-state form
+the output enables already used. The bus state machine now decides from it too,
+so `st_p` is `ST_ARB` on exactly the clocks the outputs are released rather than
+on a set of clocks that nearly matches. Everything it is built from is a
+register, so feeding a next-state signal into the state machine's own next state
+closes no loop.
+
+One side effect, and it is the same inconsistency read the other way: the bus
+unit used to hold `ST_ARB` for one clock after handing the buses back, so a
+cycle resumed one clock later than the enables allowed. It now resumes as soon
+as it may. Specifications 57 and 57A are about when the pins are *driven*, which
+never changed, and `sim/tb/bus_arb_tb.sv` measures both at 2.0 clocks either way.
+
+### What tests it
+
+`sim/tb/core_arb_tb.sv` sweeps the grant across a whole transfer, half a clock
+at a time, in both arbitration protocols, over a `MOVE.L` (one seam) and a
+`MOVEM.L` of two registers (three), with an alternate master driving the data
+bus while it owns it -- so a re-latch shows up as wrong data and not merely as
+high impedance. Ninety-six episodes, and it counts how many actually handed the
+bus over, because a sweep that never released it would pass without testing
+anything.
+
+The sweep step is the point. The defect needed BR recognised on one specific
+rising edge, so it occupies exactly one clock of each seam: six of the
+ninety-six episodes fail before the fix, and a sweep stepping a whole clock from
+an arbitrary start would find it or miss it by luck. The three MOVEM.L seams
+fail at 1, 9 and 17 half clocks, four clocks apart, which is the cycle length --
+that regularity is what says the mechanism is the seam and not the instruction.
+
+The report's own asymmetry -- "the word read before the grant is lost, the word
+read after it is kept" -- is the one thing in it that does not survive. It was
+offered as a lead rather than a diagnosis, and the sweep shows the corrupted
+word is whichever one *begins* on the grant edge; which side of the grant that
+falls on depends only on where BR lands.
+
+No harness invariant. What went wrong is a legal bus state entered at an illegal
+moment, and every pin is individually plausible while it happens.
+
 ## Not yet implemented
 
 Nothing. Every instruction, every exception and both of the MC68010's own

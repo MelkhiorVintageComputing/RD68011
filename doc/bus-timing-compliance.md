@@ -182,9 +182,20 @@ the current state instead costs an extra clock at each end of the handover;
 that would still satisfy 57 and 57A, which have no maximum, but it would not be
 what the part does.
 
+The bus state machine reads the **same** next-state signal, and that is not a
+detail. It once read a current-state one, and the two forms disagreed on
+exactly one edge — the rising edge that both ends S7 and takes the arbiter from
+`ARB_IDLE` to `ARB_GRANT`. There the state machine started a cycle the enables
+then turned off underneath it, which cost a longword read one of its two words.
+`doc/divergences.md` has the whole account. `ST_ARB` is now occupied on exactly
+the clocks the outputs are released.
+
 Figure 5-18 note 1 — the arbitration state machine does not advance while the
 bus is in S0 or S1 — is implemented and delays BG by one rising edge in that
-window (figure 5-21).
+window (figure 5-21). Note that it is a freeze on *changing* state and not a
+guarantee that no grant is outstanding: S0 and S1 are the states in which AS has
+not been asserted yet, so nothing else in the unit can tell them from an idle
+bus, and both halves of the rule above are needed.
 
 ## Output enables — UM table 3-4
 

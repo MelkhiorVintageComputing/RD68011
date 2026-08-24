@@ -190,8 +190,14 @@ module rd68011_biu #(
   assign vpa_a   = ~vpa_n_i;
 
   // Arbitration, declared here because the state machine consults it.
-  logic arb_bus_released;   // buses are the alternate master's
-  logic arb_hold;           // do not start a new cycle
+  //
+  // Only the *next* form exists, and every use below is deliberate. The output
+  // enables are registered from it, so after any rising edge the buses belong
+  // to the alternate master exactly when this was high at that edge -- and the
+  // state machine has to make the same decision from the same signal, or the
+  // two disagree for a clock. They did: see the comment above `arb_freeze`.
+  logic arb_bus_released_nxt;  // after this edge, the buses are the master's
+  logic arb_hold;              // do not start a new cycle
 
   // True at the rising edge that starts a cycle with a fresh request, as
   // opposed to a retry rerunning the previous one (UM 5.4.2).
@@ -219,7 +225,7 @@ module rd68011_biu #(
   always_comb begin
     if (term_retry)                   after_cycle = rd68011_pkg::ST_RETRY;
     else if (term_halt)               after_cycle = rd68011_pkg::ST_HALT;
-    else if (arb_bus_released)        after_cycle = rd68011_pkg::ST_ARB;
+    else if (arb_bus_released_nxt)    after_cycle = rd68011_pkg::ST_ARB;
     else if (req_valid && !arb_hold)  after_cycle = rd68011_pkg::ST_S0;
     else                              after_cycle = rd68011_pkg::ST_IDLE;
   end
@@ -232,7 +238,7 @@ module rd68011_biu #(
     st_p_nxt = st_p;
     unique case (st_n)
       rd68011_pkg::ST_IDLE:
-        if (arb_bus_released)                st_p_nxt = rd68011_pkg::ST_ARB;
+        if (arb_bus_released_nxt)            st_p_nxt = rd68011_pkg::ST_ARB;
         else if (!halt_sync_n)               st_p_nxt = rd68011_pkg::ST_HALT;
         else if (req_valid && !arb_hold)     st_p_nxt = rd68011_pkg::ST_S0;
         else                                 st_p_nxt = rd68011_pkg::ST_IDLE;
@@ -268,20 +274,20 @@ module rd68011_biu #(
 
       // Halted: UM 5.4.3, resume when HALT is negated. Arbitration still runs.
       rd68011_pkg::ST_HALT:
-        if (arb_bus_released)                st_p_nxt = rd68011_pkg::ST_ARB;
+        if (arb_bus_released_nxt)            st_p_nxt = rd68011_pkg::ST_ARB;
         else if (!halt_sync_n)               st_p_nxt = rd68011_pkg::ST_HALT;
         else                                 st_p_nxt = rd68011_pkg::ST_IDLE;
 
       // Bus granted away: UM 5.2.
       rd68011_pkg::ST_ARB:
-        if (arb_bus_released)                st_p_nxt = rd68011_pkg::ST_ARB;
+        if (arb_bus_released_nxt)            st_p_nxt = rd68011_pkg::ST_ARB;
         else if (!halt_sync_n)               st_p_nxt = rd68011_pkg::ST_HALT;
         else                                 st_p_nxt = rd68011_pkg::ST_IDLE;
 
       // Retry: UM 5.4.2, rerun the cycle once HALT is negated.
       rd68011_pkg::ST_RETRY:
         if (!halt_sync_n)                    st_p_nxt = rd68011_pkg::ST_RETRY;
-        else if (arb_bus_released)           st_p_nxt = rd68011_pkg::ST_ARB;
+        else if (arb_bus_released_nxt)       st_p_nxt = rd68011_pkg::ST_ARB;
         else                                 st_p_nxt = rd68011_pkg::ST_S0;
 
       default:                               st_p_nxt = rd68011_pkg::ST_IDLE;
@@ -554,8 +560,29 @@ module rd68011_biu #(
   arb_state_e arb_st;
   arb_state_e arb_st_nxt;
   logic       arb_freeze;
-  logic       arb_bus_released_nxt;
 
+  // S0 and S1 are the two states of a cycle in which AS has not been asserted
+  // yet, so `arb_bus_released_nxt` -- which reads AS to know whether a cycle is
+  // in flight -- cannot tell them from an idle bus. Freezing the arbitration
+  // state across them is what stops a request arriving there from handing the
+  // buses away in the middle of the cycle that has just begun.
+  //
+  // The freeze runs from the rising edge entering S0 to the falling edge
+  // entering S3, because `st_n` is still ST_S1 through the first half of S2 --
+  // and AS is asserted at the rising edge entering S2. There is no gap.
+  //
+  // Freezing the state machine is not by itself enough, and that is the bug
+  // this shape had: it stops the arbiter *changing* state during S0 and S1, but
+  // says nothing about it already being in ARB_GRANT when S0 begins. The two
+  // things happen on the same edge -- the rising edge that ends S7 both starts
+  // the next cycle and lets ARB_IDLE go to ARB_GRANT -- so the cycle would
+  // start with the buses about to be released, and one clock later every output
+  // enable dropped with AS and the strobes still asserted. A longword read is
+  // the shortest thing that shows it: the second word's address never reached
+  // memory. What closes it is that the state machine now decides from
+  // `arb_bus_released_nxt`, the same signal the output enables are registered
+  // from, so a cycle can never start on an edge that hands the buses over.
+  // sim/tb/core_arb_tb.sv sweeps the grant across a longword read.
   assign arb_freeze = (st_p == rd68011_pkg::ST_S0) || (st_n == rd68011_pkg::ST_S1);
 
   always_comb begin
@@ -582,14 +609,17 @@ module rd68011_biu #(
   // The buses go to the alternate master once the grant is out and AS has been
   // negated (figure 5-18 note 2), and stay there until the acknowledge is gone.
   //
-  // The output enables are registered from the NEXT arbitration state, so they
-  // change on the same rising edge as the state itself. UM 5.3: "State changes
-  // (valid outputs) occur on the next rising edge of the clock after the
-  // internal signal is valid." Registering from the current state instead would
-  // cost an extra clock at both ends of the handover -- still inside
-  // specifications 57 and 57A, which have no maximum, but slower than the part.
-  assign arb_bus_released     = ((arb_st     == ARB_GRANT) && as_n_o) ||
-                                 (arb_st     == ARB_ACK);
+  // Built from the NEXT arbitration state, so it says what will be true after
+  // the coming rising edge. UM 5.3: "State changes (valid outputs) occur on the
+  // next rising edge of the clock after the internal signal is valid." Building
+  // it from the current state instead would cost an extra clock at both ends of
+  // the handover -- still inside specifications 57 and 57A, which have no
+  // maximum, but slower than the part.
+  //
+  // Everything it is made of is a register, so a next-state signal is safe to
+  // feed the bus state machine's own next state: there is no loop to close.
+  // That is what lets `st_p` be ST_ARB on exactly the clocks the output enables
+  // are off, rather than on a set of clocks that nearly matches.
   assign arb_bus_released_nxt = ((arb_st_nxt == ARB_GRANT) && as_n_o) ||
                                  (arb_st_nxt == ARB_ACK);
 
