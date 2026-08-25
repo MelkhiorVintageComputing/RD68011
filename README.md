@@ -241,7 +241,7 @@ to 45 ns of room on the binding constraint.
 ### Bugs this found
 
 Worth listing because each was found by exactly one thing and would have
-survived everything else — and seven of them by something outside the five: the
+survived everything else — and eight of them by something outside the five: the
 AC-timing work, a real machine, someone reading the source, and asking what the
 tests did not cover:
 
@@ -278,6 +278,15 @@ tests did not cover:
   and then ran with its address bus in high impedance. Found by the same machine
   again, netbooting with an Ethernet controller doing DMA — a corrupted pointer
   every few thousand reads, and three different deaths from one bitstream.
+- A faulted access that addressed through the address output buffer resumed at
+  the wrong address. The buffer is the one thing a re-executed microword cannot
+  recompute — it exists for the accesses that prefetch first and so no longer
+  have the register field that named their address — and the frame build
+  destroyed it before recording it, because every word of the frame is written
+  through the same address-unit update that loads it. The resumed access went
+  into the frame instead. Reported from the same machine as `MOVE.L Dn,-(An)`
+  failing to resume; it is also every read-modify-write on `(An)`, and the
+  return-address push of `JSR`, `BSR`, `PEA` and `LINK`.
 
 ---
 

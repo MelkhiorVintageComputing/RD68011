@@ -674,6 +674,93 @@ falls on depends only on where BR lands.
 No harness invariant. What went wrong is a legal bus state entered at an illegal
 moment, and every pin is individually plausible while it happens.
 
+## A sixth bug, in the one register the frame recorded after destroying it
+
+**A faulted access that addressed through the address output buffer resumed at
+the wrong address.** Reported from a Sun-2/120 replica on an Artix-7, from a
+probe written to exonerate `rts`: a `movel %d1,%a0@-` whose write bus-errors is
+not resumed by `RTE`, while `movel #imm,(abs)` and `movel %a0@+,%d1` -- the same
+handler, the same page, the same privilege, the same boot -- both are. The
+machine continued inside the boot PROM with a garbage `a5`, and surfaced as an
+address error at a stale PROM address.
+
+The report isolated its variable carefully and stopped where its evidence
+stopped, which was the right call and also why it under-called the scope: it had
+one instruction and two controls, and concluded the predecrement was what was
+left. The predecrement is not the variable. `MOVE.L D1,(A0)` and
+`MOVE.L D1,(A0)+` resume; `MOVE.L -(A0),D1` -- predecrement as a *source* --
+resumes; and `NOT.B (A0)`, `JSR (A0)`, `BSR`, `PEA` and `LINK` all fail exactly
+as `MOVE.L D1,-(A0)` does. What they have in common is not an addressing mode.
+
+### The mechanism
+
+Continuation works by re-executing the microword the fault aborted: nothing that
+microword would have written was written, so running it again reissues the same
+request. That holds as long as the microword can recompute its address, which
+almost all of them can, because they name it through a register the frame saves
+and restores.
+
+The exceptions are the microwords that prefetch *before* they access. By the
+time those run, `ir` holds the next instruction and the register field that
+named the address is gone, so they address through `ea_latch` -- the address
+output buffer -- instead. That is 257 microcode labels: MOVE to `-(An)` in all
+its source and size combinations, every read-modify-write on `(An)`, `(An)+` and
+`-(An)` (the whole `ADDI`/`ANDI`/`ADDQ`/`BCHG`/`CLR`/`NEG`/`NOT`/`Scc`/shift
+family), the `-(Ay),-(Ax)` multiprecision forms, and the return-address pushes
+of `JSR`, `BSR`, `PEA` and `LINK`.
+
+The frame has a word for that latch -- `SP+36`/`SP+38`, ours, and
+`doc/checkpoint.md` has listed it in the checkpoint set since P5. The frame
+build destroyed it before writing it. Every word of the frame is written through
+an `aupd` on the stack pointer, and an `aupd` is exactly what loads the latch,
+so the first frame write overwrote it and the ten-writes-later word that was
+meant to record it recorded a stack address instead. `RTE` then made the same
+mistake in reverse: it restored the latch mid-walk, and the nineteen remaining
+frame reads -- post-increments on the stack pointer, every one of them an
+`aupd` -- overwrote it again before the walk was over.
+
+So the resumed access went wherever the frame had reached. Measured on
+`MOVE.L D1,-(A0)` with the write to `$4006` faulted: the frame recorded
+`$2FEE`, `RTE` restored `$2FFE`, and the two write cycles that should have gone
+to `$4006` and `$4004` went to `$3000` and `$2FFE` -- straight into the
+supervisor stack under the handler. Nothing announces itself; the return address
+is simply not what was pushed, which is the report's "continues somewhere
+unrelated" seen from the other end, and why its four runs died three different
+ways.
+
+### The fix
+
+A holding register, `ea_save`, on the same footing as `fault_addr`, `dib` and
+`upc_save`: the fault takes a copy of the latch before the frame build's own
+accesses start loading it, the frame is written from that copy, `RTE` restores
+into that copy, and the `RESUME` microword moves it back into the latch. `RESUME`
+is the only correct moment -- it is the first point at which no further `aupd`
+is coming -- and it does no access of its own, so nothing competes for it.
+
+Two new microcode encodings, `SRC EALSAVE` and `DST EALSAVE`; the microcode
+store is unchanged at 6674 words of 146 bits.
+
+### What tests it
+
+`sim/tb/core_fault_tb.sv` faults five accesses that address through the latch --
+both write cycles of `MOVE.L D1,-(A0)`, `MOVE.W D1,-(A0)`, the write-back of
+`NOT.B (A0)`, and the return address `JSR (A0)` pushes -- and checks the faulted
+cycle was reissued and that nothing landed in the frame's address range
+afterwards. The read-modify-write arms its bus error only once the core drives a
+write: it reads and writes the same address, and arming from the start faults
+the *read*, which addresses through the register and was never affected. That
+version of the case passed before the fix and after it, which is worth recording
+because the file already had one of those.
+
+The existing test at "the data output buffer survives" faults
+`MOVE.L D0,-(A0)` and passed throughout. It checked the two halves in memory,
+and the slave model has no bus-error input -- a faulted write lands in its
+memory anyway -- so both halves were right whether or not the write was ever
+reissued. The cycle-count check that the rest of the file uses for continuation
+was missing there. It is there now, and it fails before the fix.
+
+Ten checks fail with the fix reverted, across all five cases plus that one.
+
 ## Not yet implemented
 
 Nothing. Every instruction, every exception and both of the MC68010's own

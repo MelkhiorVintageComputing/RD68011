@@ -175,6 +175,12 @@ SRC = {
     'FRAMESZ':  45,   # 58, the long frame's size in bytes
     'FRAMEVER': 46,   # 26, the offset of the version word within it
     'MULRES':   47,   # the product, one clock after the microword that started it
+    # The address output buffer as it was when the fault happened, which is
+    # not what `EAL` holds by the time the frame records it: every word of the
+    # frame is written through an `aupd` on the stack pointer, and an `aupd`
+    # is what loads `EAL`. So the fault takes a copy and the frame writes
+    # that. See `ea_save` in rd68011_seq.sv.
+    'EALSAVE':  50,
     # Loop mode (UM appendix A).
     'LOOPIR':   48,   # the one-word instruction the loop is executing
     'LOOPST':   49,   # whether loop mode is running, and which half is next
@@ -259,6 +265,12 @@ DST = {
     # The fault machinery's write side: everything the format $8 frame puts
     # back. Each is a register the checkpoint set names -- doc/checkpoint.md.
     'EAL':     23,
+    # RTE restores the address output buffer into the same holding register
+    # the fault saved it in, not into `EAL` itself: the walk up the frame is
+    # made of post-increments on the stack pointer, and every one of them
+    # would overwrite `EAL` again before the walk was over. RESUME moves it
+    # across at the end.
+    'EALSAVE': 37,
     'IR':      24,
     'IRC':     25,
     'IR_PC':   26,

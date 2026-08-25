@@ -73,6 +73,21 @@ module core_fault_tb;
     end
   endfunction
 
+  // How many write cycles have gone to a range. The frame's own writes are
+  // counted before RTE releases it and subtracted, so what is left is anything
+  // the resumed instruction put there -- which should be nothing.
+  function automatic int writes_between(input logic [23:0] lo,
+                                        input logic [23:0] hi);
+    int n;
+    begin
+      n = 0;
+      for (int k = 0; k < ntr; k = k + 1)
+        if (!tr_rw[k] && ({tr_addr[k], 1'b0} >= lo) && ({tr_addr[k], 1'b0} <= hi))
+          n = n + 1;
+      writes_between = n;
+    end
+  endfunction
+
   task automatic run_until_pc(input logic [31:0] want, input int limit);
     int n;
     begin
@@ -449,6 +464,129 @@ module core_fault_tb;
                {mem.peek(23'h002000), mem.peek(23'h002001)}, 32'h1122_3344);
     expect_u32("long store continued: the register moved once",
                dut.u_seq.regs[8], 32'h0000_4000);
+    // The two checks above cannot see whether the write was actually rerun:
+    // the slave model has no bus-error input, so a faulted write lands in its
+    // memory anyway and the halves are right either way. This one is the
+    // witness, and it is the check the rest of this file uses for continuation.
+    // It was missing here, which is how the defect below went unseen.
+    expect_int("long store continued: the faulted write was attempted twice",
+               hits(24'h004000), 2);
+
+    // ======================================================================
+    // The address output buffer survives, which everything that addresses
+    // through it needs
+    // ======================================================================
+    // Most access microwords name their address through a register, so
+    // re-executing one after a fault recomputes it and the frame never had to
+    // carry it. The ones that cannot are those that prefetch *before* they
+    // access: by then `ir` holds the next instruction and the register field
+    // that named the address has gone, so they address through the latch. That
+    // is MOVE to -(An), every read-modify-write on (An)/(An)+/-(An), and the
+    // stack pushes of JSR, BSR, PEA and LINK -- 257 microcode labels.
+    //
+    // The frame has a word for the latch, but the frame build destroyed it
+    // before recording it: every word of the frame is written through an
+    // `aupd` on the stack pointer, and an `aupd` is what loads the latch. So
+    // the resumed access went to whatever address the frame had reached.
+    // Reported from a Sun-2 replica, as `MOVE.L Dn,-(An)` failing to resume
+    // while `(An)+` and an absolute address both resumed.
+    //
+    // Memory contents cannot witness any of this -- the slave model has no
+    // bus-error input, so a faulted write lands regardless. The cycle count
+    // can, and so can the absence of a write that never belonged on the stack.
+    begin : ea_latch_across_a_fault
+      // op, the address register's value, the faulted address, and the name.
+      // Each runs at 1006 with A0 set up before it and a JMP after it.
+      logic [15:0] ops   [0:4];
+      logic [31:0] a0s   [0:4];
+      logic [23:0] fadr  [0:4];
+      string       names [0:4];
+      // How many cycles that address should see in the whole run: two for an
+      // access that faults and is reissued, three where the instruction reads
+      // the location before writing it back.
+      int          want  [0:4];
+      // How many writes land in the frame's address range once the frame is
+      // released. Zero for the cases whose access belongs elsewhere -- a write
+      // there is the stale latch, which is what the report saw as "resumes
+      // somewhere unrelated". One for JSR, whose reissued cycle is a push and
+      // so belongs on the stack: before the fix it reissued nothing and this
+      // was zero, so the check gates that case from the other side.
+      int          near  [0:4];
+      // Whether the bus error is armed only once the core drives a write. A
+      // read-modify-write reads and writes the same address, so arming it from
+      // the start faults the read -- which addresses through the register and
+      // was never affected. Only the write-back uses the latch.
+      logic        onwr  [0:4];
+      int          k, stray;
+
+      ops[0] = 16'h2101;  a0s[0] = 32'h0000_4008;  fadr[0] = 24'h004006;
+      names[0] = "MOVE.L D1,-(A0), first write";
+      want[0]  = 2;
+      near[0]  = 0;
+      onwr[0]  = 1'b0;
+      ops[1] = 16'h2101;  a0s[1] = 32'h0000_4008;  fadr[1] = 24'h004004;
+      names[1] = "MOVE.L D1,-(A0), second write";
+      want[1]  = 2;
+      near[1]  = 0;
+      onwr[1]  = 1'b0;
+      ops[2] = 16'h3101;  a0s[2] = 32'h0000_4006;  fadr[2] = 24'h004004;
+      names[2] = "MOVE.W D1,-(A0)";
+      want[2]  = 2;
+      near[2]  = 0;
+      onwr[2]  = 1'b0;
+      ops[3] = 16'h4610;  a0s[3] = 32'h0000_4004;  fadr[3] = 24'h004004;
+      names[3] = "NOT.B (A0), the write-back of a read-modify-write";
+      want[3]  = 3;
+      near[3]  = 0;
+      onwr[3]  = 1'b1;
+      ops[4] = 16'h4E90;  a0s[4] = 32'h0000_4444;  fadr[4] = 24'h002FFE;
+      names[4] = "JSR (A0), the return address pushed";
+      want[4]  = 2;
+      near[4]  = 1;
+      onwr[4]  = 1'b0;
+
+      for (k = 0; k < 5; k = k + 1) begin
+        setup();
+        //  1000: MOVEA.L #a0,A0
+        //  1006: MOVE.L #$5EED1234,D1
+        //  100C: the access that faults
+        //  100E: JMP to the handler-done marker
+        poke_w(23'h000800, 16'h207C);  poke_l(23'h000801, a0s[k]);
+        poke_w(23'h000803, 16'h223C);  poke_l(23'h000804, 32'h5EED_1234);
+        poke_w(23'h000806, ops[k]);
+        poke_w(23'h000807, 16'h4EF9);  poke_l(23'h000808, H_DONE);
+        // Where JSR jumps to, so that case reaches the marker as well.
+        poke_w(23'h002222, 16'h4EF9);  poke_l(23'h002223, H_DONE);
+        poke_w(H_BUSERR[23:1], 16'h4E73);   // the handler is a bare RTE
+        berr_en   = !onwr[k];
+        berr_addr = fadr[k][23:1];
+        core_start();
+        if (onwr[k]) begin
+          fork
+            begin : arm_on_write
+              @(negedge as_n_o);
+              wait (rw_o === 1'b0);
+              berr_en = 1'b1;
+            end
+            run_until_pc(H_BUSERR, 1500);
+          join_any
+          disable arm_on_write;
+        end
+        run_until_pc(H_BUSERR, 1500);
+        berr_en = 1'b0;
+        // Everything the frame build itself wrote, before RTE releases it.
+        stray = writes_between(24'h002F00, 24'h003000);
+        run_until_pc(H_DONE, 2000);
+        expect_int({names[k], ": the faulted cycle was reissued"},
+                   hits(fadr[k]), want[k]);
+        // A resumed access that went to the stale latch lands in the frame's
+        // own address range, which nothing after the frame is released should
+        // touch. That is the shape the report saw as "resumes somewhere
+        // unrelated": the stack under the handler quietly rewritten.
+        expect_int({names[k], ": what was written near the stack after it"},
+                   writes_between(24'h002F00, 24'h003000) - stray, near[k]);
+      end
+    end
 
     // ======================================================================
     // A frame this processor did not write -- UM 6.4's version check

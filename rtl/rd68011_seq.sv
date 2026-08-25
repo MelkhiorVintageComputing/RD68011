@@ -135,6 +135,20 @@ module rd68011_seq (
   logic [15:0] ssw;          // the special status word, UM figure 6-9
   logic [31:0] fault_addr;   // the address the faulted access used
   logic [15:0] dib;          // the data input buffer
+  // The address output buffer as the fault found it. `ea_latch` itself cannot
+  // be trusted to still hold it: every word of the frame is written through an
+  // `aupd` on the stack pointer, and an `aupd` is what loads the latch, so the
+  // first frame write destroys it. This is taken at the fault, the frame is
+  // written from it, RTE restores into it, and RESUME moves it back into the
+  // latch once the walk up the frame is finished -- which is the only moment
+  // no further `aupd` is coming to overwrite it.
+  //
+  // It matters for the access microwords that address through the latch rather
+  // than through a register: MOVE to -(An) and the read-modify-writes, which
+  // prefetch before they write and so no longer have the register field that
+  // named the address. Everything else recomputes its address on re-execution
+  // and never noticed.
+  logic [31:0] ea_save;
   logic [rd68011_ucode_pkg::UADDR-1:0] upc_save;
   logic        rr_flag;      // the rerun flag RTE read out of a frame
   logic        rerun_skip;   // ... applied to the one microword it resumes
@@ -647,6 +661,7 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_ASRC_SCC:      a_bus = {32{cc_true}};
       rd68011_ucode_pkg::U_ASRC_BIT7:     a_bus = 32'h0000_0080;
       rd68011_ucode_pkg::U_ASRC_EAL:      a_bus = ea_latch;
+      rd68011_ucode_pkg::U_ASRC_EALSAVE:  a_bus = ea_save;
       rd68011_ucode_pkg::U_ASRC_SRSAVE:   a_bus = {16'd0, sr_save};
       rd68011_ucode_pkg::U_ASRC_VBR:      a_bus = vbr;
       rd68011_ucode_pkg::U_ASRC_VECOFF:   a_bus = {22'd0, vec_num, 2'd0};
@@ -691,6 +706,7 @@ module rd68011_seq (
       rd68011_ucode_pkg::U_BSRC_SCC:      b_bus = {32{cc_true}};
       rd68011_ucode_pkg::U_BSRC_BIT7:     b_bus = 32'h0000_0080;
       rd68011_ucode_pkg::U_BSRC_EAL:      b_bus = ea_latch;
+      rd68011_ucode_pkg::U_BSRC_EALSAVE:  b_bus = ea_save;
       rd68011_ucode_pkg::U_BSRC_SRSAVE:   b_bus = {16'd0, sr_save};
       rd68011_ucode_pkg::U_BSRC_VBR:      b_bus = vbr;
       rd68011_ucode_pkg::U_BSRC_VECOFF:   b_bus = {22'd0, vec_num, 2'd0};
@@ -1019,6 +1035,15 @@ module rd68011_seq (
                     ((f_aupd != rd68011_ucode_pkg::U_AUPD_NONE) ||
                      (bus_busy && (f_asel == rd68011_ucode_pkg::U_ASEL_EA))))
                      ? ea_used : ea_latch;
+    // ... except on the microword that resumes a faulted instruction, which is
+    // where the value RTE read out of the frame finally becomes the latch
+    // again. It has to be here and not earlier: the walk up the frame is
+    // twenty-nine post-increments on the stack pointer, and every one of them
+    // would load the latch over the top of it. RESUME does no access of its
+    // own, so nothing above competes for this.
+    if (commit && (f_seq == rd68011_ucode_pkg::U_SEQ_RESUME)) begin
+      ea_latch_nxt = ea_save;
+    end
     dbuf_nxt  = dbuf;
     reg_wdata = y;
     reg_we    = 1'b0;
@@ -1668,6 +1693,7 @@ module rd68011_seq (
       t0       <= 32'd0;
       t1       <= 32'd0;
       ea_latch <= 32'd0;
+      ea_save  <= 32'd0;
       dbuf     <= 32'd0;
       xw    <= 16'd0;
       sfc      <= 3'd0;
@@ -1872,6 +1898,11 @@ module rd68011_seq (
         fault_addr <= cur_addr;
         dib        <= req_rdata;
         upc_save   <= upc;
+        // The address output buffer, before the frame build's own accesses
+        // start loading it. Taking it here is what lets a microword that
+        // addresses through the latch -- MOVE to -(An), the read-modify-writes
+        // -- reissue the same cycle when RESUME re-executes it.
+        ea_save    <= ea_latch;
         // What a faulted write was carrying. The frame reports the data
         // output buffer at SP+16, and a handler completing the access itself
         // reads it from there -- so it has to hold the data even though the
@@ -1922,6 +1953,9 @@ module rd68011_seq (
       end
       if (commit && (f_dst == rd68011_ucode_pkg::U_DST_UPCSAVE)) begin
         upc_save <= y[rd68011_ucode_pkg::UADDR-1:0];
+      end
+      if (commit && (f_dst == rd68011_ucode_pkg::U_DST_EALSAVE)) begin
+        ea_save <= y;
       end
       if (commit && (f_dst == rd68011_ucode_pkg::U_DST_XW)) begin
         xw <= y[15:0];

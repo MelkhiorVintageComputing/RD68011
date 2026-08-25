@@ -2258,7 +2258,7 @@ def rte():
         # the other way round.
         ('the high half of the data output buffer', DST['DBUF'], 'lowstage'),
         ('the address output buffer, high', DST['T1'], None),
-        ('... and low', DST['EAL'], SRC['T1']),
+        ('... and low', DST['EALSAVE'], SRC['T1']),
         ('ir_pc, high', DST['T1'], None),
         ('... and low', DST['IR_PC'], SRC['T1']),
         ('irc_pc, high', DST['T1'], None),
@@ -3317,6 +3317,19 @@ def moves():
 # the saved micro-address re-executes the microword, which reissues the same
 # request with the same address and the same data.
 #
+# "The same address" is the part with a catch, and it is where a real bug
+# lived. Most access microwords name their address through a register the
+# frame saves and restores, so re-executing recomputes it. The ones that do
+# not are MOVE to -(An) and the read-modify-writes, which prefetch *before*
+# they write: by then `ir` holds the next instruction and the register field
+# that named the address has gone, so they address through the latch instead
+# (ASEL EAL and EAL_PLUS2). That latch cannot survive the frame on its own --
+# every word of the frame is written through an `aupd` on the stack pointer,
+# and an `aupd` is exactly what loads the latch, so the first frame write
+# destroys it and the frame records a stack address. `ea_save` holds the
+# value the fault found, the frame is written from that, RTE restores into
+# that, and RESUME puts it back into the latch once the walk is over.
+#
 # The frame is UM figure 6-8's twenty-nine words, of which twenty-six are
 # written. Its first fifteen fields are the architecture's; the sixteen
 # internal words are this implementation's own, stamped with our version
@@ -3341,8 +3354,10 @@ def moves():
 #   SP+30  ir, the opcode being executed
 #   SP+32  the extension-word latch
 #   SP+34  dbuf, high half
-#   SP+36  the address output buffer, high
-#   SP+38  ... low
+#   SP+36  the address output buffer, high  -- as it was when the fault
+#   SP+38  ... low                             happened, which is not what the
+#                                              latch holds by the time this is
+#                                              written: see `ea_save` below
 #   SP+40  ir_pc, high                -- the address ir came from
 #   SP+42  ... low
 #   SP+44  irc_pc, high
@@ -3371,8 +3386,8 @@ FRAME8 = [
     (SRC['IRC_PC'],  1),   # SP+44
     (SRC['IR_PC'],   0),   # SP+42
     (SRC['IR_PC'],   1),   # SP+40
-    (SRC['EAL'],     0),   # SP+38
-    (SRC['EAL'],     1),   # SP+36
+    (SRC['EALSAVE'], 0),   # SP+38
+    (SRC['EALSAVE'], 1),   # SP+36
     (SRC['DBUF'],    1),   # SP+34
     (SRC['XW'],      0),   # SP+32
     (SRC['IR'],      0),   # SP+30

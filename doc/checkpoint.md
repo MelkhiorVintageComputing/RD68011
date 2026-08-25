@@ -107,7 +107,7 @@ here or it does not exist.
 | `irc_pc` | 32 | the address `irc` came from | internal |
 | `t0` | 32 | working register / effective address | internal |
 | `t1` | 32 | working register / operand | internal |
-| `ea_latch` | 32 | the address output buffer | internal |
+| `ea_latch` | 32 | the address output buffer, as it was when the fault happened. The live latch does not survive the frame -- every word of the frame is written through an address-unit update, which is what loads it -- so `ea_save` takes a copy at the fault and `RESUME` puts it back. | internal |
 | `dbuf` | 32 | the data output buffer, both halves | low half is **SP+16**; high half internal |
 | `xw` | 16 | the extension-word latch: MOVEM's remaining register mask, and MOVEC's and MOVES's register-and-direction word | internal |
 | `sr` | 16 | status register | **SP+0** |

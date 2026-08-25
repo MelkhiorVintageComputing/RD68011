@@ -120,6 +120,7 @@ package rd68011_ucode_pkg;
   localparam logic [5:0] U_ASRC_MULRES = 6'd47;
   localparam logic [5:0] U_ASRC_LOOPIR = 6'd48;
   localparam logic [5:0] U_ASRC_LOOPST = 6'd49;
+  localparam logic [5:0] U_ASRC_EALSAVE = 6'd50;
 
   // bsrc: 6 bits at 27
   localparam int U_BSRC_LSB = 27;
@@ -174,6 +175,7 @@ package rd68011_ucode_pkg;
   localparam logic [5:0] U_BSRC_MULRES = 6'd47;
   localparam logic [5:0] U_BSRC_LOOPIR = 6'd48;
   localparam logic [5:0] U_BSRC_LOOPST = 6'd49;
+  localparam logic [5:0] U_BSRC_EALSAVE = 6'd50;
 
   // alu: 5 bits at 33
   localparam int U_ALU_LSB = 33;
@@ -243,6 +245,7 @@ package rd68011_ucode_pkg;
   localparam logic [5:0] U_DST_LOOPBACK = 6'd34;
   localparam logic [5:0] U_DST_LOOPIR = 6'd35;
   localparam logic [5:0] U_DST_LOOPST = 6'd36;
+  localparam logic [5:0] U_DST_EALSAVE = 6'd37;
 
   // bus: 3 bits at 44
   localparam int U_BUS_LSB = 44;
