@@ -294,6 +294,19 @@ module core_loop_tb;
                {16'd0, mem.peek(DEST[23:1] + 23'd3)}, 32'h0000_1103);
     expect_u32("bus error in a loop: the stack is where it started",
                dut.u_seq.ssp, SSP0);
+    // The count, which the two words above only half constrain. Both pointers
+    // post-increment, so a lost or repeated iteration shifts the destination
+    // and one of those two catches it -- but a *seventh* iteration after the
+    // resume leaves both of them right and writes past the end. These are the
+    // clean case's checks, which say six and not five or seven.
+    expect_u32("bus error in a loop: the word after the last is untouched",
+               {16'd0, mem.peek(DEST[23:1] + 23'd6)}, 32'h0000_FFFF);
+    expect_u32("bus error in a loop: A0 advanced by six words",
+               dut.u_seq.regs[8], SOURCE + 32'd12);
+    expect_u32("bus error in a loop: A1 advanced by six words",
+               dut.u_seq.regs[9], DEST + 32'd12);
+    expect_u32("bus error in a loop: the counter ended at -1",
+               dut.u_seq.regs[0] & 32'h0000FFFF, 32'h0000_FFFF);
     // The loop was rejoined without fetching it again: the only program reads
     // in the loop are the ones from before the fault plus the final refill.
     expect_int("bus error in a loop: the loop was not refetched",
