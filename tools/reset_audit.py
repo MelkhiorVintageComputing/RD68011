@@ -71,8 +71,14 @@ def netlist_check(paths, top):
     except subprocess.CalledProcessError as e:
         return None, ['yosys failed:\n' + e.stderr[-2000:]]
 
+    # `synth` ends by printing statistics of its own, and the explicit `stat`
+    # prints them again, so the output holds two identical blocks. Reading both
+    # counted every flop twice -- the audit reported 2758 where the design has
+    # 1379, which Vivado (1340 FF placed) and Quartus (1357 registers) both
+    # contradict. Only the last block is read.
+    tail = out.rsplit('Printing statistics.', 1)[-1]
     counts = {}
-    for line in out.splitlines():
+    for line in tail.splitlines():
         m = re.match(r'\s+(\$_\w+_)\s+(\d+)\s*$', line)
         if m and FLOPLIKE.match(m.group(1)):
             counts[m.group(1)] = counts.get(m.group(1), 0) + int(m.group(2))

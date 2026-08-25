@@ -190,22 +190,29 @@ declaration that could infer a register, anywhere under `rtl/`.
 **Netlist.** yosys synthesises the whole design to gate-level flops and the
 cell types are read back. A flop without a reset is a different cell there —
 `$_DFF_P_` rather than `$_DFF_PN0_` — so one that got past the source check by
-some route nobody thought of still shows up. As of P8:
+some route nobody thought of still shows up. As of P9:
 
 ```
-reset audit: 15 files, no initial blocks, no latches, no declaration initialisers
-reset audit: 2684 flip-flops in the netlist, every one of them with a reset
-    $_DFFE_NN0N_        46      $_DFF_NN0_          58
-    $_DFFE_NN0P_        74      $_DFF_NN1_          30
-    $_DFFE_NN1P_         2      $_DFF_PN0_        1168
-    $_DFFE_PN0N_       166      $_DFF_PN1_           6
-    $_DFFE_PN0P_      1122
-    $_DFFE_PN1P_        12
+reset audit: 14 files, no initial blocks, no latches, no declaration initialisers
+reset audit: 1379 flip-flops in the netlist, every one of them with a reset
+    $_DFFE_NN0N_        23      $_DFF_NN0_          30
+    $_DFFE_NN0P_        37      $_DFF_NN1_          15
+    $_DFFE_NN1P_         1      $_DFF_PN0_         574
+    $_DFFE_PN0N_        83      $_DFF_PN1_           3
+    $_DFFE_PN0P_       607
+    $_DFFE_PN1P_         6
 ```
 
-Every one of those cell names carries a reset polarity and a reset value.
-yosys counts more flops than Vivado does because it flattens without merging;
-the count is not the point, the absence of a resetless type is.
+Every one of those cell names carries a reset polarity and a reset value. The
+absence of a resetless type is the point, not the count -- but the count should
+still be right, and until P9 it was not. It read 2684, and every figure in the
+table was twice what it should have been: `synth` prints statistics of its own
+before the explicit `stat` does, so the output holds two identical blocks and
+the audit summed both. The doubling was noticed and then explained away, as
+yosys flattening without merging. That explanation was wrong, and the size of
+the gap should have been the clue -- yosys does count a few more than the other
+tools, 1379 against Vivado's 1340 placed and Quartus's 1357 registers, but not
+twice as many. `tools/reset_audit.py` now reads only the last block.
 
 The negative-edge flops in that list are the bus interface's output stage,
 which is negedge-clocked on purpose — one bus state is half a clock period, and

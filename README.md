@@ -228,7 +228,7 @@ Plus the ones that ask whether any of it can be built: `make lint` elaborates
 every module under **iverilog, Verilator, yosys and Vivado** — the intersection
 of what those four accept is the language this project is written in — and
 `make audit` proves, in the source *and* in the yosys netlist, that not one of
-2684 flip-flops initialises outside reset.
+1379 flip-flops initialises outside reset.
 
 **AC timing is decided, not measured.** An RTL model has no analogue delays, so
 section 10's nanosecond limits cannot be measured from it. They can still be
