@@ -15,7 +15,7 @@ implementation's source.
 | **Bus** | asynchronous S0–S7 cycles, read-modify-write, arbitration, M6800 synchronous cycles, autovectored and vectored interrupts |
 | **MC68010 proper** | instruction continuation (format $8 frame + RTE), loop mode, VBR, SFC/DFC, MOVEC/MOVES/RTD/BKPT |
 | **Verified by** | 23492 reference vectors, 93991 co-simulated instructions, 15 directed testbenches, 6 programs, a second core in VHDL |
-| **Implemented** | 20.8 MHz post-route on an `xc7a100t-1`, 13016 LUTs, 1304 FFs, 0 block RAM |
+| **Implemented** | 20.8 MHz post-route on an `xc7a100t-1`, 13113 LUTs, 1340 FFs, 0 block RAM |
 | **For scale** | the fastest MC68010 Motorola shipped ran at 12.5 MHz |
 
 ```sh
@@ -332,13 +332,13 @@ Post-route, `xc7a100tcsg324-1`, out of context, 48 ns with a 50 % duty cycle:
 | | |
 |---|--:|
 | Clock | **48.0 ns — 20.8 MHz** |
-| Setup slack | 0.75 to 2.08 ns, two runs |
-| Slice LUTs | 13016 (20.5 % of the part) |
-| Slice registers | 1304 (1.0 %) |
+| Setup slack | 0.75 to 2.08 ns, several runs |
+| Slice LUTs | 13113 (20.7 % of the part) |
+| Slice registers | 1340 (1.1 %) |
 | DSP48E1 | 3 |
 | Block RAM | 0 |
 
-Half of that area is the microcode store: 6664 LUTs of 13016. Moving it to block
+Half of that area is the microcode store: 6663 LUTs of 13113. Moving it to block
 RAM would roughly halve the LUT count and buy no frequency at all — the store's
 second read, the one that was on the critical path, no longer exists.
 
@@ -398,7 +398,7 @@ make timing     # AC-specification conformance
 make synth impl # Vivado synthesis, then place and route
 make paths      # what limits the frequency, unreachable routes excluded
 make lint-questa lint-quartus   # two more front-ends, from the Altera tools
-make quartus    # ... and the MAX 10 fit, for a second frequency — 19.32 MHz
+make quartus    # ... and the MAX 10 fit, for a second frequency — 19.40 MHz
 make check      # the gate: ucode-check, lint, audit, sim, programs, AC timing
 ```
 

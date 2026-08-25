@@ -19,11 +19,11 @@ with a 50 % duty cycle:
 | | |
 |---|--:|
 | Clock period | **48.0 ns**, which is **20.8 MHz** |
-| Setup slack | 0.75 to 2.58 ns across runs -- see below |
-| Hold slack | 0.155 ns |
-| Slice LUTs | 12935 (20.4 % of the part) |
-| Slice registers | 1342 (1.1 %) |
-| F7 / F8 muxes | 1568 / 245 |
+| Setup slack | 0.75 to 2.08 ns, several runs -- see below |
+| Hold slack | 0.165 ns |
+| Slice LUTs | 13113 (20.7 % of the part) |
+| Slice registers | 1340 (1.1 %) |
+| F7 / F8 muxes | 1490 / 225 |
 | DSP48E1 | 3 |
 | Block RAM | 0 |
 
@@ -40,15 +40,15 @@ M9K blocks where the Artix-7 has six-input LUTs and 36 kbit block RAMs.
 
 | | |
 |---|--:|
-| Fmax | **19.32 MHz** |
-| Setup slack | −1.879 ns against 48 ns |
+| Fmax | **19.40 MHz** |
+| Setup slack | −1.776 ns against 48 ns |
 | Hold slack | 0.322 ns |
-| Logic elements | 35924 (72 % of the part) |
-| Registers | 1357 |
+| Logic elements | 36066 (72 % of the part) |
+| Registers | 1389 |
 | Embedded 9-bit multipliers | 4 (1 %) |
 | Memory bits | 0 (of 1677312) |
 
-19.32 MHz against the Artix-7's 21.7, on a part two device generations older
+19.40 MHz against the Artix-7's 21.6, on a part two device generations older
 and with four-input logic. It does not quite reach 48 ns -- it wants about 52 --
 and `make quartus` gates on the Fmax floor in the Makefile rather than on that
 slack, which is a regression test rather than an aspiration.
@@ -102,6 +102,10 @@ What that bought, all of it measured:
 | Artix-7, LUTs | 14416 | 14346 |
 | Artix-7, `u_decode` LUTs | 1130 | 1080 |
 
+Both columns are that experiment's own runs, so they stay as measured and do
+not track the tables above: the design has gained a register since, and the
+"disjoint" column is no longer the current figure.
+
 **On the Artix-7 it changed nothing, and that was the expectation.** The
 decoder appears in none of the 400 worst paths `make impl` reports, before or
 after; `doc/critical-path.md` records that it stopped being the limit two
@@ -122,14 +126,14 @@ added every area claim in this document was a guess:
 
 | | LUTs | FFs | |
 |---|--:|--:|---|
-| `u_urom` | **6665** | 0 | the microcode store, **52 % of the design** |
-| `u_seq` itself | 3445 | 1078 | source multiplexers, address unit, register file |
-| `u_decode` | 1130 | 0 | 1401 opcode patterns, entry point and preview |
-| `u_shifter` | 812 | 0 | |
-| `u_alu` | 504 | 0 | |
-| `u_divider` | 221 | 89 | |
-| `u_biu` | 136 | 157 | the bus interface is almost all flops |
-| total | 12935 | 1342 | plus 3 DSP48E1 for the multiplier |
+| `u_urom` | **6663** | 0 | the microcode store, **51 % of the design** |
+| `u_seq` itself | 3701 | 1096 | source multiplexers, address unit, register file |
+| `u_decode` | 1080 | 0 | 1401 opcode patterns, entry point and preview |
+| `u_shifter` | 813 | 0 | |
+| `u_alu` | 503 | 0 | |
+| `u_divider` | 223 | 89 | |
+| `u_biu` | 132 | 155 | the bus interface is almost all flops |
+| total | 13113 | 1340 | plus 3 DSP48E1 for the multiplier |
 
 The store being half the design is the one number that makes the block RAM
 question concrete rather than theoretical -- see the end of this section.
@@ -200,7 +204,7 @@ is; they are the same path.
 ## Two cautions about these numbers
 
 **Two different LUT counts, both correct.** `scripts/impl.tcl` prints the number
-of LUT *primitives* (14522); the utilisation report says *Slice LUTs* (13016),
+of LUT *primitives* (14597); the utilisation report says *Slice LUTs* (13113),
 which counts occupied LUT sites. They differ by more than 10 %, and comparing
 one against the other looks exactly like a regression. It is not one. The table
 above quotes the report.
@@ -255,7 +259,7 @@ is left is the read at `upc`, whose address is already a register, so a block RA
 with a registered output holds exactly the same value at the same time and costs
 no clock.
 
-It is **6664 LUTs, 51 % of the design**. 6674 words of 146 bits is 974 kbit,
+It is **6663 LUTs, 51 % of the design**. 6674 words of 146 bits is 974 kbit,
 which in 1024x36 mode is about 35 of the part's 135 block RAMs. So it would
 roughly halve the LUT count and buy no frequency at all. It would also need the
 no-initialisation-outside-reset rule bent, because a block RAM output register
@@ -295,8 +299,9 @@ before the explicit `stat` does, so the output holds two identical blocks and
 the audit summed both. The doubling was noticed and then explained away, as
 yosys flattening without merging. That explanation was wrong, and the size of
 the gap should have been the clue -- yosys does count a few more than the
-place-and-route tools do, 1381 against Vivado's 1342 placed, but not twice as
-many. `tools/reset_audit.py` now reads only the last block.
+place-and-route tools do, 1379 against Vivado's 1340 placed and Quartus's 1389
+registers, but not twice as many. `tools/reset_audit.py` now reads only the
+last block.
 
 The negative-edge flops in that list are the bus interface's output stage,
 which is negedge-clocked on purpose — one bus state is half a clock period, and
