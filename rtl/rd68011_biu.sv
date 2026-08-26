@@ -333,7 +333,7 @@ module rd68011_biu #(
   // in two, VPA and AVEC, precisely to remove the ambiguity this one carries.
   //
   // So no VMA here, and nothing for E to synchronise: the vector is generated
-  // internally and no transfer happens at all. doc/divergences.md has the
+  // internally and no transfer happens at all. doc/bugs-found.md has the
   // measurement that found it.
   logic cyc_is_iack;
   assign cyc_is_iack = (cyc_kind == rd68011_pkg::CT_IACK);

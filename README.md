@@ -316,6 +316,7 @@ tests did not cover:
 | `doc/ssw.md` | the special status word, field by field, on this core and two others |
 | `doc/divergences.md` | every place this does not behave as the part does, and why |
 | `doc/timing-divergences.md` | every instruction whose cycle count differs, measured and justified |
+| `doc/bugs-found.md` | every defect found in this design, how it was found, and what stops it coming back |
 | `doc/implementation.md` | area, frequency, the reset audit, and two cautions about the numbers |
 | `doc/critical-path.md` | what actually limits the frequency, with the unreachable routes excluded |
 | `doc/coding-standard.md` | the portable SystemVerilog subset, every entry found by trying it |

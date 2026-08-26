@@ -120,7 +120,7 @@ Cases 4 and 6 are also where this design was wrong until the AC-timing work
 measured it: the bus unit recognised the late bus error and set `end_code`, but
 only the *early* path raised `req_fault`, which is the signal the sequencer acts
 on. The late exception was therefore never taken. `doc/ac-timing.md` has the
-measurement and `doc/divergences.md` the entry; the window is now 132.5 ns at
+measurement and `doc/bugs-found.md` the entry; the window is now 132.5 ns at
 8 MHz against specification 48*'s required 80.
 
 A retry is invisible to the sequencer: the bus unit reruns the cycle itself with
@@ -187,7 +187,7 @@ detail. It once read a current-state one, and the two forms disagreed on
 exactly one edge — the rising edge that both ends S7 and takes the arbiter from
 `ARB_IDLE` to `ARB_GRANT`. There the state machine started a cycle the enables
 then turned off underneath it, which cost a longword read one of its two words.
-`doc/divergences.md` has the whole account. `ST_ARB` is now occupied on exactly
+`doc/bugs-found.md` has the whole account. `ST_ARB` is now occupied on exactly
 the clocks the outputs are released.
 
 Figure 5-18 note 1 — the arbitration state machine does not advance while the

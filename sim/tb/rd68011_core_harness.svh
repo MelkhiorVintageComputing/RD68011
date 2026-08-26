@@ -260,7 +260,7 @@
   // has to elaborate under yosys and Vivado as well; stated in the harness
   // rather than in one testbench because it then holds for every program, every
   // reference vector and every co-simulated instruction, not just for the
-  // directed cases that provoked it. doc/divergences.md has what it caught.
+  // directed cases that provoked it. doc/bugs-found.md has what it caught.
   always @(posedge clk) begin
     if (rst_n && dut.u_seq.commit && dut.u_seq.take_irq) begin
       if (!((dut.u_seq.irq_level == 3'd7) ||

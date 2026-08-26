@@ -260,7 +260,7 @@ module core_exception_tb;
     // Every clause of it is below. Three of them were wrong -- an instruction
     // that never ran left the arming behind, so a second frame was pushed for
     // an instruction the processor had refused to execute, and the handler for
-    // the *first* exception was traced instead of running. doc/divergences.md
+    // the *first* exception was traced instead of running. doc/bugs-found.md
     // has what that costs a debugger.
     //
     // The reference vectors cannot arbitrate any of this -- harte_tb skips
@@ -488,7 +488,7 @@ module core_exception_tb;
     // DMA can hold a cycle off for a dozen clocks or more, and everything here
     // ran at zero wait states until someone said so.
     //
-    // Nothing about an autovector should depend on either. doc/divergences.md
+    // Nothing about an autovector should depend on either. doc/bugs-found.md
     // has the acknowledge-termination bug this area turned out to be hiding.
     core_reset();
     mem_waits = 8'd13;

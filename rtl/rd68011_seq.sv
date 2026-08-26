@@ -788,7 +788,7 @@ module rd68011_seq (
   // 3.5 requires it to until the acknowledge, is re-acknowledged at every
   // instruction boundary for ever: the handler's first instruction never
   // retires, the source is never cleared, and the stack walks down through
-  // memory. That is not a thought experiment; doc/divergences.md has the trace.
+  // memory. That is not a thought experiment; doc/bugs-found.md has the trace.
   //
   // `irq7_edge` is that transition, held until the interrupt is taken, and
   // dropped if the request goes away before it can be.
@@ -1778,7 +1778,7 @@ module rd68011_seq (
       // seven, which is also the clock the transition is seen. Set there and
       // the flag outlives the acknowledge that answered it, and the handler's
       // first instruction boundary takes a second interrupt for the one
-      // request -- the failure doc/divergences.md describes, by another route.
+      // request -- the failure doc/bugs-found.md describes, by another route.
       irq_prev <= irq_level;
       if (commit && take_irq && (irq_level == 3'd7)) irq7_edge <= 1'b0;
       else if (irq_level != 3'd7)                    irq7_edge <= 1'b0;
@@ -1797,7 +1797,7 @@ module rd68011_seq (
       // So the arming is cancelled by each of those, and each has its own arm
       // below. Left uncancelled, the arming outlives the instruction it
       // belonged to and the *handler* for the first exception is traced before
-      // its first instruction runs -- which is what doc/divergences.md
+      // its first instruction runs -- which is what doc/bugs-found.md
       // describes.
       if (fault) begin
         // A bus error or an address error. The instruction is suspended rather
