@@ -12,7 +12,14 @@
 //            samples DTACK, BERR and VPA
 //   STATE 7  on the falling edge entering S7, data is latched and AS and the
 //            data strobes are negated; at the rising edge that ends S7 the
-//            data bus is released and R/W driven high
+//            address and data buses are released and R/W driven high
+//
+// The address bus is part of that: UM 5.1.1 and 5.1.2 state 7 release it at
+// the rising edge ending the cycle, spec 6 drives it again entering S1, and
+// appendix B says outright that "at state 0 (S0) in the cycle, the address bus
+// is in the high-impedance state". So a_oe is asserted in exactly S1..S7 and
+// nowhere else -- including S0 of a back-to-back pair, where an implementation
+// that only floats the address while idle would leave it driven.
 //
 // Also covers wait states, byte lane selection (UM table 3-1), and that
 // back-to-back cycles run four clocks apart with no idle state (figure 5-3).
@@ -47,6 +54,10 @@ module bus_rw_tb;
       if (lds) expect_window({tag, " LDS"}, t0, OB_LDSN, 1'b0, 2, 6);
       else     expect_bit   ({tag, " LDS"}, t0, 4, OB_LDSN, 1'b1);
 
+      // The address bus: driven entering S1, released at the rising edge that
+      // ends S7, and not driven in S0 either side of that.
+      expect_window({tag, " a_oe"}, t0, OB_AOE, 1'b1, 1, 7);
+
       // R/W stays high all cycle, and the data bus is never driven.
       for (s = 0; s <= 7; s = s + 1) begin
         expect_bit({tag, " R/W held"}, t0, s, OB_RW, 1'b1);
@@ -64,7 +75,8 @@ module bus_rw_tb;
       // S2: AS asserted and R/W driven low.
       expect_window({tag, " AS"},  t0, OB_ASN, 1'b0, 2, 6);
       expect_window({tag, " R/W"}, t0, OB_RW,  1'b0, 2, 7);
-      // S3: the data bus comes out of high impedance.
+      // S1: so does the address bus; S3: so does the data bus.
+      expect_window({tag, " a_oe"}, t0, OB_AOE, 1'b1, 1, 7);
       expect_window({tag, " d_oe"}, t0, OB_DOE, 1'b1, 3, 7);
       // S4: the data strobes assert a clock later than on a read.
       if (uds) expect_window({tag, " UDS"}, t0, OB_UDSN, 1'b0, 4, 6);
@@ -147,6 +159,13 @@ module bus_rw_tb;
     bus_finish();
     expect_eq("back-to-back cycle spacing, in states", t1 - t0, 8);
     check_write("second of a pair", t1, 1'b1, 1'b1);
+    // No idle state separates these two, so this S0 is the one appendix B
+    // describes: the address bus is in high impedance during it even though
+    // the bus never went idle.
+    expect_bit("addr released in S0 of a back-to-back pair",
+               t1, 0, OB_AOE, 1'b0);
+    expect_bit("addr still driven in S7 of the first of the pair",
+               t0, 7, OB_AOE, 1'b1);
 
     harness_done("bus_rw_tb");
   end

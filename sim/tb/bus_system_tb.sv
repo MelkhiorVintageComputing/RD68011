@@ -74,18 +74,30 @@ module bus_system_tb;
     repeat (2) @(posedge clk);
 
     // ---- The RESET input releases the address and data buses ---------------
-    expect_val("address driven normally", {31'd0, a_oe}, {31'd0, 1'b1});
+    // An idle address bus is in high impedance anyway (UM 5.1.1 state 7,
+    // appendix B), so "released" has to be measured where the address would
+    // otherwise be driven: S1 of a bus cycle.
+    slv.poke(23'h006100, 16'h1234);
+    bus_cycle(rd68011_pkg::CT_READ, rd68011_pkg::FC_SUPER_D,
+              23'h006100, 1'b1, 1'b1, 16'h0000, i);
+    expect_bit("address driven in S1 before RESET", i, 1, OB_AOE, 1'b1);
+
     reset_n_i = 1'b0;
     // Two falling edges of synchronisation, then the enable follows.
     repeat (4) @(posedge clk);
-    expect_val("address bus released while RESET asserted", {31'd0, a_oe}, 32'd0);
     expect_val("RESET seen internally", {31'd0, reset_sync_n}, 32'd0);
+    bus_cycle(rd68011_pkg::CT_READ, rd68011_pkg::FC_SUPER_D,
+              23'h006100, 1'b1, 1'b1, 16'h0000, i);
+    expect_bit("address bus released while RESET asserted", i, 1, OB_AOE, 1'b0);
     // The control strobes are not released: table 3-4's Hi-Z-on-RESET column is
     // "Yes" for the address and data buses only.
     expect_val("AS still driven while RESET asserted", {31'd0, as_oe}, {31'd0, 1'b1});
+
     reset_n_i = 1'b1;
     repeat (4) @(posedge clk);
-    expect_val("address driven again", {31'd0, a_oe}, {31'd0, 1'b1});
+    bus_cycle(rd68011_pkg::CT_READ, rd68011_pkg::FC_SUPER_D,
+              23'h006100, 1'b1, 1'b1, 16'h0000, i);
+    expect_bit("address driven again", i, 1, OB_AOE, 1'b1);
 
     // ---- Input synchronisation ---------------------------------------------
     // IPL is presented to the sequencer synchronised, still active low.

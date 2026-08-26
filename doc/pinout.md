@@ -31,7 +31,7 @@ assign pad = core_oe ? 1'b0 : 1'bz;     // open-drain pin (RESET, HALT)
 | Port | Dir | Notes |
 |---|---|---|
 | `a_o[23:1]` | out | A1–A23. During interrupt acknowledge, A1–A3 carry the level and A4–A23 are driven high. |
-| `a_oe` | out | Negated on bus relinquish **and** while RESET is asserted (Table 3-4: Hi-Z on RESET = Yes). |
+| `a_oe` | out | Asserted from S1 to the rising edge that ends the cycle (§5.1.1 state 7, spec 7); negated between cycles, on bus relinquish **and** while RESET is asserted (Table 3-4: Hi-Z on RESET = Yes). |
 
 There is no A0 pin; byte selection is by `UDS`/`LDS`.
 
@@ -142,11 +142,13 @@ including the reserved ones — can appear on the pins.
 
 ## Output-enable domains
 
-Table 3-4's two Hi-Z columns give exactly three behaviours:
+Table 3-4's two Hi-Z columns give exactly three behaviours. They are not the
+only occasions a pin floats — the address and data buses are also released at
+the end of every bus cycle, which the table has no column for:
 
 | Enable | Covers | Negated when |
 |---|---|---|
-| `a_oe`, `d_oe` | address bus, data bus | bus relinquished **or** RESET asserted |
+| `a_oe`, `d_oe` | address bus, data bus | between bus cycles, bus relinquished **or** RESET asserted |
 | `as_oe`, `rw_oe`, `ds_oe`, `vma_oe`, `fc_oe` | AS, R/W, UDS, LDS, VMA, FC | bus relinquished |
 | `reset_n_oe`, `halt_n_oe` | RESET, HALT | open drain — asserted only to pull low |
 

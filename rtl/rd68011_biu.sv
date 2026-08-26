@@ -33,12 +33,18 @@
 // path of UM 5.3 figure 5-17.
 
 module rd68011_biu #(
-    // UM 5.1.1 says the address bus goes to high impedance at the rising edge
-    // ending S7; UM table 3-4 says it does so only on RESET or bus relinquish,
-    // and figure 5-3 draws it valid between cycles. The manual contradicts
-    // itself -- see doc/bus-timing-compliance.md. Default to table 3-4, which
-    // is what systems built around this part actually rely on.
-    parameter bit ADDR_HIZ_BETWEEN_CYCLES = 1'b0
+    // The address bus goes to high impedance at the rising edge that ends the
+    // cycle and comes back out entering S1, which is what every source says:
+    // UM 5.1.1 state 7, 5.1.2 state 7 and 5.1.3 state 19 (and their 8-bit
+    // twins in section 4), appendix B twice -- "at state 0 (S0) in the cycle,
+    // the address bus is in the high-impedance state" -- specification 7 in
+    // the read-write AC table, which gives the time it takes at every speed
+    // grade, and figures 5-3 and 10-4, which draw the address on the mid rail
+    // there while drawing FC2-FC0 as a crossover. Table 3-4 is not a
+    // counter-example: its only two columns are RESET and bus relinquish, and
+    // the address bus reads Yes in both. Clearing this parameter keeps the
+    // address driven between cycles for a board that needs it.
+    parameter bit ADDR_HIZ_BETWEEN_CYCLES = 1'b1
 ) (
     input  logic        clk,
     input  logic        rst_n,
@@ -752,6 +758,31 @@ module rd68011_biu #(
       .q    (doe_q)
   );
 
+  // -- Address bus drive: out of high impedance entering S1, with the address
+  //    itself (spec 6), and back to high impedance at the rising edge that
+  //    ends the cycle (spec 7). Between cycles and through S0 the address bus
+  //    is not driven at all, which is what appendix B says outright.
+  //    The clear term is the data bus's, minus the S7 a read-modify-write
+  //    passes through on its way to the modify states: AS is held across that
+  //    whole cycle (UM 5.1.3) and so is the address. The data bus does not
+  //    care -- it is not driven there either way -- so it keeps the simpler
+  //    condition.
+  logic aoe_set_n, aoe_clr_p, aoe_q;
+
+  assign aoe_set_n = `ENTER_N(ST_S1);
+  assign aoe_clr_p = ((st_n == rd68011_pkg::ST_S7) &&
+                      (st_p_nxt != rd68011_pkg::ST_M8)) ||
+                     (st_n == rd68011_pkg::ST_S19) ||
+                     (st_n == rd68011_pkg::ST_BE9) ||
+                     (st_n == rd68011_pkg::ST_BE21);
+
+  rd68011_dedge_ff u_aoe (
+      .clk (clk), .rst_n (rst_n),
+      .en_p (aoe_clr_p), .d_p (1'b0),
+      .en_n (aoe_set_n), .d_n (1'b1),
+      .q    (aoe_q)
+  );
+
   // Whether the bus belongs to someone else. Declared here rather than with
   // the output enables below, which are its main use, because d_oe reads it
   // too and a name has to be declared before it is used -- iverilog, Verilator
@@ -780,9 +811,11 @@ module rd68011_biu #(
   // -- Output enables. Table 3-4 gives three behaviours: the address and data
   //    buses go to high impedance on RESET as well as on bus relinquish, the
   //    control group only on bus relinquish, and RESET/HALT are open drain.
+  logic a_oe_hold;
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      a_oe  <= 1'b0;
+      a_oe_hold <= 1'b0;
       as_oe <= 1'b0;
       rw_oe <= 1'b0;
       ds_oe <= 1'b0;
@@ -799,12 +832,17 @@ module rd68011_biu #(
       // impedance while the RESET pin is asserted, and while halted (UM 5.4.3).
       // UM 5.4.2: a retry also "puts the address and data lines in the
       // high-impedance state" until HALT is negated.
-      a_oe   <= !bus_granted && reset_sync_n &&
-                !(st_p == rd68011_pkg::ST_HALT) &&
-                !(st_p == rd68011_pkg::ST_RETRY) &&
-                !(ADDR_HIZ_BETWEEN_CYCLES && (st_p == rd68011_pkg::ST_IDLE));
+      a_oe_hold <= !bus_granted && reset_sync_n &&
+                   !(st_p == rd68011_pkg::ST_HALT) &&
+                   !(st_p == rd68011_pkg::ST_RETRY);
     end
   end
+
+  // Those four conditions last whole clocks, so they are registered on the
+  // rising edge like the rest of the enables. The end of a cycle does not: the
+  // address is released half a clock before the next one drives it, so that
+  // half comes from the dual-edge flop above.
+  assign a_oe = a_oe_hold && (aoe_q || !ADDR_HIZ_BETWEEN_CYCLES);
 
   assign bus_idle = (st_p == rd68011_pkg::ST_IDLE) && !arb_hold;
 

@@ -19,11 +19,11 @@ with a 50 % duty cycle:
 | | |
 |---|--:|
 | Clock period | **48.0 ns**, which is **20.8 MHz** |
-| Setup slack | 0.75 to 2.08 ns, two runs -- see below |
-| Hold slack | 0.151 ns |
-| Slice LUTs | 13016 (20.5 % of the part) |
-| Slice registers | 1304 (1.0 %) |
-| F7 / F8 muxes | 1502 / 206 |
+| Setup slack | 0.75 to 2.58 ns across runs -- see below |
+| Hold slack | 0.155 ns |
+| Slice LUTs | 12935 (20.4 % of the part) |
+| Slice registers | 1342 (1.1 %) |
+| F7 / F8 muxes | 1568 / 245 |
 | DSP48E1 | 3 |
 | Block RAM | 0 |
 
@@ -38,14 +38,14 @@ added every area claim in this document was a guess:
 
 | | LUTs | FFs | |
 |---|--:|--:|---|
-| `u_urom` | **6664** | 0 | the microcode store, **51 % of the design** |
-| `u_seq` itself | 3526 | 1042 | source multiplexers, address unit, register file |
+| `u_urom` | **6665** | 0 | the microcode store, **52 % of the design** |
+| `u_seq` itself | 3445 | 1078 | source multiplexers, address unit, register file |
 | `u_decode` | 1130 | 0 | 1401 opcode patterns, entry point and preview |
-| `u_shifter` | 816 | 0 | |
+| `u_shifter` | 812 | 0 | |
 | `u_alu` | 504 | 0 | |
-| `u_divider` | 224 | 89 | |
-| `u_biu` | 129 | 155 | the bus interface is almost all flops |
-| total | 13016 | 1304 | plus 3 DSP48E1 for the multiplier |
+| `u_divider` | 221 | 89 | |
+| `u_biu` | 136 | 157 | the bus interface is almost all flops |
+| total | 12935 | 1342 | plus 3 DSP48E1 for the multiplier |
 
 The store being half the design is the one number that makes the block RAM
 question concrete rather than theoretical -- see the end of this section.
@@ -194,12 +194,12 @@ some route nobody thought of still shows up. As of P9:
 
 ```
 reset audit: 14 files, no initial blocks, no latches, no declaration initialisers
-reset audit: 1379 flip-flops in the netlist, every one of them with a reset
-    $_DFFE_NN0N_        23      $_DFF_NN0_          30
+reset audit: 1381 flip-flops in the netlist, every one of them with a reset
+    $_DFFE_NN0N_        24      $_DFF_NN0_          30
     $_DFFE_NN0P_        37      $_DFF_NN1_          15
     $_DFFE_NN1P_         1      $_DFF_PN0_         574
     $_DFFE_PN0N_        83      $_DFF_PN1_           3
-    $_DFFE_PN0P_       607
+    $_DFFE_PN0P_       608
     $_DFFE_PN1P_         6
 ```
 
@@ -210,9 +210,9 @@ table was twice what it should have been: `synth` prints statistics of its own
 before the explicit `stat` does, so the output holds two identical blocks and
 the audit summed both. The doubling was noticed and then explained away, as
 yosys flattening without merging. That explanation was wrong, and the size of
-the gap should have been the clue -- yosys does count a few more than the other
-tools, 1379 against Vivado's 1340 placed and Quartus's 1357 registers, but not
-twice as many. `tools/reset_audit.py` now reads only the last block.
+the gap should have been the clue -- yosys does count a few more than the
+place-and-route tools do, 1381 against Vivado's 1342 placed, but not twice as
+many. `tools/reset_audit.py` now reads only the last block.
 
 The negative-edge flops in that list are the bus interface's output stage,
 which is negedge-clocked on purpose — one bus state is half a clock period, and

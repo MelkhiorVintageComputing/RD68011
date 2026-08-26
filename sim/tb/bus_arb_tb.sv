@@ -138,9 +138,15 @@ module bus_arb_tb;
     wait (bg_n_o === 1'b1);
     expect_range("36: BR negated to BG negated", clocks(t_mark, $realtime), 1.5, 3.5);
 
+    // The control group comes straight back. The address bus does not: on an
+    // idle bus it is in high impedance whether or not anyone was granted it
+    // (UM 5.1.1 state 7, appendix B), so it waits for the next S1. That makes
+    // the relinquish column of table 3-4 unobservable on the address bus here
+    // -- bus_rw_tb is where a_oe's window is measured.
     wait (fc_oe === 1'b1);
-    expect_val("two-wire: buses driven again",
-               {28'd0, a_oe, as_oe, ds_oe, fc_oe}, {28'd0, 4'b1111});
+    expect_val("two-wire: control group driven again",
+               {29'd0, as_oe, ds_oe, fc_oe}, {29'd0, 3'b111});
+    expect_val("two-wire: address bus still idle", {31'd0, a_oe}, 32'd0);
 
     repeat (4) @(posedge clk);
 

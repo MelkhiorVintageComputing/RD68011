@@ -162,7 +162,6 @@ would have thrown away with the rest.
 | **The E clock's power-on phase.** UM 3.7 says the ring counter "may come up in any state. (At power-on, it is impossible to guarantee phase relationship of E to CLK.)" Ours starts from a defined reset state. | Deterministic simulation is worth more than reproducing an indeterminacy, and no correct system can depend on the phase. |
 | **`rst_n` is not an MC68010 pin.** It is a hardware initialisation input that gives every register a defined value. | ASIC is a target, so there is no power-on state. The architectural reset — RESET and HALT asserted together, vector fetch from $000000 and $000004 — is a separate sequence on the real pins, and is implemented. |
 | **The format $8 frame's 16 internal words use our own encoding**, stamped with our own version number. | This is what the architecture asks for. UM 6.4: the first internal word carries "a processor version number (in bits 10-13) and proprietary internal information that must match the version number of the MC68010 attempting to read the data", and RTE must raise a format error when it does not match. Software that saves and restores a frame — which is every operating system — cannot tell the difference. Software that synthesises internal words from scratch was already not portable between MC68010 versions. `doc/checkpoint.md` has the full argument. |
-| **The address bus stays driven between bus cycles.** UM 5.1.1, 5.1.2, 5.1.3 and appendix B all say it goes to high impedance at the end of a cycle; table 3-4 and figure 5-3 say it stays driven. | The manual contradicts itself. Table 3-4 is followed by default because that is what systems built around this part rely on; the `ADDR_HIZ_BETWEEN_CYCLES` parameter selects the other reading. `doc/bus-timing-compliance.md` has both citations. |
 | **Nanosecond output delays are not modelled in the RTL.** | An RTL model has no analogue delays, so those limits cannot be *measured* from it. They can still be *decided*: `make timing` asks whether any assignment of pad delays within section 10's own budget satisfies every required separation between pins, which is an exact question with an exact answer. This design is conformant at all six speed grades. `doc/ac-timing.md` has the numbers, and the skew envelope a real implementation would have to hold to. |
 | **The order the four words of a format $0 frame are written in.** They go out from the top of the frame down: the format word, the low half of the program counter, its high half, then the status register. | No available reference records the order for an MC68010 -- the vectors are an MC68000 with a different frame -- so this one was chosen rather than measured. The resulting memory is exactly what UM figure 6-6 specifies, which is what software sees; only a bus analyser could tell the difference. |
 | **CHK's Z, V and C flags.** PRM section 4 leaves all three undefined and defines N only for the two trapping cases. This takes the flags from the first bound test and leaves the second alone. | Undefined is undefined, but matching something real is better than matching nothing: this is what the reference does, and it is what the sweep checks against. |
@@ -760,6 +759,91 @@ reissued. The cycle-count check that the rest of the file uses for continuation
 was missing there. It is there now, and it fails before the fix.
 
 Ten checks fail with the fix reverted, across all five cases plus that one.
+
+## A divergence that turned out not to have a source
+
+**"The address bus stays driven between bus cycles"** was listed above as a
+deliberate divergence for most of this project's life, justified by a
+contradiction in the manual: the state descriptions say the address bus goes to
+high impedance at the end of a cycle, and table 3-4 and figure 5-3 were said to
+say it stays driven. Neither of those two says any such thing, and the entry has
+been deleted.
+
+**Table 3-4** is a signal summary with exactly two high-impedance columns, *On
+RESET* and *On Bus Relinquish*. The address bus reads **Yes** in both. It has no
+column in which an end-of-cycle release could appear, so it cannot be read as
+denying one -- and reading it that way is an argument from a silence the table's
+own shape forces.
+
+**Figure 5-3** draws two different glyphs on the two rows either side of a cycle
+boundary, and at 300 dpi they are not hard to tell apart. `FC2-FC0` is a
+crossover: the lines cross, and the bus is driven throughout. `A23-A1` converges
+to a single mid-rail line, runs flat, and diverges again -- the same glyph the
+data bus uses two rows below, where it is unquestionably floating. It is narrow,
+which is presumably how it came to be read as a crossover, but it is not one.
+
+Everything else in the manual agrees, and two sources say it outright rather
+than by drawing:
+
+- **Specification 7**, in the `read-write` AC table and not only the arbitration
+  one, is "Clock High to Address, Data Bus High Impedance" -- 80 ns at 8 MHz
+  down to 42 ns at 20 MHz. The electrical specifications state how long the
+  address bus takes to float at the end of an ordinary cycle, which is not a
+  quantity a part that keeps driving it would have.
+- **Appendix B**: "At state 0 (S0) in the cycle, the address bus is in the
+  high-impedance state." Not an end-of-cycle event but a description of the
+  state of the bus at the start of the next one.
+- **Figure 10-4** marks both on the `A23-A0` row: 8 where the valid window ends,
+  7 where the two lines reach the mid rail.
+- Six state descriptions -- UM 5.1.1 state 7, 5.1.2 state 7, 5.1.3 state 19 and
+  their three twins in section 4 -- say it in prose.
+
+The repo already half-disagreed with itself: `make-figure-svg.py` draws the
+address row of figures 10-4, 10-5 and 10-6 as `v, z, v`, high impedance between
+cycles, so our own redrawn figures contradicted our own divergence table.
+
+### What the RTL was doing
+
+`ADDR_HIZ_BETWEEN_CYCLES` now defaults to 1, and the logic behind it was rebuilt,
+because the path the parameter selected had never been simulated and did not
+work:
+
+- It released the address only in `ST_IDLE`, so **back-to-back cycles never
+  floated it at all** -- and S0 of a back-to-back pair is the exact case
+  appendix B describes.
+- `a_oe` was a rising-edge register reading the *present* state, so both of its
+  edges landed a full clock late: the address would have floated a clock after
+  the cycle ended, and come back only at the rising edge that asserts `AS` --
+  a whole state after the address itself is loaded, and two after S0 began.
+
+It is now a `rd68011_dedge_ff` like `AS`, the data strobes and the data bus
+enable: set entering S1, where the address itself is loaded (spec 6), cleared at
+the rising edge that ends the cycle (spec 7). The clear term is the data bus's
+minus the S7 a read-modify-write passes through on its way to the modify states,
+because `AS` is held across that whole cycle and so is the address.
+
+### What tests it
+
+`bus_rw_tb` checks `a_oe` as a window -- asserted in S1 through S7 and negated
+in the states either side -- on every read and every write, and separately that
+S0 of the back-to-back pair has it released while S7 of the cycle before it does
+not. `bus_wait_rmw_tb` checks the window across zero to four wait states and
+across both halves of a read-modify-write, where releasing at the read half's S7
+would break the indivisible cycle. `bus_system_tb`'s RESET test had to move: an
+idle address bus is released anyway now, so "released while RESET is asserted"
+is measured in S1 of a cycle run with RESET asserted, which is the only place
+the two behaviours differ.
+
+`bus_arb_tb` lost something instead of gaining it, and it is worth saying so.
+The processor relinquishes the bus only after the current cycle completes, so by
+the time a grant takes effect the address bus is already released for the other
+reason. Table 3-4's relinquish column is no longer observable on `a_oe`; the
+control group still carries that test.
+
+Clearing `ADDR_HIZ_BETWEEN_CYCLES` again fails 38 checks: 13 in `bus_rw_tb`, 24
+in `bus_wait_rmw_tb` and 1 in `bus_arb_tb`. `bus_system_tb` passes either way,
+and should -- what it tests is RESET, which releases the address bus under both
+readings.
 
 ## Not yet implemented
 

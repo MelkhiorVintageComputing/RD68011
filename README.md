@@ -174,12 +174,12 @@ and asserts against it.
 | S4 rising | data strobes on a write | 5.1.2 state 4 |
 | S4 falling | DTACK, BERR, VPA, HALT sampled — a wait state is a whole clock inserted here | 5.1.1 state 4 |
 | S6 falling | read data latched; AS and data strobes negated | 5.1.1 state 7 |
-| S7 rising | data bus released; R/W driven high | 5.1.2 state 7 |
+| S7 rising | address and data buses released; R/W driven high | 5.1.2 state 7 |
 
-The address bus has no terminator in that figure because it keeps its value
-between cycles rather than floating. The manual contradicts itself on that
-point — table 3-4 and figure 5-3 against §5.1.1, 5.1.2, 5.1.3 and appendix B —
-and a parameter selects the other reading.
+The address bus floats between cycles, and through S0 of the next one:
+§5.1.1, 5.1.2, 5.1.3 and appendix B all say so, specification 7 gives the time
+it takes, and figures 5-3 and 10-4 draw it on the mid rail there.
+`ADDR_HIZ_BETWEEN_CYCLES` keeps it driven for a board that needs it.
 
 Read-modify-write is one indivisible twenty-state cycle — S0–S7 read, S8–S11
 internal, S12–S19 write, with AS asserted straight through. An M6800

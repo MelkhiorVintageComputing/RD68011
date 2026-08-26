@@ -204,32 +204,44 @@ why `doc/pinout.md` defines seven enables rather than one.
 
 | Enable | Released on |
 |---|---|
-| `a_oe`, `d_oe` | bus relinquish, RESET asserted, HALT, and retry (UM 5.4.2, 5.4.3) |
+| `a_oe` | the end of every bus cycle, and bus relinquish, RESET asserted, HALT and retry (UM 5.4.2, 5.4.3) |
+| `d_oe` | the end of every bus cycle, and all of the above |
 | `as_oe`, `rw_oe`, `ds_oe`, `vma_oe`, `fc_oe` | bus relinquish only |
 | `reset_n_oe`, `halt_n_oe` | open drain — asserted only to pull low |
 
-## Where the manual contradicts itself
+Table 3-4 is not a list of every occasion a pin floats: its only two columns are
+*Hi-Z On RESET* and *On Bus Relinquish*, so an end-of-cycle release has nowhere
+to appear in it either way. What it does say about the address bus is **Yes** in
+both columns.
 
-**The address bus between cycles.** UM 5.1.1 state 7, 5.1.2 state 7, 5.1.3 state
-19 and appendix B all say the processor "places the address bus in the
-high-impedance state" as the clock rises at the end of the cycle. Table 3-4 says
-the address bus goes high-impedance on RESET and on bus relinquish, and lists
-nothing else; figure 5-3 draws the address as a continuously valid bus across
-back-to-back cycles, changing value at S0/S1 rather than floating; and the
-systems this part went into rely on the address staying driven.
+## The address bus between cycles
 
-This core follows table 3-4 by default. The `ADDR_HIZ_BETWEEN_CYCLES` parameter
-on `rd68011_biu` selects the other reading for anyone who needs it. Both are
-defensible; what is not defensible is picking one silently.
+The processor releases the address bus at the rising edge that ends the cycle
+and drives it again entering S1 (specifications 7 and 6). Every source in the
+manual says so, and none says otherwise:
 
-**Specification 7 versus 8.** The figure generator places both at 0.60 states
-after the S0 rising edge, so figure 10-4 cannot distinguish "address goes
-high-impedance" from "address becomes invalid". Under the default reading, spec
-8 (address invalid) is what the address bus does between cycles and spec 7 is
-what the *data* bus does at the end of a write.
+| Source | What it says |
+|---|---|
+| UM 5.1.1 state 7, 5.1.2 state 7, 5.1.3 state 19 | "the processor places the address bus in the high-impedance state" as the clock rises at the end of the cycle |
+| UM 4.1.1, 4.1.2, 4.1.3 (the 8-bit twins) | the same three sentences |
+| Appendix B | "At state 0 (S0) in the cycle, the address bus is in the high-impedance state" — and again for the end of the cycle |
+| Specification 7, `read-write` table | "Clock High to Address, Data Bus High Impedance", 80 ns at 8 MHz down to 42 ns at 20 MHz. An ordinary cycle, not an arbitration one |
+| Figure 10-4 | the `A23–A0` row drops to the mid rail after the S0 rising edge, with 8 marking where it goes invalid and 7 where it reaches the rail |
+| Figure 5-3 | the address converges to a single mid-rail line between back-to-back cycles, where `FC2–FC0` on the row above is drawn as a crossover |
 
-`MC68000UM_split/README.md` documents fourteen further contradictions in the
-source — spec 23's 550 ns, spec 47's three different values, the two rows
+`ADDR_HIZ_BETWEEN_CYCLES` on `rd68011_biu` defaults to 1 for that reason.
+Clearing it keeps the address driven between cycles, for a board that needs a
+valid address after `AS` has gone away; that is a deviation from the part, and
+the parameter exists so it is one somebody chose.
+
+**Specification 7 versus 8** are distinguishable in the source — figure 10-4
+puts 8 at the end of the valid window and 7 a little later, where the two lines
+meet the mid rail — but not in our redrawing, which places both at 0.60 states
+after the S0 rising edge. That is a limitation of `make-figure-svg.py`, not of
+the manual.
+
+`MC68000UM_split/README.md` documents fourteen contradictions the source really
+does contain — spec 23's 550 ns, spec 47's three different values, the two rows
 numbered 48, and the rest. Consult it before treating any single printed value
 as authoritative.
 

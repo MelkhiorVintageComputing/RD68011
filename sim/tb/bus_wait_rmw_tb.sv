@@ -41,6 +41,9 @@ module bus_wait_rmw_tb;
       // AS holds from S2 until the falling edge entering the final state.
       expect_window($sformatf("%0d-wait read AS", n), t0, OB_ASN, 1'b0, 2, last - 1);
       expect_window($sformatf("%0d-wait read UDS", n), t0, OB_UDSN, 1'b0, 2, last - 1);
+      // The address is driven across the wait states too -- they are inserted
+      // in the middle of the cycle, not at the end of it.
+      expect_window($sformatf("%0d-wait read a_oe", n), t0, OB_AOE, 1'b1, 1, last);
       expect_val($sformatf("%0d-wait read data", n),
                  {16'd0, req_rdata}, {16'd0, 16'h5A5A});
       expect_val($sformatf("%0d-wait read end", n),
@@ -52,6 +55,7 @@ module bus_wait_rmw_tb;
       expect_window($sformatf("%0d-wait write AS", n), t0, OB_ASN, 1'b0, 2, last - 1);
       expect_window($sformatf("%0d-wait write DS", n), t0, OB_UDSN, 1'b0, 4, last - 1);
       expect_window($sformatf("%0d-wait write d_oe", n), t0, OB_DOE, 1'b1, 3, last);
+      expect_window($sformatf("%0d-wait write a_oe", n), t0, OB_AOE, 1'b1, 1, last);
       expect_val($sformatf("%0d-wait write stored", n),
                  {16'd0, slv.peek(23'h002001)}, {16'd0, 16'h0000 + n[15:0]});
     end
@@ -69,6 +73,9 @@ module bus_wait_rmw_tb;
 
     // AS asserted from S2 right through to the falling edge entering S19.
     expect_window("RMW AS", t0, OB_ASN, 1'b0, 2, 18);
+    // The address is held for the whole indivisible cycle, not released at the
+    // S7 the read half passes through on its way to the modify states.
+    expect_window("RMW a_oe", t0, OB_AOE, 1'b1, 1, 19);
 
     // The read half's data strobe: S2..S6, negated entering S7.
     expect_window("RMW read UDS", t0, OB_UDSN, 1'b0, 2, 6);
@@ -102,6 +109,7 @@ module bus_wait_rmw_tb;
     // 12 states of read half, 4 of modify, 8 of write half: 24 in all, so the
     // last state is index 23 and AS is asserted from S2 to index 22.
     expect_window("waited RMW AS", t0, OB_ASN, 1'b0, 2, 22);
+    expect_window("waited RMW a_oe", t0, OB_AOE, 1'b1, 1, 23);
     expect_val("waited RMW stored", {16'd0, slv.peek(23'h002012)}, {16'd0, 16'h1111});
 
     harness_done("bus_wait_rmw_tb");
