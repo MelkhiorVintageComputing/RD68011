@@ -92,6 +92,19 @@ module harte_tb;
       .op (tb_opcode), .entry (tb_entry), .illegal (tb_illegal)
   );
 
+  // The store is read a microword early and its read is registered, so poking
+  // `upc` alone is no longer enough: the previous vector's microword would
+  // stay current for a clock, and it can issue a bus cycle. A second store,
+  // addressed at the entry point, holds the word `load_state` copies across --
+  // the same idiom as u_tb_decode above, using the design's own table rather
+  // than a copy of it. `tb_opcode` is set before the reset edge below, so this
+  // has latched ROM[tb_entry] by the time load_state runs.
+  logic [rd68011_ucode_pkg::UW-1:0] tb_uw;
+
+  rd68011_ucode_rom u_tb_urom (
+      .clk (clk), .addr (tb_entry), .uw (tb_uw)
+  );
+
   // -- Instruction completion, and the state at that moment -------------------
   //
   // The boundary is the edge on which the instruction's last microword retires
@@ -313,6 +326,7 @@ module harte_tb;
       tb_opcode          = ipf0;
       #1;
       dut.u_seq.upc      = tb_entry;
+      dut.u_seq.u_urom.uw_q = tb_uw;
     end
   endtask
 

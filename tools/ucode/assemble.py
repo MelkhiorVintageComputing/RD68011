@@ -221,17 +221,28 @@ def emit_pkg(labels=None, rq=None):
 def emit_urom(words):
     w = isa.width()
     nibbles = (w + 3) // 4
+    # The read is registered, and the address is upc_nxt rather than upc, so
+    # the word this holds is the same word at the same time -- see the note in
+    # rd68011_seq.sv where it is instantiated. A registered case is what both
+    # Vivado and Quartus infer a block memory from, and it is the only form
+    # available: an array would have to be filled by an initial block or
+    # $readmemh, which CLAUDE.md bars and tools/reset_audit.py checks for.
+    #
+    # uw_q takes no reset. It is the one register in the design that does not,
+    # and tools/reset_audit.py names it and says why.
     out = [BANNER, '',
            '// The microcode store: micro-address to microword.', '',
            'module rd68011_ucode_rom (',
+           '    input  logic                                clk,',
            '    input  logic [rd68011_ucode_pkg::UADDR-1:0] addr,',
            '    output logic [rd68011_ucode_pkg::UW-1:0]    uw',
            ');', '',
-           '  always_comb begin',
+           '  logic [rd68011_ucode_pkg::UW-1:0] uw_q;', '',
+           '  always_ff @(posedge clk) begin',
            '    case (addr)']
     for i, (fields, comment) in enumerate(words):
         val = encode(fields)
-        line = ("      %d'd%-3d: uw = %d'h%0*x;" %
+        line = ("      %d'd%-3d: uw_q <= %d'h%0*x;" %
                 (isa.UADDR_BITS, i, w, nibbles, val))
         if comment:
             line += '  // %s' % comment
@@ -248,10 +259,12 @@ def emit_urom(words):
     # in program space. The defaults do nothing and go to the reset entry.
     out.append("      // Unmapped. The defaults: no bus request, and the reset")
     out.append("      // entry next. See tools/ucode/assemble.py emit_urom.")
-    out.append("      default: uw = %d'h%0*x;"
+    out.append("      default: uw_q <= %d'h%0*x;"
                % (w, nibbles, encode(isa.DEFAULTS)))
     out.append('    endcase')
     out.append('  end')
+    out.append('')
+    out.append('  assign uw = uw_q;')
     out.append('')
     out.append('endmodule')
     out.append('')

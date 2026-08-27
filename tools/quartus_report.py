@@ -35,6 +35,7 @@ WANTED = [
     ('Total logic elements', 'logic elements'),
     ('Total registers', 'registers'),
     ('Total memory bits', 'memory bits'),
+    ('M9Ks', 'M9K blocks'),
     ('Embedded Multiplier 9-bit elements', '9-bit multipliers'),
     ('Total pins', 'pins'),
 ]

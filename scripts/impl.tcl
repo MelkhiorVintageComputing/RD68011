@@ -58,7 +58,7 @@ puts "RD68011: cells (primitives, not the report's Slice LUTs): LUT [llength [ge
      FF [llength [get_cells -hier -filter {PRIMITIVE_GROUP == FLOP_LATCH}]] \
      CARRY [llength [get_cells -hier -filter {PRIMITIVE_GROUP == CARRY}]] \
      DSP [llength [get_cells -hier -filter {REF_NAME =~ DSP*}]] \
-     BRAM [llength [get_cells -hier -filter {PRIMITIVE_GROUP == BLOCKRAM}]]"
+     BRAM [llength [get_cells -hier -filter {REF_NAME =~ RAMB*}]]"
 
 if {$wns < 0 || $whs < 0} {
     puts "RD68011: TIMING NOT MET"

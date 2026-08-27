@@ -199,7 +199,20 @@ module rd68011_seq (
   logic [rd68011_ucode_pkg::UADDR-1:0] upc_nxt;
   logic [rd68011_ucode_pkg::UADDR-1:0] upc_target;
 
-  rd68011_ucode_rom u_urom (.addr (upc), .uw (uw));
+  // The store is read at `upc_nxt`, not at `upc`, and its read is registered.
+  // `upc <= upc_nxt` is unconditional outside reset, so ROM[upc] this clock is
+  // ROM[upc_nxt] of the last one: a memory addressed a microword early holds
+  // exactly the same word at exactly the same time, and costs no clock. That
+  // is what lets it be a block memory rather than 6665 LUTs of logic -- see
+  // doc/size-and-speed.md, which measures both.
+  //
+  // uw_q inside it takes no reset, which is the one exception to CLAUDE.md's
+  // rule; tools/reset_audit.py names it, enforces that it is the only one, and
+  // carries the argument. The obligation it creates is discharged here: the
+  // first arm of `upc_nxt` below tests `rst_n` as well as `reset_sync_n`, so
+  // the address is ENTRY_RESET throughout reset and one clock edge is enough
+  // to leave the store holding the reset microword.
+  rd68011_ucode_rom u_urom (.clk (clk), .addr (upc_nxt), .uw (uw));
 
   // The request the bus unit is about to latch comes from the microword that
   // will be current after the coming edge -- an address the sequencer only
@@ -1397,7 +1410,13 @@ module rd68011_seq (
     else                   fault_prev = rd68011_ucode_pkg::PREV_BUSERR;
   end
 
-  assign upc_nxt = !reset_sync_n ? rd68011_ucode_pkg::ENTRY_RESET
+  // `rst_n` as well as `reset_sync_n`: rd68011_sync's RESET_VAL is 1, so
+  // reset_sync_n is inactive-high while rst_n is asserted and would not
+  // select this arm on its own. The store is addressed by this net, so
+  // without the first term it would be addressed by a word it has not
+  // loaded yet, and the X would feed back through retire and f_seq and
+  // never clear.
+  assign upc_nxt = (!rst_n || !reset_sync_n) ? rd68011_ucode_pkg::ENTRY_RESET
                  : halted        ? rd68011_ucode_pkg::ENTRY_HALTED
                  : fault         ? fault_entry
                  : !retire       ? upc

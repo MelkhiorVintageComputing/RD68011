@@ -36,6 +36,17 @@ set_global_assignment -name FAMILY $family
 set_global_assignment -name DEVICE $device
 set_global_assignment -name TOP_LEVEL_ENTITY $top
 
+# MAX 10 loads its embedded RAM from the configuration flash, and it only does
+# so when the image is built to carry the contents. Without this the part
+# cannot initialise an M9K, so Quartus quietly implements every inferred ROM in
+# logic instead -- the microcode store came out at 23696 logic elements and
+# zero memory bits, with no warning that anything had been declined. Measured
+# both ways; see doc/size-and-speed.md. Harmless on families that ignore it.
+if {[string match -nocase "MAX 10" $family]} {
+    set_global_assignment -name INTERNAL_FLASH_UPDATE_MODE \
+        "SINGLE COMP IMAGE WITH ERAM"
+}
+
 set f [open $root/build/rtl.f r]
 set rtl [split [string trim [read $f]] "\n"]
 close $f
