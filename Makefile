@@ -44,8 +44,11 @@ APART    ?= 10M50DAF484C7G
 AJOBS    ?= 8
 # The Fmax `make quartus` must still reach. A floor measured here, not a target:
 # doc/implementation.md has the number and what moved it. It was 4.26 MHz until
-# the decode table stopped being a priority chain.
-AFMAX    ?= 18.50
+# the decode table stopped being a priority chain, and 18.50 until the microcode
+# store became a memory and the address unit stopped reading the ALU's opcode --
+# doc/size-and-speed.md, where 18.48 on one of the candidates is what the floor
+# caught.
+AFMAX    ?= 19.50
 
 .PHONY: suska-ssw suska-fault suska-rte all lint lint-iverilog lint-verilator lint-yosys synth sim check clean dirs \
         lint-questa lint-quartus quartus \

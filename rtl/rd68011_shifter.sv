@@ -73,6 +73,41 @@ module rd68011_shifter (
 
   assign lsh   = {32'd0, v} << count;
 
+
+  // -- Rotates ----------------------------------------------------------------
+  // Doubling the operand turns a rotate into a shift: rotating w bits right by
+  // k takes bits [k+w-1 : k] of the doubled value, and rotating left by k is
+  // the same as rotating right by w-k.
+  logic [63:0] dd;
+  logic  [5:0] rk, rsh_amt;
+
+  always_comb begin
+    unique case (size)
+      2'd0:    dd = {48'd0, v[7:0],  v[7:0]};
+      2'd1:    dd = {32'd0, v[15:0], v[15:0]};
+      default: dd = {v, v};
+    endcase
+    rk      = (count % w);
+    rsh_amt = left ? (w - rk) : rk;
+  end
+
+  // -- Rotate through the extend bit -----------------------------------------
+  // Here the operand is w+1 bits wide, X being the extra one, so the count
+  // reduces modulo w+1 and the doubled value is 2(w+1) bits.
+  logic [32:0]  xext;
+  logic [71:0]  xdd;
+  logic  [5:0]  xk, xsh_amt;
+
+  // X sits immediately above the operand, at bit w -- not at bit 32. For a
+  // byte operand the rotated value is nine bits, not thirty-three.
+  assign xext = ({32'd0, x_in} << w) | {1'b0, v};
+
+  always_comb begin
+    xdd     = {39'd0, xext} | ({39'd0, xext} << (w + 6'd1));
+    xk      = count % (w + 6'd1);
+    xsh_amt = left ? ((w + 6'd1) - xk) : xk;
+  end
+
   // The right shift is one barrel for all four of the kinds that need one --
   // logical, arithmetic, rotate and rotate-through-X. They differ only in what
   // goes in and by how much, and a multiplexer in front of one shifter is far
@@ -111,40 +146,6 @@ module rd68011_shifter (
 
   assign rsh   = sh_out[39:8];
   assign rsh_c = sh_out[7];
-
-  // -- Rotates ----------------------------------------------------------------
-  // Doubling the operand turns a rotate into a shift: rotating w bits right by
-  // k takes bits [k+w-1 : k] of the doubled value, and rotating left by k is
-  // the same as rotating right by w-k.
-  logic [63:0] dd;
-  logic  [5:0] rk, rsh_amt;
-
-  always_comb begin
-    unique case (size)
-      2'd0:    dd = {48'd0, v[7:0],  v[7:0]};
-      2'd1:    dd = {32'd0, v[15:0], v[15:0]};
-      default: dd = {v, v};
-    endcase
-    rk      = (count % w);
-    rsh_amt = left ? (w - rk) : rk;
-  end
-
-  // -- Rotate through the extend bit -----------------------------------------
-  // Here the operand is w+1 bits wide, X being the extra one, so the count
-  // reduces modulo w+1 and the doubled value is 2(w+1) bits.
-  logic [32:0]  xext;
-  logic [71:0]  xdd;
-  logic  [5:0]  xk, xsh_amt;
-
-  // X sits immediately above the operand, at bit w -- not at bit 32. For a
-  // byte operand the rotated value is nine bits, not thirty-three.
-  assign xext = ({32'd0, x_in} << w) | {1'b0, v};
-
-  always_comb begin
-    xdd     = {39'd0, xext} | ({39'd0, xext} << (w + 6'd1));
-    xk      = count % (w + 6'd1);
-    xsh_amt = left ? ((w + 6'd1) - xk) : xk;
-  end
 
   // -- The overflow flag of an arithmetic left shift --------------------------
   // Set when the sign changed at any point during the shift, which is to say

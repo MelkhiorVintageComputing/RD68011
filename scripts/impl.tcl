@@ -19,6 +19,13 @@ set f [open $root/build/rtl.f r]
 set rtl [split [string trim [read $f]] "\n"]
 close $f
 
+# A signal used before it is declared is an info in Vivado and an implicit
+# one-bit net in some other tools, so it is silent everywhere and wrong
+# somewhere. Promote it: the shared shifter barrel introduced one and every
+# gate still passed. Questa rejects the same thing natively, which is what
+# make lint-questa is for.
+set_msg_config -id "Synth 8-6901" -new_severity ERROR
+
 read_verilog -sv $rtl
 read_xdc $root/scripts/rd68011.xdc
 

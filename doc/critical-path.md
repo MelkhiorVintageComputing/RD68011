@@ -226,10 +226,19 @@ not an error -- when the route simply is not there, which is what it now says.
 
 - **The floor is the address path.** Read data through the datapath into the
   next bus address is required by absolute-long addressing and by branch
-  targets. The only
-  thing on it that is not obviously necessary is the address-error check standing
-  between `n_addr` and `req_valid`; whether the bus unit could make that check
-  itself, a state later, has not been looked at.
+  targets. The address-error check standing between `n_addr` and `req_valid`
+  *has* now been looked at: `doc/size-and-speed.md` bounds it at **0.175 ns**,
+  a fifth of the router's own spread, and moving it into the bus unit would make
+  a cycle that does not happen visible on `fc_o`. Not worth it, and now measured
+  rather than open.
+- **One thing on that path was not required, and is gone.** The next microword's
+  address register was selected from `ir_nxt`, whose `U_DST_IR` arm is RTE
+  reloading the opcode out of the ALU -- so read data reached a register
+  *number*, then a 16:1 register-file read. One microword in 6674 writes `ir`
+  that way and its successor addresses through A7, so `n_ea_reg` now reads the
+  prefetch pipe's own value and the assembler enforces that it may.
+  Worth **0.82 ns**, and `shifter -> req_valid -> start_new` went from the worst
+  family to the third.
 - **76.8 % of the delay is routing.** The worst path is 21.7 ns in 24 logic
   levels and only 5.0 ns of that is gates; before these changes it was 29.4 ns
   in 41 levels at 72 %. Taking logic out made the ratio worse, which is what

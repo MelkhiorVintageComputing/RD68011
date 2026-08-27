@@ -19,17 +19,17 @@ with a 50 % duty cycle:
 | | |
 |---|--:|
 | Clock period | **48.0 ns**, which is **20.8 MHz** |
-| Setup slack | 0.75 to 2.58 ns across runs -- see below |
-| Hold slack | 0.144 ns |
-| Slice LUTs | 13121 (20.7 % of the part) |
+| Setup slack | 2.048 ns |
+| Hold slack | 0.138 ns |
+| Slice LUTs | 6585 (10.4 % of the part) |
 | Slice registers | 1342 (1.1 %) |
-| F7 / F8 muxes | 1490 / 225 |
+| F7 / F8 muxes | 551 / 112 |
 | DSP48E1 | 3 |
-| Block RAM | 0 |
+| Block RAM | 7.5 of 135 |
 
-46 ns also closed once, at 0.277 ns. That is well inside the run-to-run
-variation, so it is not a number to quote; 48 ns is where it closes on every
-run so far.
+`doc/size-and-speed.md` is where those last four rows changed: the microcode
+store is a block memory rather than 6665 LUTs, and the design is half the size
+it was. That document also measures what it cost, which was not nothing.
 
 ### The same design on a MAX 10
 
@@ -40,18 +40,26 @@ M9K blocks where the Artix-7 has six-input LUTs and 36 kbit block RAMs.
 
 | | |
 |---|--:|
-| Fmax | **19.82 MHz** |
-| Setup slack | −1.225 ns against 48 ns |
-| Hold slack | 0.321 ns |
-| Logic elements | 36074 (72 % of the part) |
+| Fmax | **19.98 MHz** |
+| Setup slack | −2.351 ns against 48 ns |
+| Hold slack | 0.322 ns |
+| Logic elements | 13749 (28 % of the part) |
 | Registers | 1391 |
 | Embedded 9-bit multipliers | 4 (1 %) |
-| Memory bits | 0 (of 1677312) |
+| M9K blocks | 30 of 182 (16 %) |
+| Memory bits | 245760 (of 1677312) |
 
-19.82 MHz against the Artix-7's 21.5, on a part two device generations older
-and with four-input logic. It does not quite reach 48 ns -- it wants about 52 --
-and `make quartus` gates on the Fmax floor in the Makefile rather than on that
-slack, which is a regression test rather than an aspiration.
+28 % of the part where it was 72 %, and it needs one assignment to get there:
+MAX 10 loads its embedded RAM from the configuration flash and only does so when
+the image is built to carry the contents, so without
+`INTERNAL_FLASH_UPDATE_MODE "SINGLE COMP IMAGE WITH ERAM"` in
+`scripts/quartus.tcl` every inferred ROM stays in logic, silently.
+`doc/size-and-speed.md` has that measurement and the six others it took to find
+it.
+
+It does not quite reach 48 ns, and `make quartus` gates on the Fmax floor in the
+Makefile rather than on that slack, which is a regression test rather than an
+aspiration.
 
 Quartus's Fmax is the more trustworthy of the two frequency figures here. The
 section below on reading a frequency off a slack explains why `1000 / (period −
@@ -124,19 +132,19 @@ they did not before.
 `report_utilization -hierarchical`, same run. Worth having because until it was
 added every area claim in this document was a guess:
 
-| | LUTs | FFs | |
-|---|--:|--:|---|
-| `u_urom` | **6665** | 0 | the microcode store, **51 % of the design** |
-| `u_seq` itself | 3676 | 1078 | source multiplexers, address unit, register file |
-| `u_decode` | 1081 | 0 | 1401 opcode patterns, entry point and preview |
-| `u_shifter` | 814 | 0 | |
-| `u_alu` | 502 | 0 | |
-| `u_divider` | 223 | 89 | |
-| `u_biu` | 137 | 157 | the bus interface is almost all flops |
-| total | 13121 | 1342 | plus 3 DSP48E1 for the multiplier |
+| | LUTs | FFs | BRAM | |
+|---|--:|--:|--:|---|
+| `u_seq` itself | 3467 | 1096 | 0 | source multiplexers, address unit, register file |
+| `u_decode` | 1076 | 0 | 0 | 1401 opcode patterns, entry point and preview |
+| `u_urom` | 589 | 0 | 7.5 | the microcode store: 533 control table, 56 previews |
+| `u_shifter` | 578 | 0 | 0 | one barrel, shared |
+| `u_alu` | 500 | 0 | 0 | |
+| `u_divider` | 224 | 89 | 0 | |
+| `u_biu` | 135 | 157 | 0 | the bus interface is almost all flops |
+| total | 6585 | 1342 | 7.5 | plus 3 DSP48E1 for the multiplier |
 
-The store being half the design is the one number that makes the block RAM
-question concrete rather than theoretical -- see the end of this section.
+The store used to be 6665 LUTs and half the design. `doc/size-and-speed.md` is
+what changed that, and it is also where the shifter's 814 became 578.
 
 For scale: the fastest MC68010 Motorola shipped ran at 12.5 MHz, and the part
 this is modelled on was usually clocked at 8 or 10.
@@ -252,19 +260,15 @@ registers, because the router had less reason to replicate. The 8192-entry
   that `sim/tb/core_timing_tb.sv` checks and `doc/timing-divergences.md`
   accounts for. It is not worth it and it is not necessary.
 
-The microcode store as a block RAM remains an area trade rather than a speed
-one, but the hierarchical report makes it worth stating properly. The store's
-*second* read -- the one that was on the critical path -- no longer exists; what
-is left is the read at `upc`, whose address is already a register, so a block RAM
-with a registered output holds exactly the same value at the same time and costs
-no clock.
-
-It is **6665 LUTs, 51 % of the design**. 6674 words of 146 bits is 974 kbit,
-which in 1024x36 mode is about 35 of the part's 135 block RAMs. So it would
-roughly halve the LUT count and buy no frequency at all. It would also need the
-no-initialisation-outside-reset rule bent, because a block RAM output register
-has only a synchronous reset -- which is a project-policy decision, not an
-engineering one.
+The microcode store *is* a block memory now, and this paragraph used to predict
+what that would be worth. It was right about the mechanism and about the
+frequency and wrong about the size. The read at `upc` moved to `upc_nxt`, whose
+address is a register either way, so the memory holds the same word at the same
+time and costs no clock; it halved the LUT count and bought no frequency on this
+part. What it did not predict is the MAX 10, where it cost five per cent until
+the microword was re-encoded and the address register taken out of the ALU's
+reach. `doc/size-and-speed.md` is the whole account, including the two
+hypotheses it refuted.
 
 ## The reset audit
 
@@ -281,15 +285,43 @@ cell types are read back. A flop without a reset is a different cell there —
 some route nobody thought of still shows up. As of P9:
 
 ```
-reset audit: 14 files, no initial blocks, no latches, no declaration initialisers
-reset audit: 1381 flip-flops in the netlist, every one of them with a reset
-    $_DFFE_NN0N_        24      $_DFF_NN0_          30
-    $_DFFE_NN0P_        37      $_DFF_NN1_          15
-    $_DFFE_NN1P_         1      $_DFF_PN0_         574
-    $_DFFE_PN0N_        83      $_DFF_PN1_           3
-    $_DFFE_PN0P_       608
+reset audit: 16 files, no initial blocks, no latches, no declaration initialisers
+reset audit: 1385 flip-flops in the netlist, every one of them with a reset
+    $_DFFE_NN0P_        61      $_DFF_NN0_          30
+    $_DFFE_NN1P_         1      $_DFF_NN1_          15
+    $_DFFE_PN0N_        84      $_DFF_PN0_         588
+    $_DFFE_PN0P_       596      $_DFF_PN1_           4
     $_DFFE_PN1P_         6
+reset audit: 30 more in rd68011_ucode_rom, which the module docstring exempts
 ```
+
+### One register has no reset, and it is named
+
+The microcode store's output register takes no reset value. It cannot: a block
+memory's read register is inside the primitive, and requiring a reset on it is
+requiring the store to be logic -- which was 6665 LUTs on the Artix-7 and 23604
+logic elements on the MAX 10, half the design on one part and two thirds of it
+on the other.
+
+The rule exists to prevent a design that depends on power-on state, and this one
+does not. The store is addressed by `upc_nxt`, which `rd68011_seq.sv` forces to
+`ENTRY_RESET` whenever `rst_n` or `reset_sync_n` is asserted, so one clock edge
+during reset leaves it holding `ROM[ENTRY_RESET]` -- the same microword `upc`'s
+own reset branch selects, so the pair is consistent from that edge onwards. Its
+value is determined by reset, by a different mechanism from every other register
+here. The obligation that creates is one clock edge while reset is asserted;
+`core_reset` gives four, `harte_tb` one, and the part requires four.
+
+The exemption is *enforced* rather than allowed: no resetless register may exist
+outside that one module, and both halves of that were watched to fail. It is
+named by module and not by instance because a flattened netlist cannot be asked
+-- yosys's `ff` pass renames the flops to `$auto$ff.cc:266:slice$41200` and drops
+their `src` attribute, so `n:`, `c:` and `a:src=` all match nothing. The audit is
+hierarchical for that reason, which also runs faster and says which module each
+flop is in.
+
+That is why the count reads 1385 where it read 1381: without flattening, four
+registers that cross-module optimisation used to remove now survive.
 
 Every one of those cell names carries a reset polarity and a reset value. The
 absence of a resetless type is the point, not the count -- but the count should
@@ -299,9 +331,11 @@ before the explicit `stat` does, so the output holds two identical blocks and
 the audit summed both. The doubling was noticed and then explained away, as
 yosys flattening without merging. That explanation was wrong, and the size of
 the gap should have been the clue -- yosys does count a few more than the
-place-and-route tools do, 1381 against Vivado's 1342 placed and Quartus's 1391
+place-and-route tools do, 1385 against Vivado's 1342 placed and Quartus's 1391
 registers, but not twice as many. `tools/reset_audit.py` now reads only the
-last block.
+last block, and since it stopped flattening, only the aggregate under
+`=== design hierarchy ===` -- the per-module blocks above it must not be added
+up as well, which would be the same mistake wearing a different hat.
 
 The negative-edge flops in that list are the bus interface's output stage,
 which is negedge-clocked on purpose — one bus state is half a clock period, and

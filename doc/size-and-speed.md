@@ -15,6 +15,34 @@ Every number here was taken with those. Where a figure is quoted for both parts 
 from the same tree; `doc/implementation.md` explains why that matters and what it cost to
 learn.
 
+## What it came to
+
+| | before | after | |
+|---|--:|--:|---|
+| Artix Slice LUTs | 13,121 (20.7 %) | **6,585 (10.4 %)** | −50 % |
+| Artix block RAM | 0 | 7.5 of 135 | |
+| Artix setup slack at 48 ns | 1.375 to 2.077 | 2.048 | |
+| MAX 10 logic elements | 36,074 (**72 %**) | **13,749 (28 %)** | −62 % |
+| MAX 10 M9K blocks | 0 of 182 | 30 (16 %) | |
+| **MAX 10 Fmax** | 19.82 MHz | **19.98 MHz** | |
+| instruction cycle counts | — | unchanged | every one of them |
+
+Six candidates were measured and four were kept:
+
+| candidate | kept | what it was worth |
+|---|:--:|---|
+| the store read a microword early, as a memory | yes | −52 % Artix LUTs, −66 % MAX 10 logic; −5 % Fmax |
+| two levels for the microword | yes | 3.91x fewer stored bits; 146 M9Ks become 30 |
+| one shifter barrel instead of four | yes | −245 Artix LUTs, −600 MAX 10 logic, +0.13 MHz |
+| the address register out of the ALU's reach | yes | **+0.82 ns**, and the worst family becomes the third |
+| the shifter's two remainders | no | +11 MAX 10 logic, and Fmax below the gate's floor |
+| the decoder's forty previews indexed | no | the decoder got *bigger*, 1297 LUTs to 1321 |
+| the address-error check moved to the bus unit | no | 0.175 ns, and visible on the pins |
+
+Two hypotheses were refuted along the way and both are written up where they were made: that
+taking two thirds of the logic out of a congested part would buy frequency, and that the
+M9K count was why it did not.
+
 ## Where the area was, and where the time was
 
 Post-route on `xc7a100tcsg324-1` and fitted on `10M50DAF484C7G`, both at the 48 ns
@@ -421,3 +449,56 @@ gain needs the cycle to start and be killed a state later, and that is visible o
 Bus behaviour is a hard requirement of this project rather than a soft one, so a
 tenth-of-a-nanosecond path change is not a reason to make a cycle that does not happen
 observable. Not built.
+
+## How fast it actually goes
+
+48 ns is the constraint every figure in this project is measured against, and it stays
+that way so the numbers remain comparable. It is not the limit. Searching for the closing
+period, one run each:
+
+| period | setup slack | |
+|--:|--:|---|
+| 48 ns | 2.048 ns | 20.8 MHz, the constraint in `scripts/rd68011.xdc` |
+| 44 ns | 1.394 ns | 22.7 MHz |
+| 42 ns | 0.880 ns | 23.8 MHz |
+| **40 ns** | **0.864 ns** | **25.0 MHz** |
+| 38 ns | 0.292 ns | 26.3 MHz, but inside the router's own spread |
+| 36 ns | **−0.543 ns** | does not close |
+
+Read that as *the design closes at 40 ns*, which is the last row with more than the
+1.3 ns of run-to-run variation this project has already measured between it and failure.
+Before this work it closed at 48 and once, marginally, at 46.
+
+## A defect this study introduced, and how it was found
+
+The shared shifter barrel read `dd`, `rsh_amt`, `xdd` and `xsh_amt` above the lines that
+declare them. Vivado reports that as `[Synth 8-6901]`, an **info**; every gate in this
+project passed with it present -- lint under three tools, 14 testbenches, 124 opcode files,
+93,991 co-simulated instructions, both place-and-route flows. Other tools invent an
+implicit one-bit net instead, which is silently the wrong netlist.
+
+`scripts/synth.tcl` and `scripts/impl.tcl` now promote that message to an error, and the
+whole RTL is clean under it. Questa rejects the same construct natively, which is what
+`make lint-questa` is for and why `doc/coding-standard.md` gained a row.
+
+The general point is the one this document keeps arriving at: a diagnostic nobody has
+watched fail is not a gate. This one was not even a diagnostic until it was promoted.
+
+## What is left
+
+- **The shifter is the floor now.** Three shifter families sit inside 0.5 ns of each other
+  and `alu -> alu_y` is 2.5 ns behind. The barrel is shared and the operand widths are
+  already trimmed by both tools, so what remains is the barrel's own depth.
+- **Frequency is not where the logic is.** Four rounds of this work moved the Artix from
+  13,121 LUTs to 6,585 and the MAX 10 from 72 % of the part to 28 %, and the clock moved
+  from 48 ns to 40. Those are not proportional and were never going to be: the two
+  candidates that shortened a path bought the frequency, and the two that removed logic
+  bought the area.
+- **Both refuted hypotheses were about congestion.** Removing two thirds of the logic on a
+  part that was 72 % full did not buy frequency, and neither did returning 116 of its 146
+  memory blocks. On this design, at these occupancies, area and frequency are close to
+  independent -- which is worth knowing before anyone spends a week shrinking something to
+  make it faster.
+- **`u_decode` is now the largest single block on the Artix** at 1076 LUTs of 6585, and
+  indexing its previews made it bigger. Whatever helps it is not the redundancy in its
+  table, because synthesis already has that.

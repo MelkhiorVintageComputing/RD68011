@@ -176,6 +176,10 @@ depends on which combinations the design happens to exercise.
 | Verilator | `-Wall` flags every unused package parameter | the `.vlt` waiver above |
 | yosys | no `import` in any form | fully-scoped references |
 | Vivado | needs the package file read before its users | `synth.tcl` sorts `rd68011_pkg.sv` first |
+| Vivado | a signal used before its declaration is only `[Synth 8-6901]`, an *info* | `synth.tcl` and `impl.tcl` promote it to an error; Questa rejects the same thing natively, and it is how the one instance in this design was found |
+| Quartus | on MAX 10, an inferred ROM stays in logic with no warning unless the image carries its contents | `set_global_assignment -name INTERNAL_FLASH_UPDATE_MODE "SINGLE COMP IMAGE WITH ERAM"`; the microcode store was 23,696 logic elements and 0 memory bits without it and 62 with |
+| Quartus | `romstyle` is recognised on a ROM and `rom_style` is not (`Warning (10335)`) | neither is needed: a `case` in an `always_ff` infers memory under both tools with no attribute at all |
+| Quartus | `small` is a reserved word in its SystemVerilog | do not name a module or signal that |
 | iverilog | assigning a ternary of two enum values to an enum variable is "This assignment requires an explicit cast" | use `if`/`else` inside the case item |
 | iverilog | `unique`/`unique0` on a case are parsed but ignored, with a "sorry" note per occurrence | harmless; keep them for the other five |
 | iverilog | adjacent string literals do not concatenate (`"a" "b"` is a syntax error) | write one string |

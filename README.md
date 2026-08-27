@@ -15,7 +15,7 @@ implementation's source.
 | **Bus** | asynchronous S0–S7 cycles, read-modify-write, arbitration, M6800 synchronous cycles, autovectored and vectored interrupts |
 | **MC68010 proper** | instruction continuation (format $8 frame + RTE), loop mode, VBR, SFC/DFC, MOVEC/MOVES/RTD/BKPT |
 | **Verified by** | 23492 reference vectors, 93991 co-simulated instructions, 15 directed testbenches, 6 programs, a second core in VHDL |
-| **Implemented** | 20.8 MHz post-route on an `xc7a100t-1`, 13121 LUTs, 1342 FFs, 0 block RAM |
+| **Implemented** | 20.8 MHz post-route on an `xc7a100t-1`, 6585 LUTs, 1342 FFs, 7.5 block RAMs |
 | **For scale** | the fastest MC68010 Motorola shipped ran at 12.5 MHz |
 
 ```sh
@@ -320,6 +320,7 @@ tests did not cover:
 | `doc/bugs-found.md` | every defect found in this design, how it was found, and what stops it coming back |
 | `doc/implementation.md` | area, frequency, the reset audit, and two cautions about the numbers |
 | `doc/critical-path.md` | what actually limits the frequency, with the unreachable routes excluded |
+| `doc/size-and-speed.md` | making it smaller and faster: six candidates measured, four kept |
 | `doc/coding-standard.md` | the portable SystemVerilog subset, every entry found by trying it |
 | `doc/suska-crosscheck.md` | what a second core could and could not corroborate |
 
@@ -332,15 +333,16 @@ Post-route, `xc7a100tcsg324-1`, out of context, 48 ns with a 50 % duty cycle:
 | | |
 |---|--:|
 | Clock | **48.0 ns — 20.8 MHz** |
-| Setup slack | 0.75 to 2.58 ns across runs |
-| Slice LUTs | 13121 (20.7 % of the part) |
+| Setup slack | 2.048 ns |
+| Slice LUTs | 6585 (10.4 % of the part) |
 | Slice registers | 1342 (1.1 %) |
 | DSP48E1 | 3 |
-| Block RAM | 0 |
+| Block RAM | 7.5 of 135 |
 
-Half of that area is the microcode store: 6665 LUTs of 13121. Moving it to block
-RAM would roughly halve the LUT count and buy no frequency at all — the store's
-second read, the one that was on the critical path, no longer exists.
+48 ns is the constraint every figure in this project is measured against, not
+the limit: the design also closes at 44, 42 and 40 ns, and fails at 36. It used
+to be 13121 LUTs with the microcode store as half of them — `doc/size-and-speed.md`
+is what changed that, and what it measured on the way.
 
 Two cautions, both learned here: **place and route varies more than small changes
 do** — two runs differing only in the contents of one unreachable microcode word
