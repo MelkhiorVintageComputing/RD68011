@@ -272,3 +272,80 @@ macro. There the 3.91x is 3.91x of the thing you actually pay for. Measured sepa
 during the inference spike: the 30-bit store alone is 5,493 logic elements on the MAX 10
 against 23,694 for the flat 146-bit one, so with the two tables' 2,042 the whole store in
 logic is about a third of what it was.
+
+## The shifter: one barrel instead of four
+
+`rd68011_shifter.sv` evaluated five wide shifters unconditionally -- three 64-bit ones for
+the plain shifts, a fourth for rotates, and a 72-bit one for rotate-through-X -- and threw
+most of the bits away. Four of the five are right shifts differing only in what goes in and
+by how much, so a multiplexer in front of one barrel replaces four barrels.
+
+Standalone, out of context, on the Artix:
+
+| | LUTs |
+|---|--:|
+| as it was | 995 |
+| with the rotate and extend barrels deleted (a bound, not a candidate) | 534 |
+| one shared barrel, functionally wrong (a structural probe) | 542 |
+| **one shared barrel, correct** | **694** |
+
+The bound and the probe agreeing at ~540 is what said the input multiplexers would be
+nearly free, and they are: the correct version costs 152 LUTs more than the probe because
+the plain shifts need their own alignment, and still saves 301.
+
+The layout is the only subtle part. The plain shifts sit at bits 39:8 of the 72-bit input
+with 32 fill bits above and eight below, so `out[39:8]` is the result and `out[7]` is the
+bit that fell off the end -- the carry. Filling with the sign is what makes an arithmetic
+shift arithmetic, so the separate `>>>` is gone. The amount saturates at 32 because the
+operand is never wider, and exactly one carry then needs saying explicitly: past 32 places
+a 32-bit operand has gone entirely, and a barrel told to stop at 32 still reports the bit
+that left there. Narrower operands need no such correction, because `v` is zero-extended
+and `vs` sign-extended and the bit the barrel finds is already the right one.
+
+That is the kind of reasoning that should not be trusted, so it is not. `make harte-all` is
+not exhaustive over `count`, so the old and new modules were put through a yosys `miter
+-equiv` and `sat -verify -prove-asserts` over all 44 input bits: **proved equivalent**. A
+deliberately wrong reduction fails the same proof.
+
+| | two-level store | shared barrel | |
+|---|--:|--:|---|
+| Artix Slice LUTs | 6,864 | **6,619** | −245 |
+| Artix `u_shifter` | 812 | **591** | −27 % |
+| Artix setup slack | 1.524 | 1.227 | inside the spread |
+| MAX 10 logic elements | 14,348 (29 %) | **13,748 (28 %)** | −600 |
+| MAX 10 Fmax | 18.70 | **18.83** | |
+
+It also changes the shape of the path report. `a-mux` has left the top of the family table
+altogether -- the source multiplexers were only there because they fed four barrels -- and
+what is left is three shifter families inside 0.54 ns:
+
+| slack | behind | ends | family |
+|--:|--:|--:|---|
+| 1.227 | — | 30 | `shifter -> req_valid -> start_new` |
+| 1.498 | +0.271 | 60 | `shifter` |
+| 1.764 | +0.537 | 7 | `shifter -> req_valid` |
+| 4.228 | +3.001 | 8 | `alu -> alu_y -> ucode-rom` |
+
+## Two candidates that measured worse
+
+Both were proposed on the same premise, and the premise was wrong both times: that
+synthesis was leaving redundancy on the table. It was not.
+
+**The shifter's two remainders.** `count % w` with `w` a signal that is only ever 8, 16 or
+32 looks like a divider on a combinational path, and `count % (w + 1)` -- modulo 9, 17 or
+33 -- looks worse. Replacing the first with a mask and the second with a halving reduction
+is provably equivalent and, standalone, saves 34 LUTs of 995. In the design it is worth
+−24 Artix LUTs and **+11 MAX 10 logic elements**, and it took the MAX 10 to **18.48 MHz,
+below the 18.50 floor `make quartus` gates on**. Both tools were already specialising the
+remainder from the three-way case that produces `w`. Not kept.
+
+**The decoder's forty previews.** The 21-bit request preview takes only 40 distinct values
+across 1440 opcode patterns, so carrying a 6-bit index and expanding it in a second table
+should have narrowed every arm from 35 bits to 20. Standalone on the Artix the decoder went
+from 1297 LUTs to **1321** -- it got bigger. Vivado was already sharing those 40 values
+across the arms, so the index bought nothing and cost a table. Not kept.
+
+The general lesson, and it is why the standalone screen became the protocol: a table's
+redundancy is something synthesis finds on its own. Sharing a *barrel* is not, because that
+is physical hardware rather than a pattern in constants -- which is why the one shifter
+change that worked is the one that removed hardware rather than restating constants.

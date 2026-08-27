@@ -69,11 +69,48 @@ module rd68011_shifter (
   // field lands at position w and survives to be read as the carry.
   // Right: the operand sits in the high half, so a bit leaving the bottom
   // lands at position 31. ASR shifts arithmetically, filling with the sign.
-  logic [63:0] lsh, rsh_l, rsh_a;
+  logic [63:0] lsh;
 
   assign lsh   = {32'd0, v} << count;
-  assign rsh_l = {v,  32'd0} >> count;
-  assign rsh_a = $signed({vs, 32'd0}) >>> count;
+
+  // The right shift is one barrel for all four of the kinds that need one --
+  // logical, arithmetic, rotate and rotate-through-X. They differ only in what
+  // goes in and by how much, and a multiplexer in front of one shifter is far
+  // cheaper than four shifters: 995 LUTs became 542. doc/size-and-speed.md has
+  // the measurement, and the fan-out it takes off `din`, which was the worst
+  // net in the design.
+  //
+  // The plain shifts sit at bits 39:8 with 32 fill bits above and eight below,
+  // so that out[39:8] is the result and out[7] is the bit that fell off the
+  // end -- the carry. Filling with the sign is what makes the arithmetic shift
+  // arithmetic, so no separate `>>>` is needed.
+  //
+  // The amount saturates at 32 because the operand is never wider, and two
+  // carries need saying explicitly afterwards: past 32 places a 32-bit operand
+  // has gone entirely, and a shifter told to stop at 32 still reports the bit
+  // that left at 32. Narrower operands need no such thing -- v is zero-extended
+  // and vs sign-extended, so the bit the barrel finds there is already right.
+  logic [71:0] sh_in, sh_out;
+  logic  [5:0] sh_amt;
+  logic        fill;
+
+  assign fill = (kind == K_AS) && sign;
+
+  always_comb begin
+    unique case (kind)
+      K_RO:    begin sh_in = {8'd0, dd};                  sh_amt = rsh_amt; end
+      K_ROX:   begin sh_in = xdd;                         sh_amt = xsh_amt; end
+      default: begin sh_in = {{32{fill}}, (fill ? vs : v), 8'd0};
+                     sh_amt = (count > 6'd32) ? 6'd32 : count; end
+    endcase
+    sh_out = sh_in >> sh_amt;
+  end
+
+  logic [31:0] rsh;      // the plain right shift, either kind
+  logic        rsh_c;    // and the bit that left the operand
+
+  assign rsh   = sh_out[39:8];
+  assign rsh_c = sh_out[7];
 
   // -- Rotates ----------------------------------------------------------------
   // Doubling the operand turns a rotate into a shift: rotating w bits right by
@@ -81,7 +118,6 @@ module rd68011_shifter (
   // the same as rotating right by w-k.
   logic [63:0] dd;
   logic  [5:0] rk, rsh_amt;
-  logic [63:0] rot;
 
   always_comb begin
     unique case (size)
@@ -91,7 +127,6 @@ module rd68011_shifter (
     endcase
     rk      = (count % w);
     rsh_amt = left ? (w - rk) : rk;
-    rot     = dd >> rsh_amt;
   end
 
   // -- Rotate through the extend bit -----------------------------------------
@@ -100,8 +135,6 @@ module rd68011_shifter (
   logic [32:0]  xext;
   logic [71:0]  xdd;
   logic  [5:0]  xk, xsh_amt;
-  logic [71:0]  xrot;
-  logic [32:0]  xtaken;
 
   // X sits immediately above the operand, at bit w -- not at bit 32. For a
   // byte operand the rotated value is nine bits, not thirty-three.
@@ -111,8 +144,6 @@ module rd68011_shifter (
     xdd     = {39'd0, xext} | ({39'd0, xext} << (w + 6'd1));
     xk      = count % (w + 6'd1);
     xsh_amt = left ? ((w + 6'd1) - xk) : xk;
-    xrot    = xdd >> xsh_amt;
-    xtaken  = xrot[32:0];
   end
 
   // -- The overflow flag of an arithmetic left shift --------------------------
@@ -150,8 +181,8 @@ module rd68011_shifter (
             vf = (vbits != 32'd0) && (vbits != vmask);
           end
         end else begin
-          res = rsh_a[63:32] & mask;
-          c   = rsh_a[31];
+          res = rsh & mask;
+          c   = rsh_c;
         end
         xu = (count != 6'd0);
       end
@@ -161,14 +192,17 @@ module rd68011_shifter (
           res = lsh[31:0] & mask;
           c   = lsh[w];
         end else begin
-          res = rsh_l[63:32] & mask;
-          c   = rsh_l[31];
+          res = rsh & mask;
+          // Past 32 places a 32-bit operand has gone entirely and nothing is
+          // left to be the carry. The barrel stopped at 32 and is still
+          // reporting the bit that left there.
+          c   = (count > 6'd32) ? 1'b0 : rsh_c;
         end
         xu = (count != 6'd0);
       end
 
       K_RO: begin
-        res = rot[31:0] & mask;
+        res = sh_out[31:0] & mask;
         if (count == 6'd0) begin
           res = v;
           c   = 1'b0;
@@ -180,12 +214,12 @@ module rd68011_shifter (
       end
 
       K_ROX: begin
-        res = xtaken[31:0] & mask;
+        res = sh_out[31:0] & mask;
         if (count == 6'd0) begin
           res = v;
           c   = x_in;          // C takes X, and X itself is left alone
         end else begin
-          c  = xtaken[w];
+          c  = sh_out[{1'b0, w}];
           xu = 1'b1;
         end
       end
@@ -196,11 +230,11 @@ module rd68011_shifter (
     endcase
   end
 
-  // The wide intermediates exist for the one bit each contributes: the plain
-  // shifts read the bit that fell off the end of the operand, and the rotates
-  // read only the word the doubled value was reduced to.
+  // The barrel is as wide as the widest thing put through it -- the doubled
+  // operand a rotate-through-X needs -- and every kind reads its own slice of
+  // the result, so the rest is deliberately unread.
   logic unused;
-  assign unused = &{1'b1, rsh_l[30:0], rsh_a[30:0], rot[63:32], xrot[71:33]};
+  assign unused = &{1'b1, sh_out[71:40], sh_out[6:0], lsh[63:33]};
 
   assign dout  = res;
   assign c_out = c;
