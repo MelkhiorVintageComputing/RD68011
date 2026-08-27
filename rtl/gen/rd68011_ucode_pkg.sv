@@ -11,6 +11,11 @@ package rd68011_ucode_pkg;
   localparam int UW    = 146;   // microword width
   localparam int RQW   = 21;   // request preview width
   localparam int UADDR = 13;   // micro-address width
+  localparam int UCTL_W = 91;   // control field width
+  localparam int URQ_W  = 42;   // both request previews
+  localparam int UCTL_N = 600;   // distinct control patterns
+  localparam int URQ_N  = 126;   // distinct preview pairs
+  localparam int UL1    = 30;   // stored word: index, index, successor
 
   // The request preview -- tools/ucode/isa.py REQ_FIELDS.
   localparam int R_BUS_LSB = 0;

@@ -200,3 +200,75 @@ six blocks spread across the die, and that costs more than the congestion it rel
 That refutes the hypothesis rather than qualifying it, and it makes the microword's encoding
 the next thing to measure rather than an optional refinement: the same store re-encoded
 would ask for about thirty M9Ks instead of a hundred and forty six.
+
+## Two levels for the microword
+
+6674 microwords of 146 bits is 974,404 bits and almost none of it is distinct. The
+successor address is -- 6313 of the 8192 addresses name a different one -- but the 91
+control bits take **600** distinct values across the whole microprogram, and the two request
+previews, taken as the pair they always travel as, take **126**.
+
+So the store holds an address and two indices, 30 bits, and two small tables hold the
+patterns:
+
+```
+  8192 x  30   the store
+   600 x  91   control patterns
+   126 x  42   preview pairs
+  ----------
+  305,652 bits, against 1,196,032 -- 3.91x
+```
+
+`tools/ucode/assemble.py`'s `check_two_level` rebuilds all 8192 words from the tables and
+insists each one is unchanged, on every generation, in the same way `check_disjoint` does
+for the decoder. Perturbing one table entry fails the build:
+`microword 6 rebuilds as ...02007, not ...00007`.
+
+**The second level cannot be registered, and is not meant to be.** Its index only exists
+after the store's own register, and making the store combinational is what would stop it
+being a memory. It is combinational logic in front of the microword's consumers, and that
+is the cost being measured. It is also strictly shallower than what it replaces: a 600-entry
+lookup at a 10-bit address instead of an 8192-entry one at 13 bits.
+
+| | flat store | two levels | |
+|---|--:|--:|---|
+| Artix Slice LUTs | 6,275 | 6,864 | +589, the two tables |
+| Artix block RAM | 32 of 135 | 8 | |
+| Artix setup slack | 2.428 | 1.524 | both inside the 1.3 ns spread |
+| MAX 10 logic elements | 12,306 (25 %) | 14,348 (29 %) | +2,042 |
+| MAX 10 M9K blocks | 146 (80 %) | **30 (16 %)** | |
+| MAX 10 memory bits | 1,196,032 | 245,760 | |
+| MAX 10 Fmax | 18.81 | 18.70 | |
+
+On the Artix, `u_urom` is 589 LUTs and 8 block RAMs where it was 0 and 32; of those 589,
+533 are the control table and 56 the previews.
+
+### The second hypothesis, also refuted
+
+The 5 % the MAX 10 lost when the store became a memory was blamed on 146 M9Ks at 80 %
+occupancy being a placement constraint of their own. **It was not.** Thirty blocks lose the
+same as a hundred and forty six -- 18.70 against 18.81, which is nothing -- and the worst
+path's logic levels have been falling the whole time, 36 to 35 to 33, while the frequency
+fell with them.
+
+What is left as an explanation is the shape rather than the count: the microword used to
+come out of twenty-three thousand logic elements that the placer could scatter beside each
+of its consumers, and now all 146 bits radiate from fixed memory columns. That is inherent
+to putting a wide store in hard memory blocks and does not depend on how many of them there
+are.
+
+### Why it is kept anyway
+
+On both FPGAs this is a trade rather than a win, and on the Artix it is a small loss: 589
+LUTs for 24 block RAMs the part was not short of. It is kept for the two places it pays.
+
+On the MAX 10 it returns **84 % of the part's memory** to whatever else shares the chip.
+A core that leaves four M9Ks free is a core that has to be the whole design; one that leaves
+a hundred and fifty two is not, and four points of logic element is a cheap price for that.
+
+On an ASIC there is no block memory to infer and the store is logic either way -- which is
+the right answer there, since a synthesised table is far cheaper than an initialised SRAM
+macro. There the 3.91x is 3.91x of the thing you actually pay for. Measured separately
+during the inference spike: the 30-bit store alone is 5,493 logic elements on the MAX 10
+against 23,694 for the flat 146-bit one, so with the two tables' 2,042 the whole store in
+logic is about a third of what it was.

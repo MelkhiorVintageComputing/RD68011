@@ -160,7 +160,7 @@ def check_patterns(patterns):
     return problems
 
 
-def emit_pkg(labels=None, rq=None):
+def emit_pkg(labels=None, rq=None, tab=None):
     out = [BANNER, '',
            '// The microword layout. Every field position and every encoding',
            '// the microcode can use, so the RTL and the microcode cannot',
@@ -171,6 +171,20 @@ def emit_pkg(labels=None, rq=None):
                % isa.req_width())
     out.append('  localparam int UADDR = %d;   // micro-address width'
                % isa.UADDR_BITS)
+    if tab is not None:
+        # The store's own word, and the two tables it indexes. See
+        # tools/ucode/assemble.py build_tables for what is in them and why.
+        out.append('  localparam int UCTL_W = %d;   // control field width'
+                   % CTL_W)
+        out.append('  localparam int URQ_W  = %d;   // both request previews'
+                   % RQ_W)
+        out.append('  localparam int UCTL_N = %d;   // distinct control patterns'
+                   % len(tab['ctl']))
+        out.append('  localparam int URQ_N  = %d;   // distinct preview pairs'
+                   % len(tab['rq']))
+        out.append('  localparam int UL1    = %d;   // stored word: index, '
+                   'index, successor'
+                   % (isa.UADDR_BITS + tab['ctl_w'] + tab['rq_w']))
     out.append('')
     out.append('  // The request preview -- tools/ucode/isa.py REQ_FIELDS.')
     for name, w, _ in isa.REQ_FIELDS:
@@ -218,18 +232,120 @@ def emit_pkg(labels=None, rq=None):
     return '\n'.join(out)
 
 
-def emit_urom(words):
-    w = isa.width()
-    nibbles = (w + 3) // 4
-    # The read is registered, and the address is upc_nxt rather than upc, so
-    # the word this holds is the same word at the same time -- see the note in
-    # rd68011_seq.sv where it is instantiated. A registered case is what both
-    # Vivado and Quartus infer a block memory from, and it is the only form
-    # available: an array would have to be filled by an initial block or
-    # $readmemh, which CLAUDE.md bars and tools/reset_audit.py checks for.
-    #
-    # uw_q takes no reset. It is the one register in the design that does not,
-    # and tools/reset_audit.py names it and says why.
+# ---------------------------------------------------------------------------
+# The microword's two levels
+#
+# 6674 microwords of 146 bits is 974,404 bits, and almost none of it is
+# distinct. The successor address is: 6313 of the 8192 addresses name a
+# different one. Everything else is not -- the 91 control bits take 600
+# distinct values across the whole microprogram and the two request previews,
+# taken as the pair they always travel as, take 126.
+#
+# So the store holds an address and two indices, 30 bits, and two small tables
+# hold the patterns. 260,142 bits rather than 974,404, which is 3.75x, and on
+# the MAX 10 it is the difference between 146 M9K blocks and 30 -- 80 % of the
+# part's memory against 16 %. doc/size-and-speed.md measures what that was
+# worth.
+#
+# The second level cannot be registered and is not meant to be: its index only
+# exists after the store's own register, and making the store combinational is
+# what would stop it being a memory. It is combinational logic in front of the
+# microword's consumers, and that is the cost being measured against the
+# saving.
+#
+# On an ASIC, where the store is logic either way, the same 3.75x applies to
+# the logic directly.
+
+NEXT_W  = isa.UADDR_BITS
+CTL_LSB = NEXT_W
+RQ_LSB  = isa.lsb('rq0')
+CTL_W   = RQ_LSB - CTL_LSB
+RQ_W    = isa.width() - RQ_LSB
+
+
+def idx_bits(n):
+    """Bits needed to name n table entries."""
+    b = 1
+    while (1 << b) < n:
+        b += 1
+    return b
+
+
+def split_word(val):
+    """One microword as (successor, control pattern, preview pair)."""
+    return (val & ((1 << NEXT_W) - 1),
+            (val >> CTL_LSB) & ((1 << CTL_W) - 1),
+            val >> RQ_LSB)
+
+
+def build_tables(words):
+    """Intern every control pattern and preview pair, in first-seen order.
+
+    The unmapped-address default is interned too, so the arm that answers for
+    it has indices like any other word.
+    """
+    ctl_tab, ctl_of = [], {}
+    rq_tab, rq_of = [], {}
+    l1 = []
+    for val in [encode(f) for f, _ in words] + [encode(isa.DEFAULTS)]:
+        nxt, ctl, rq = split_word(val)
+        if ctl not in ctl_of:
+            ctl_of[ctl] = len(ctl_tab)
+            ctl_tab.append(ctl)
+        if rq not in rq_of:
+            rq_of[rq] = len(rq_tab)
+            rq_tab.append(rq)
+        l1.append((nxt, ctl_of[ctl], rq_of[rq]))
+    return {'ctl': ctl_tab, 'rq': rq_tab, 'l1': l1[:-1], 'default': l1[-1],
+            'ctl_w': idx_bits(len(ctl_tab)), 'rq_w': idx_bits(len(rq_tab))}
+
+
+def check_two_level(words, tab):
+    """Rebuild every one of the 8192 addresses and insist it is unchanged.
+
+    Exhaustive, and cheap, and the same standard check_disjoint sets for the
+    decoder: a table that does not reconstruct the microword it was built from
+    is a wrong netlist, not a slow one.
+    """
+    want = [encode(f) for f, _ in words]
+    dflt = encode(isa.DEFAULTS)
+    for addr in range(1 << isa.UADDR_BITS):
+        if addr < len(tab['l1']):
+            nxt, ci, ri = tab['l1'][addr]
+            expect = want[addr]
+        else:
+            nxt, ci, ri = tab['default']
+            expect = dflt
+        got = nxt | (tab['ctl'][ci] << CTL_LSB) | (tab['rq'][ri] << RQ_LSB)
+        if got != expect:
+            return ['microword %d rebuilds as %x, not %x' % (addr, got, expect)]
+    return []
+
+
+def emit_urom(words, tab):
+    """The store: one address, two indices, and a registered read.
+
+    A registered case is what both Vivado and Quartus infer a block memory
+    from, and it is the only form available -- an array would have to be
+    filled by an initial block or $readmemh, which CLAUDE.md bars and
+    tools/reset_audit.py checks for. Nothing here asks for a memory: no
+    synthesis attribute is used, so an ASIC flow synthesises the same case as
+    logic, and the two tables below shrink it there just as much.
+
+    The read is registered and the address is upc_nxt rather than upc, so the
+    word this holds is the same word at the same time -- see the note in
+    rd68011_seq.sv where it is instantiated.
+
+    l1_q takes no reset. It is the one register in the design that does not,
+    and tools/reset_audit.py names it and says why.
+    """
+    cw, rw = tab['ctl_w'], tab['rq_w']
+    l1w = NEXT_W + cw + rw
+    nib = (l1w + 3) // 4
+
+    def word(nxt, ci, ri):
+        return nxt | (ci << NEXT_W) | (ri << (NEXT_W + cw))
+
     out = [BANNER, '',
            '// The microcode store: micro-address to microword.', '',
            'module rd68011_ucode_rom (',
@@ -237,13 +353,14 @@ def emit_urom(words):
            '    input  logic [rd68011_ucode_pkg::UADDR-1:0] addr,',
            '    output logic [rd68011_ucode_pkg::UW-1:0]    uw',
            ');', '',
-           '  logic [rd68011_ucode_pkg::UW-1:0] uw_q;', '',
+           '  // { preview index, control index, successor }',
+           '  logic [rd68011_ucode_pkg::UL1-1:0] l1_q;', '',
            '  always_ff @(posedge clk) begin',
            '    case (addr)']
     for i, (fields, comment) in enumerate(words):
-        val = encode(fields)
-        line = ("      %d'd%-3d: uw_q <= %d'h%0*x;" %
-                (isa.UADDR_BITS, i, w, nibbles, val))
+        nxt, ci, ri = tab['l1'][i]
+        line = ("      %d'd%-3d: l1_q <= %d'h%0*x;"
+                % (isa.UADDR_BITS, i, l1w, nib, word(nxt, ci, ri)))
         if comment:
             line += '  // %s' % comment
         out.append(line)
@@ -259,22 +376,58 @@ def emit_urom(words):
     # in program space. The defaults do nothing and go to the reset entry.
     out.append("      // Unmapped. The defaults: no bus request, and the reset")
     out.append("      // entry next. See tools/ucode/assemble.py emit_urom.")
-    out.append("      default: uw_q <= %d'h%0*x;"
-               % (w, nibbles, encode(isa.DEFAULTS)))
+    out.append("      default: l1_q <= %d'h%0*x;"
+               % (l1w, nib, word(*tab['default'])))
     out.append('    endcase')
     out.append('  end')
     out.append('')
-    out.append('  assign uw = uw_q;')
+    out.append('  logic [rd68011_ucode_pkg::UCTL_W-1:0] ctl;')
+    out.append('  logic [rd68011_ucode_pkg::URQ_W-1:0]  rqp;')
+    out.append('')
+    out.append('  rd68011_uctl_rom u_ctl (')
+    out.append('      .idx (l1_q[%d:%d]), .ctl (ctl));'
+               % (NEXT_W + cw - 1, NEXT_W))
+    out.append('  rd68011_urq_rom u_rq (')
+    out.append('      .idx (l1_q[%d:%d]), .rq  (rqp));'
+               % (l1w - 1, NEXT_W + cw))
+    out.append('')
+    out.append('  assign uw = {rqp, ctl, l1_q[%d:0]};' % (NEXT_W - 1))
     out.append('')
     out.append('endmodule')
     out.append('')
     return '\n'.join(out)
 
 
-# The source writes don't-care as '-'; SystemVerilog's casez wants '?'. Every
-# helper below works on the normalised form, and normalising is the first thing
-# make_disjoint does -- getting this wrong is silent, because a '-' read as a
-# care bit is self-consistent and check_disjoint would agree with itself.
+def emit_table(module, port, tab, entries, iw, vw, what):
+    """One second-level table: index to bit pattern, combinational."""
+    nib = (vw + 3) // 4
+    out = [BANNER, '',
+           '// %s' % what, '',
+           'module %s (' % module,
+           '    input  logic [%d:0] idx,' % (iw - 1),
+           '    output logic [%d:0] %s' % (vw - 1, port),
+           ');', '',
+           '  always_comb begin',
+           '    case (idx)']
+    for i, v in enumerate(entries):
+        out.append("      %d'd%-3d: %s = %d'h%0*x;" % (iw, i, port, vw, nib, v))
+    # Every index the store can hold is in the table above, so this answers for
+    # nothing the design reaches. It is here because an unassigned arm is a
+    # latch to yosys and an error to Verilator, and because the pattern the
+    # unmapped microword uses is the safe one to repeat.
+    out.append('      // No index reaches this. The unmapped microword\'s own,')
+    out.append('      // so a case that cannot happen does nothing if it does.')
+    out.append("      default: %s = %d'h%0*x;" % (port, vw, nib, entries[tab]))
+    out.append('    endcase')
+    out.append('  end')
+    out.append('')
+    out.append('endmodule')
+    out.append('')
+    return '\n'.join(out)
+
+
+
+
 def _norm(pat):
     return pat.replace('-', '?')
 
@@ -592,10 +745,27 @@ def main():
             print('error: ' + p)
         return 1
 
+    # The microword's two levels, and the proof that they rebuild it.
+    tab = build_tables(words)
+    problems = check_two_level(words, tab)
+    if problems:
+        for p in problems:
+            print('error: ' + p)
+        return 1
+
     changed = []
     for name, text in [
-            ('rtl/gen/rd68011_ucode_pkg.sv', emit_pkg(labels, rq)),
-            ('rtl/gen/rd68011_ucode_rom.sv', emit_urom(words)),
+            ('rtl/gen/rd68011_ucode_pkg.sv', emit_pkg(labels, rq, tab)),
+            ('rtl/gen/rd68011_ucode_rom.sv', emit_urom(words, tab)),
+            ('rtl/gen/rd68011_uctl_rom.sv',
+             emit_table('rd68011_uctl_rom', 'ctl', tab['default'][1],
+                        tab['ctl'], tab['ctl_w'], CTL_W,
+                        'The control fields of a microword, named by index.')),
+            ('rtl/gen/rd68011_urq_rom.sv',
+             emit_table('rd68011_urq_rom', 'rq', tab['default'][2],
+                        tab['rq'], tab['rq_w'], RQ_W,
+                        'Both of a microword\'s request previews, named by '
+                        'index.')),
             ('rtl/gen/rd68011_decode_rom.sv', emit_decode(patterns, labels, rq)),
             ('rtl/gen/rd68011_loop_rom.sv', emit_loop(program.loop_patterns)),
             ('build/ucode.lst', emit_listing(words, labels, patterns))]:
@@ -611,6 +781,16 @@ def main():
           '%d opcode patterns, %d loop mode patterns'
           % (len(words), isa.width(), isa.req_width(), len(patterns),
              len(program.loop_patterns)))
+    stored = (1 << isa.UADDR_BITS) * (isa.UADDR_BITS + tab['ctl_w'] +
+                                      tab['rq_w'])
+    flat = (1 << isa.UADDR_BITS) * isa.width()
+    print('the store holds %d bits: %d x %d, plus %d x %d control patterns '
+          'and %d x %d previews (%.2fx smaller than %d flat)'
+          % (stored + len(tab['ctl']) * CTL_W + len(tab['rq']) * RQ_W,
+             1 << isa.UADDR_BITS, isa.UADDR_BITS + tab['ctl_w'] + tab['rq_w'],
+             len(tab['ctl']), CTL_W, len(tab['rq']), RQ_W,
+             flat / float(stored + len(tab['ctl']) * CTL_W +
+                          len(tab['rq']) * RQ_W), flat))
     print('conditions that steer a bus request: %s (rd68011_seq.sv implements %s)'
           % (', '.join(steering) or 'none',
              ', '.join(isa.BUS_STEERING_CONDS)))
