@@ -349,3 +349,75 @@ The general lesson, and it is why the standalone screen became the protocol: a t
 redundancy is something synthesis finds on its own. Sharing a *barrel* is not, because that
 is physical hardware rather than a pattern in constants -- which is why the one shifter
 change that worked is the one that removed hardware rather than restating constants.
+
+## The address register the next microword uses
+
+`ir_nxt` is the opcode the prefetch pipe will hold after this edge, and one arm of it is
+RTE reloading `ir` out of a format $8 frame -- `y[15:0]`, straight from the ALU. The next
+microword's address register is selected from a field of that opcode, so read data went
+through the datapath into a register *number*, into a 16:1 register-file read, into the
+address unit, and into `req_valid`, all in half a clock.
+
+Exactly **one** microword in 6674 writes `ir` from the ALU: 5079, in RTE. Its successor
+5080 has `aeasel=SP`, so it addresses through A7 -- a constant -- and does not read the
+opcode at all. So `n_ea_reg` can read an `ir_pipe_nxt` that carries the pipe's own value
+and not that write, and the ALU and shifter leave the address unit's fan-in entirely.
+
+### Bounded first, built second
+
+Both address-path candidates were bounded with throwaway builds before either was written,
+because the family table said they could not be worth much:
+
+| | worst slack | |
+|---|--:|---|
+| as committed | 1.227 | |
+| both hacked out (functionally wrong) | 2.624 | +1.397 |
+| only `ir_nxt` hacked out | 2.449 | +1.222 |
+| **the real `ir_nxt` split** | **2.048** | **+0.821** |
+
+So the address-error check is worth **0.175 ns**, which is inside the router's own spread,
+and it is not built -- see below. The `ir_nxt` split is worth most of the rest, and the
+family table shows the structural change rather than just the number:
+
+| slack | behind | ends | family |
+|--:|--:|--:|---|
+| 2.048 | — | 59 | `shifter` |
+| 2.408 | +0.360 | 7 | `shifter -> req_valid` |
+| **2.551** | **+0.503** | **30** | **`shifter -> req_valid -> start_new`** |
+| 4.521 | +2.473 | 8 | `alu -> alu_y -> ucode-rom` |
+
+That family was the worst in the design through every measurement in this document and
+every one in `doc/critical-path.md`. It is now third, half a nanosecond behind, and what
+limits the clock is the shifter's own delay.
+
+### The invariant, said where it can be checked
+
+Synthesis cannot know that the microword writing `ir` from the ALU is never one whose
+successor addresses through a register field, so `tools/ucode/assemble.py`'s `check_ir_dst`
+says it and fails the build if the microprogram stops being true -- the same enforcement,
+for the same kind of reason, as the bus-steering conditions in `doc/critical-path.md`.
+`make ucode` now prints `microwords that write ir from the ALU: 5079`. Both clauses were
+watched to fail: a successor given `aeasel=DST` is rejected, and so is a `dst=IR` microword
+that enters loop mode, since the loop ROM is read at `ir_pipe_nxt` too.
+
+| | before | after |
+|---|--:|--:|
+| Artix Slice LUTs | 6,619 | 6,585 |
+| Artix setup slack | 1.227 | **2.048** |
+| MAX 10 logic elements | 13,748 | 13,749 |
+| MAX 10 Fmax | 18.83 | **19.98 MHz** |
+
+## The address error, and what moving it would cost
+
+`doc/critical-path.md` listed the address-error check between `n_addr` and `req_valid` as
+the one thing on the critical path that had never been looked at. It has been looked at
+now, and it is **worth 0.175 ns** -- the difference between the two throwaway bounds above,
+which is a fifth of the router's run-to-run spread.
+
+It would also not be free. The check has to *prevent* the cycle, and recomputing it inside
+the bus unit still gates `start_new` -- the same cone in the same clock, for nothing. A
+gain needs the cycle to start and be killed a state later, and that is visible on the pins:
+`fc_o` takes the new function code on entering S0, before the address and AS ever assert.
+Bus behaviour is a hard requirement of this project rather than a soft one, so a
+tenth-of-a-nanosecond path change is not a reason to make a cycle that does not happen
+observable. Not built.

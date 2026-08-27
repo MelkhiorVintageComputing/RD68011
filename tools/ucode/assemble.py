@@ -95,6 +95,52 @@ def fill_previews(words):
     return rq
 
 
+def check_ir_dst(words, rq):
+    """Which microwords write ir from the ALU, and what may follow them.
+
+    rd68011_seq.sv computes the next microword's address register from
+    `ir_pipe_nxt`, which carries the prefetch pipe's own value of ir and not the
+    U_DST_IR write that RTE uses to reload it out of a format $8 frame. That is
+    what keeps the ALU and the shifter out of the address unit's fan-in, and it
+    was worth 1.22 ns -- but it is only correct while no successor of such a
+    microword addresses through a field of the opcode being written.
+
+    Nothing in the RTL can see that, so it is said here, exactly as
+    check_arms says the bus-steering conditions.
+    """
+    bad = []
+    for i, (fields, _) in enumerate(words):
+        if fields.get('dst') != isa.DST['IR']:
+            continue
+        if fields.get('lp') == isa.LP['ENTER']:
+            bad.append('microword %d writes ir from the ALU and enters loop '
+                       'mode. rd68011_seq.sv reads the loop ROM at '
+                       '`ir_pipe_nxt`, which does not carry that write.' % i)
+        succ = [fields['next']]
+        if fields.get('seq') == isa.SEQ['COND']:
+            succ.append(fields['next'] | 1)
+        for t in succ:
+            if t >= len(rq):
+                continue
+            r = rq[t]
+            get = lambda n, w: (r >> isa.req_lsb(n)) & ((1 << w) - 1)
+            if get('bus', 3) == isa.BUS['NONE']:
+                continue
+            if get('aeasel', 2) == isa.AEASEL['SP']:
+                continue
+            bad.append(
+                'microword %d writes ir from the ALU and its successor %d '
+                'addresses through a register field of the opcode. '
+                'rd68011_seq.sv computes the next microword\'s address '
+                'register from `ir_pipe_nxt`, which does not carry that write, '
+                'so this would address through the old opcode. Either give the '
+                'successor aeasel=SP, or restore the U_DST_IR arm to n_ea_reg '
+                'in rd68011_seq.sv -- and re-measure, because that arm is what '
+                'puts the ALU and the shifter in the address unit\'s fan-in.'
+                % (i, t))
+    return bad
+
+
 def check_arms(words, rq):
     """Which conditions actually decide what the bus does next.
 
@@ -740,6 +786,7 @@ def main():
     # Every microword's own successors' previews, once `next` is known.
     rq = fill_previews(words)
     steering, problems = check_arms(words, rq)
+    problems = problems + check_ir_dst(words, rq)
     if problems:
         for p in problems:
             print('error: ' + p)
@@ -791,6 +838,11 @@ def main():
              len(tab['ctl']), CTL_W, len(tab['rq']), RQ_W,
              flat / float(stored + len(tab['ctl']) * CTL_W +
                           len(tab['rq']) * RQ_W), flat))
+    irdst = [i for i, (f, _) in enumerate(words)
+             if f.get('dst') == isa.DST['IR']]
+    print('microwords that write ir from the ALU: %s '
+          '(rd68011_seq.sv keeps them out of the address unit)'
+          % (', '.join(str(i) for i in irdst) or 'none'))
     print('conditions that steer a bus request: %s (rd68011_seq.sv implements %s)'
           % (', '.join(steering) or 'none',
              ', '.join(isa.BUS_STEERING_CONDS)))

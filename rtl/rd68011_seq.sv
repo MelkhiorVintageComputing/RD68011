@@ -384,6 +384,7 @@ module rd68011_seq (
   // ===========================================================================
   logic pf_adv, pf_fetch;
   logic [15:0] ir_nxt, irc_nxt;
+  logic [15:0] ir_pipe_nxt;
   logic [31:0] ir_pc_nxt, irc_pc_nxt;
 
   assign pf_adv   = (f_pf == rd68011_ucode_pkg::U_PF_ADV) ||
@@ -411,14 +412,32 @@ module rd68011_seq (
   //
   // RTE reloading a long frame writes all four directly, which is the only
   // thing here that is not the pipe moving along by itself.
+  // ir_pipe_nxt is ir as the *prefetch pipe* will have it -- the advance, and
+  // loop mode putting the looped instruction back. Registers, all of them.
+  // What it leaves out is the U_DST_IR arm below, which is RTE reloading ir out
+  // of the ALU.
+  //
+  // The distinction earns its keep in one place: the next microword's address
+  // register (`n_ea_reg`) is selected from a field of the opcode, and reading
+  // the full ir_nxt there put the ALU and the shifter in the address unit's
+  // fan-in -- read data, through the datapath, into a register number, into a
+  // 16:1 register-file read, into the address unit, in half a clock. It was
+  // worth 1.22 ns, which is the largest single frequency change this design has
+  // had; doc/size-and-speed.md measures it.
+  //
+  // Synthesis has no way to know that the microword which writes ir from the
+  // ALU is never one whose successor addresses through a register field, so
+  // tools/ucode/assemble.py's check_ir_dst says it, and fails the build if the
+  // microprogram ever stops being true. This is the same argument, and the same
+  // enforcement, as the request steering in doc/critical-path.md.
   always_comb begin
-    ir_nxt     = (commit && pf_adv)   ? irc       : ir;
+    ir_pipe_nxt = (commit && pf_adv)  ? irc       : ir;
     ir_pc_nxt  = (commit && pf_adv)   ? irc_pc    : ir_pc;
     irc_nxt    = (commit && pf_fetch) ? rdata     : irc;
     irc_pc_nxt = (commit && pf_fetch) ? pc        : irc_pc;
     if (commit) begin
       unique case (f_dst)
-        rd68011_ucode_pkg::U_DST_IR:     ir_nxt     = y[15:0];
+        rd68011_ucode_pkg::U_DST_IR:     ;  // ir_nxt only -- see below
         rd68011_ucode_pkg::U_DST_IRC:    irc_nxt    = y[15:0];
         rd68011_ucode_pkg::U_DST_IR_PC:  ir_pc_nxt  = y;
         rd68011_ucode_pkg::U_DST_IRC_PC: irc_pc_nxt = y;
@@ -426,13 +445,16 @@ module rd68011_seq (
         // Round the loop again: the looped instruction goes back into ir, and
         // ir_pc back to where it came from, which is one word before the DBcc.
         rd68011_ucode_pkg::U_DST_LOOPBACK: begin
-          ir_nxt    = loop_ir;
-          ir_pc_nxt = irc_pc - 32'd2;
+          ir_pipe_nxt = loop_ir;
+          ir_pc_nxt   = irc_pc - 32'd2;
         end
         default: ;
       endcase
     end
   end
+
+  assign ir_nxt = (commit && (f_dst == rd68011_ucode_pkg::U_DST_IR))
+                    ? y[15:0] : ir_pipe_nxt;
 
   // ===========================================================================
   // Decode
@@ -871,7 +893,7 @@ module rd68011_seq (
   // that the looped instruction is a loop mode instruction, the processor
   // automatically enters the loop mode".
   logic loop_op_ok;
-  rd68011_loop_rom u_loop_rom (.op (ir_nxt), .is_loop (loop_op_ok));
+  rd68011_loop_rom u_loop_rom (.op (ir_pipe_nxt), .is_loop (loop_op_ok));
 
 
   // Everything a port connection below needs, named here rather than written
@@ -1485,9 +1507,9 @@ module rd68011_seq (
 
   always_comb begin
     unique case (`RF(rq_nxt, AEASEL))
-      rd68011_ucode_pkg::U_AEASEL_DST: n_ea_reg = ir_nxt[11:9];
+      rd68011_ucode_pkg::U_AEASEL_DST: n_ea_reg = ir_pipe_nxt[11:9];
       rd68011_ucode_pkg::U_AEASEL_SP:  n_ea_reg = 3'b111;
-      default:                         n_ea_reg = ir_nxt[2:0];
+      default:                         n_ea_reg = ir_pipe_nxt[2:0];
     endcase
   end
 
