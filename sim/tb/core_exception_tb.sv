@@ -485,11 +485,11 @@ module core_exception_tb;
     // and asked about the second. The level matters because seven is the
     // non-maskable one, which is what a monitor's clock uses and so the first
     // interrupt a machine takes; the latency matters because a bus shared with
-    // DMA can hold a cycle off for a dozen clocks or more, and everything here
-    // ran at zero wait states until someone said so.
+    // DMA can hold a cycle off for a dozen clocks or more, which nothing else
+    // here exercises.
     //
     // Nothing about an autovector should depend on either. doc/bugs-found.md
-    // has the acknowledge-termination bug this area turned out to be hiding.
+    // has the acknowledge-termination bug this area hid.
     core_reset();
     mem_waits = 8'd13;
     poke_l(23'h000000, SSP0);

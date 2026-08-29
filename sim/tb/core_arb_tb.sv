@@ -22,10 +22,10 @@
 // transfer. A longword is two bus cycles and a MOVEM.L is four, and a master
 // may legally take the bus between any two of them -- so the grant is swept
 // across the whole transfer, half a clock at a time, and the assembled value
-// is checked at every offset. One alignment used to fail: the rising edge that
-// ends S7 both starts the next cycle and lets the arbiter reach ARB_GRANT, and
-// the two decisions were made from different views of the same signal, so the
-// cycle began with the buses already promised away. rtl/rd68011_biu.sv's
+// is checked at every offset. The alignment that matters is the rising edge
+// that ends S7, which both starts the next cycle and lets the arbiter reach
+// ARB_GRANT: made from different views of the same signal, those two decisions
+// let a cycle begin with the buses already promised away. rtl/rd68011_biu.sv's
 // `arb_freeze` comment has the mechanism.
 
 `timescale 1ns/1ps

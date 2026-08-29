@@ -59,15 +59,15 @@ module rd68011_alu (
   // PRM section 4's ABCD, SBCD and NBCD. The part does not work digit by
   // digit: it adds or subtracts in binary and then corrects, which is why an
   // operand whose digits are not valid BCD comes out the way it does rather
-  // than the way a digit-at-a-time model would predict. Both forms below were
-  // settled against the reference vectors, all 1088 of one and 1085 of the
-  // other, before being written here.
+  // than the way a digit-at-a-time model would predict. Both forms below are
+  // settled against the reference vectors, 1088 of one and 1085 of the other.
   //
   // This sits above the operation mux because the mux reads bcd_add and
-  // bcd_sub, and a name has to be declared before it is used. Three of the
-  // four tools accept the other order; Vivado's xvlog correctly does not.
-  // (Do not start a comment line with the word "Verilator" -- it reads one as
-  // a lint directive and fails to parse it.)
+  // bcd_sub, and a name has to be declared before it is used: Vivado and
+  // Questa reject the other order, and the remaining tools silently invent an
+  // implicit net. See doc/coding-standard.md. (Do not start a comment line with
+  // the word "Verilator" -- it reads one as a lint directive and fails to parse
+  // it.)
   //
   // Addition: correct the low digit by six when it carried out of nine, and
   // the high digit by sixty when the *uncorrected* binary sum passed 0x99 or
@@ -214,8 +214,6 @@ module rd68011_alu (
         v_out = (!sm && dm && !rm) || (sm && !dm && rm);
         c_out = carry;
       end
-      // The decimal operations set C from the decimal carry and leave V
-      // undefined, which PRM says of all three of them.
       // PRM leaves V undefined for all three decimal operations. What the
       // part actually does is report the overflow the decimal correction
       // introduced: a sum whose top bit the correction turned on, or a
@@ -240,10 +238,9 @@ module rd68011_alu (
 
   // X takes its value from C where an operation sets it at all; which
   // operations those are is the microcode's decision, through the flag rule.
+  //
   // The low bits of the narrow adders are not used: the result comes from the
   // 32-bit adders, and these exist only for the bit that falls off the top.
-  // X takes its value from C where an operation sets it at all; which
-  // operations those are is the microcode's decision, through the flag rule.
   logic unused;
   assign unused = &{1'b1, sum_b[7:0], dif_b[7:0], sum_w[15:0], dif_w[15:0],
                     sumx_b[7:0], difx_b[7:0], sumx_w[15:0], difx_w[15:0],

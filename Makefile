@@ -361,9 +361,9 @@ programs: dirs $(PROGHEX)
 # written from its source; its entity declaration is what an instantiation
 # needs and is all that was looked at.
 #
-# What it turned out to be good for, and what it turned out not to be, is in
-# doc/suska-crosscheck.md. Not part of `check`: it is a diagnostic, and its
-# answer is a paragraph rather than a pass or a fail.
+# What it is good for, and what it is not, is in doc/suska-crosscheck.md. Not
+# part of `check`: it is a diagnostic, and its answer is a paragraph rather than
+# a pass or a fail.
 # ---------------------------------------------------------------------------
 SUSKADIR  := $(BUILD)/suska
 SUSKASRC  := Inputs/Suska_Configware/68K10

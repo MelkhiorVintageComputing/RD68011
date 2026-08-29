@@ -64,11 +64,10 @@ module rd68011_shifter (
   assign sign = v[topbit];
   assign vs   = sign ? (v | ~mask) : v;
 
-  // -- Plain shifts -----------------------------------------------------------
-  // Left: the operand sits in the low half, so a bit leaving the top of the
-  // field lands at position w and survives to be read as the carry.
-  // Right: the operand sits in the high half, so a bit leaving the bottom
-  // lands at position 31. ASR shifts arithmetically, filling with the sign.
+  // -- Left shift -------------------------------------------------------------
+  // The operand sits in the low half, so a bit leaving the top of the field
+  // lands at position w and survives to be read as the carry. Right shifts go
+  // through the shared barrel below.
   logic [63:0] lsh;
 
   assign lsh   = {32'd0, v} << count;
@@ -108,12 +107,11 @@ module rd68011_shifter (
     xsh_amt = left ? ((w + 6'd1) - xk) : xk;
   end
 
-  // The right shift is one barrel for all four of the kinds that need one --
-  // logical, arithmetic, rotate and rotate-through-X. They differ only in what
-  // goes in and by how much, and a multiplexer in front of one shifter is far
-  // cheaper than four shifters: 995 LUTs became 542. doc/size-and-speed.md has
-  // the measurement, and the fan-out it takes off `din`, which was the worst
-  // net in the design.
+  // One barrel for all four of the kinds that shift right -- logical,
+  // arithmetic, rotate and rotate-through-X. They differ only in what goes in
+  // and by how much, so a multiplexer in front of one shifter is far cheaper
+  // than four shifters, and holds `din`'s fan-out down as well.
+  // doc/size-and-speed.md measures both.
   //
   // The plain shifts sit at bits 39:8 with 32 fill bits above and eight below,
   // so that out[39:8] is the result and out[7] is the bit that fell off the

@@ -23,10 +23,10 @@
 // written -- doc/implementation.md has that measurement.
 //
 // The preview comes out of here rather than out of a second store
-// read at `entry`, which is what used to happen and what made the
-// decoder and that store a chain of two lookups inside half a
-// clock. It is nearly free: across all the patterns there are only
-// 40 distinct preview values.
+// read at `entry`, which would make the decoder and that store a
+// chain of two lookups inside half a clock. It is nearly free:
+// across all the patterns there are only 40 distinct
+// preview values.
 //
 // `illegal` is asserted for anything with no pattern.
 

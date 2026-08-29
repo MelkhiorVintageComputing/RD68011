@@ -4,21 +4,17 @@
 # build is expected to run the core faster than the original; the number here
 # is what `make synth` reports slack against.
 #
-# 48 ns is where the design closes on the Artix-7 part with margin -- 20.8 MHz,
-# against the fastest original MC68010's 12.5. The number has moved as the
-# design grew: 20 ns with a bus interface and a 17-word microcode store, 40 ns
-# with MOVE, 44 ns with the whole integer set, 52 ns with control flow and
-# exceptions, 68 ns with the rest of the instruction set, then 60 ns, and 48
-# once what was really limiting it had been measured. 46 ns also closes, at
-# 0.277 ns, which is inside the run-to-run variation.
+# 48 ns -- 20.8 MHz, against the fastest original MC68010's 12.5 -- is the
+# number every published figure is measured against, and it is kept there so
+# they stay comparable. It is not the limit: the design closes at 40 ns, and
+# doc/size-and-speed.md has the search.
 #
-# What limits it is measured rather than read off `make impl`, because for most
-# of this design's life the worst path static timing analysis could find was one
-# the microcode could not take. `make paths` does the measuring and
-# doc/critical-path.md has the result. That path is now gone -- not excluded,
-# gone: the bus request is selected on MOVEM's mask test alone, so the ALU is
+# What limits it is measured rather than read off `make impl`, because static
+# timing analysis can find worst paths the microcode cannot take. `make paths`
+# does the measuring and doc/critical-path.md has the result. No such path is
+# left: the bus request is selected on MOVEM's mask test alone, so the ALU is
 # not in its fan-in at all, and the exclusion `make paths` applies finds nothing
-# left to cut.
+# to cut.
 #
 # Both edges of clk are used (one bus state per half period), so a single
 # create_clock covers the design and Vivado times the negative-edge paths
@@ -31,10 +27,10 @@
 # from one edge to the next and their budget is half the period, so both halves
 # shrink together -- edit this and re-run `make impl`.
 #
-# Do not make it conditional on the environment. That was tried: `read_xdc`
-# accepted an `if` around this line without complaint and then created no clock
-# at all, so the design placed and routed unconstrained and only failed at the
-# very end, when impl.tcl asked a clock that did not exist for its slack.
+# Do not make it conditional on the environment. `read_xdc` accepts an `if`
+# around this line without complaint and then creates no clock at all, so the
+# design places and routes unconstrained and fails only at the very end, when
+# impl.tcl asks a clock that does not exist for its slack.
 set clk_period_ns 48.000
 
 create_clock -period $clk_period_ns -name clk -waveform "0.000 [expr {$clk_period_ns / 2.0}]" [get_ports clk]

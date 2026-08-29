@@ -176,15 +176,14 @@ def bra():
     # A displacement byte of zero is the word form. This pattern has to come
     # first to win the priority order.
     # BRA is Bcc with the always-true condition, and the generic Bcc code
-    # covers it; these entry points stay for the P2 fetch testbench, which
-    # names them directly.
+    # covers it; these entry points exist because sim/tb/core_fetch_tb.sv names
+    # them directly.
     opcode('0110000000000000', 'bra_w', 'BRA.W')
     opcode('01100000--------', 'bra_b', 'BRA.B')
 
 
 # ==========================================================================
-# Anything with no pattern lands here. Illegal instruction exception
-# processing arrives in P4; for now it stops, which a testbench can see.
+# Anything with no pattern lands here.
 # ==========================================================================
 def illegal():
     # Where the decoder sends anything it has no pattern for. It jumps to the
@@ -1054,15 +1053,15 @@ def clr():
 #
 # ooo is direction and size together: 000/001/010 are <ea>,Dn at byte, word
 # and long, and 100/101/110 are Dn,<ea>. 011 and 111 are the address-register
-# forms (ADDA, SUBA, CMPA) for ADD/SUB/CMP and the multiply and divide
-# instructions for AND and OR, which are P5.
+# forms (ADDA, SUBA, CMPA) for ADD/SUB/CMP, and the multiply and divide
+# instructions for AND and OR.
 #
 # Shapes: r P for <ea>,Dn, and r P w for Dn,<ea> -- the same read, prefetch,
 # write as the rest of the read-modify-write group.
 #
 # The encodings that look like a Dn,<ea> form with a register destination are
 # not: 1101 xxx 1ss 00yyy is ADDX, 1100 xxx 10000 yyy is ABCD, 1000 xxx 10000
-# yyy is SBCD, and 1011 xxx 1ss 001yyy is CMPM. All of those are P5, so the
+# yyy is SBCD, and 1011 xxx 1ss 001yyy is CMPM -- all handled elsewhere, so the
 # Dn,<ea> patterns here name memory destinations only. EOR is the exception:
 # EOR Dn,Dm is a real instruction, so its destination list keeps Dn.
 # ==========================================================================
@@ -2581,8 +2580,8 @@ def trace():
 #   1001 ...              SUBX           1011 xxx 1 ss 001 yyy CMPM (Ay)+,(Ax)+
 #
 # These live in the encodings that would otherwise be an ALU operation with a
-# register destination, which is why the Dn,<ea> patterns of P3 named memory
-# destinations only.
+# register destination, which is why the ALU group's Dn,<ea> patterns name
+# memory destinations only.
 #
 # The extended operations only ever clear Z, never set it, so that a
 # multi-precision result reads as zero exactly when every part of it did.

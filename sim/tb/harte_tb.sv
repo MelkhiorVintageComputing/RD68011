@@ -7,7 +7,7 @@
 // list against what the reference recorded.
 //
 // The vectors were generated from an MC68000. Where an MC68010 must differ,
-// tools/harte/divergences.md says so and the mismatch is expected -- a test
+// doc/divergences.md says so and the mismatch is expected -- a test
 // whose only disagreement is a documented divergence is reported separately
 // from one that is simply wrong.
 //
@@ -93,8 +93,8 @@ module harte_tb;
   );
 
   // The store is read a microword early and its read is registered, so poking
-  // `upc` alone is no longer enough: the previous vector's microword would
-  // stay current for a clock, and it can issue a bus cycle. A second store,
+  // `upc` alone is not enough: the previous vector's microword would stay
+  // current for a clock, and it can issue a bus cycle. A second store,
   // addressed at the entry point, holds the word `load_state` copies across --
   // the same idiom as u_tb_decode above, using the design's own table rather
   // than a copy of it. `tb_opcode` is set before the reset edge below, so this

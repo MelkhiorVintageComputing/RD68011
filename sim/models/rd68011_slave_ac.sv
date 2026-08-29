@@ -32,13 +32,12 @@
 //
 // WHY THERE IS NO CLOCK-ALIGNED MODE
 //
-// An earlier shape of this model carried a `mode` input that reproduced
-// rd68011_slave exactly, as its own regression. That would have meant a second
-// copy of the wait-state machine living beside the first. The regression it was
-// there for is done better from outside: run one program through this slave and
-// through rd68011_slave and require the two transaction lists to be identical.
-// That checks the whole model against the one already trusted, rather than
-// checking one branch of it against another branch of itself.
+// A `mode` input reproducing rd68011_slave exactly, as this model's own
+// regression, would mean a second copy of the wait-state machine beside the
+// first. That regression is done better from outside: run one program through
+// this slave and through rd68011_slave and require the two transaction lists to
+// be identical. That checks the whole model against the one already trusted,
+// rather than one branch of it against another branch of itself.
 
 `timescale 1ns/1ps
 
@@ -142,7 +141,7 @@ module rd68011_slave_ac #(
   // same edge, and the order two always blocks run in at the same instant is
   // undefined. Half the time the readers see the new epoch and half the time
   // the old one, and a slave that answers only half the time stalls the
-  // processor on its first cycle. (It did.)
+  // processor on its first cycle.
   //
   // So each edge has exactly one block. It advances the epoch with a blocking
   // assignment, takes its own copy, and forks the timed answers off; every fork

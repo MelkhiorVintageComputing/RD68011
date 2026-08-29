@@ -12,7 +12,7 @@
 // fifty-eight bytes lower. The second kind is the one that matters -- fault,
 // fix the cause, RTE, and check the instruction finished as if nothing had
 // happened. A MOVEM faulting partway through its register list is the case
-// doc/checkpoint.md named in P2 as the one that cannot be patched around.
+// doc/checkpoint.md names as the one that cannot be patched around.
 //
 // The reference vectors cannot check any of this: they are an MC68000, whose
 // fault frame is seven words with no internal state at all.

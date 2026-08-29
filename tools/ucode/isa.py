@@ -670,8 +670,7 @@ def req_width():
 # after the coming edge, and the sequencer only knows which that is at the end
 # of the current one -- when the bus cycle terminates, the condition resolves
 # and any fault is known. Reading a store at an address computed from all that
-# is what used to happen, and doc/critical-path.md measures what it cost: the
-# store's address net alone carried 1.241 ns of routing to 1189 loads.
+# is the obvious arrangement, and doc/critical-path.md measures what it costs.
 #
 # But the *candidates* are all known a whole clock in advance. A microword has
 # at most two successors of its own -- `next`, and `next|1` when the condition

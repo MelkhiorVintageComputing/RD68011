@@ -201,7 +201,7 @@ module rd68011_biu #(
   // enables are registered from it, so after any rising edge the buses belong
   // to the alternate master exactly when this was high at that edge -- and the
   // state machine has to make the same decision from the same signal, or the
-  // two disagree for a clock. They did: see the comment above `arb_freeze`.
+  // two disagree for a clock. See `arb_freeze`.
   logic arb_bus_released_nxt;  // after this edge, the buses are the master's
   logic arb_hold;              // do not start a new cycle
 
@@ -529,11 +529,8 @@ module rd68011_biu #(
           end else begin
             end_code       <= rd68011_pkg::CE_BERR;
             // The sequencer acts on req_fault and never on req_end, which is a
-            // clock later than the microword can use -- so recording the fault
-            // in end_code alone reports it to nobody. That is what this line
-            // was missing: the bus unit detected every late bus error and the
-            // sequencer took none of them, and sim/tb/bus_error_tb.sv did not
-            // notice because it checked req_end, which was set.
+            // clock later than the microword can use, so recording the fault in
+            // end_code alone would report it to nobody.
             term_berr_late <= 1'b1;
             // Late BERR does not extend the cycle to S9: the transfer already
             // terminated normally, and figure 5-26 shows stacking beginning
@@ -577,18 +574,16 @@ module rd68011_biu #(
   // entering S3, because `st_n` is still ST_S1 through the first half of S2 --
   // and AS is asserted at the rising edge entering S2. There is no gap.
   //
-  // Freezing the state machine is not by itself enough, and that is the bug
-  // this shape had: it stops the arbiter *changing* state during S0 and S1, but
-  // says nothing about it already being in ARB_GRANT when S0 begins. The two
-  // things happen on the same edge -- the rising edge that ends S7 both starts
-  // the next cycle and lets ARB_IDLE go to ARB_GRANT -- so the cycle would
-  // start with the buses about to be released, and one clock later every output
-  // enable dropped with AS and the strobes still asserted. A longword read is
-  // the shortest thing that shows it: the second word's address never reached
-  // memory. What closes it is that the state machine now decides from
+  // The freeze is not by itself enough. It stops the arbiter *changing* state
+  // during S0 and S1, but says nothing about it already being in ARB_GRANT when
+  // S0 begins -- and the rising edge that ends S7 both starts the next cycle and
+  // lets ARB_IDLE go to ARB_GRANT, so a cycle could start with the buses about
+  // to be released and lose every output enable a clock later, with AS and the
+  // strobes still asserted. What closes that is the state machine deciding from
   // `arb_bus_released_nxt`, the same signal the output enables are registered
   // from, so a cycle can never start on an edge that hands the buses over.
-  // sim/tb/core_arb_tb.sv sweeps the grant across a longword read.
+  // sim/tb/core_arb_tb.sv sweeps the grant across a longword read, which is the
+  // shortest thing that shows it.
   assign arb_freeze = (st_p == rd68011_pkg::ST_S0) || (st_n == rd68011_pkg::ST_S1);
 
   always_comb begin
@@ -783,10 +778,9 @@ module rd68011_biu #(
       .q    (aoe_q)
   );
 
-  // Whether the bus belongs to someone else. Declared here rather than with
-  // the output enables below, which are its main use, because d_oe reads it
-  // too and a name has to be declared before it is used -- iverilog, Verilator
-  // and yosys accept the other order, and Vivado's xvlog correctly does not.
+  // Whether the bus belongs to someone else. Declared here rather than with the
+  // output enables below, which are its main use, because d_oe reads it too and
+  // a name has to be declared before it is used (doc/coding-standard.md).
   logic bus_granted;
   assign bus_granted = arb_bus_released_nxt;
 

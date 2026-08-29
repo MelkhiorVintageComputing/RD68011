@@ -21,9 +21,8 @@ close $f
 
 # A signal used before it is declared is an info in Vivado and an implicit
 # one-bit net in some other tools, so it is silent everywhere and wrong
-# somewhere. Promote it: the shared shifter barrel introduced one and every
-# gate still passed. Questa rejects the same thing natively, which is what
-# make lint-questa is for.
+# somewhere. Promoting it to an error is the only way this flow catches it;
+# Questa rejects the same thing natively, which is what make lint-questa is for.
 set_msg_config -id "Synth 8-6901" -new_severity ERROR
 
 read_verilog -sv $rtl
@@ -37,9 +36,8 @@ route_design
 
 report_utilization       -file impl_utilization.rpt
 
-# Per-module area. Every area claim in doc/implementation.md used to be a guess
-# because nothing recorded what the microcode store, the decoder and the
-# datapath cost separately.
+# Per-module area: what the microcode store, the decoder and the datapath cost
+# separately, which is where doc/implementation.md's area claims come from.
 report_utilization -hierarchical -file impl_utilization_hier.rpt
 
 report_timing_summary -delay_type max -max_paths 20 -file impl_timing.rpt

@@ -1,9 +1,8 @@
 // The fetch/decode/execute loop: reset, NOP and BRA.
 //
-// This is P2's exit criterion. What is being checked is not that NOP does
-// nothing -- it is that the prefetch pipe behaves exactly as the reference
-// vectors say it does, because every instruction after this one is built on
-// that behaviour.
+// What is being checked is not that NOP does nothing -- it is that the
+// prefetch pipe behaves exactly as the reference vectors say it does, because
+// every other instruction is built on that behaviour.
 //
 // The model, verified against thousands of vectors per opcode by
 // tools/harte/model_check.py:

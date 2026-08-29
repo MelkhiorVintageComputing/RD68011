@@ -4,9 +4,9 @@
 // of the original is split into _i / _o / _oe, with _oe active high meaning the
 // core drives.
 //
-// P2: the bus interface unit and the micro-sequencer are both here and wired
-// together. The core runs its reset sequence out of the vector table and then
-// executes whatever the microcode covers -- which is not yet much.
+// The whole processor is two units: rd68011_seq runs the microcode and holds
+// the datapath, rd68011_biu drives the pins. This wires them together and
+// does nothing else.
 //
 // Note the fully-scoped rd68011_pkg:: references and the plain-vector ports:
 // yosys 0.52 supports neither `import pkg::*` nor user types on ports.
@@ -154,8 +154,8 @@ module rd68011_top (
       .fc_o       (fc_o),       .fc_oe      (fc_oe)
   );
 
-  // reset_busy tells the sequencer when the RESET instruction's output pulse
-  // has finished; nothing issues one until that instruction exists.
+  // Every signal between the two units is connected, so there is nothing for
+  // the usual unused-input tie-off to absorb.
   logic unused_biu;
   assign unused_biu = 1'b1;
 

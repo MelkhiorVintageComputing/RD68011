@@ -5,9 +5,8 @@
 // The RTL is delay-free: an output changes exactly on the clock edge that
 // causes it. Section 10's clock-to-output limits -- specification 6's "Clock
 // Low to Address Valid <= 50 ns" and its nine siblings -- are therefore not
-// properties of the RTL at all, and doc/bus-timing-compliance.md used to
-// conclude from that they could not be simulated, on the grounds that an
-// invented delay which passes proves nothing.
+// properties of the RTL at all, which invites the conclusion that they cannot
+// be simulated: an invented delay that passes proves nothing.
 //
 // That is true of one invented delay and false of the set of them. Those limits
 // are a *budget*: they say what a real implementation is allowed to spend

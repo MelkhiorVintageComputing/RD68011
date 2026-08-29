@@ -5,21 +5,17 @@
 //
 // WHY IT IS NOT IN THE ALU
 //
-// It was, and that cost the whole design about ten nanoseconds of clock period.
 // The ALU's result feeds the zero flag, the zero flag feeds the micro-address
-// of a conditional microword, the micro-address feeds the microcode store, and
-// the store's output has to reach the bus request pins on the edge that ends
-// the current cycle -- all inside half a clock, because read data arrives on a
-// falling edge and the request is latched on a rising one. Putting a
-// multiplier in that chain puts a DSP in it, and synthesis has no way to know
-// that no multiply ever takes its operands from read data.
+// of a conditional microword, that feeds the microcode store, and the store's
+// output has to reach the bus request pins on the edge that ends the current
+// cycle -- all inside half a clock, because read data arrives on a falling edge
+// and the request is latched on a rising one. A multiplier in that chain puts a
+// DSP in it, and synthesis has no way to know that no multiply ever takes its
+// operands from read data. Keeping it out is worth about ten nanoseconds of
+// clock period; doc/timing-divergences.md has the measurement.
 //
-// So it lives here instead, with registered operands and a registered result,
-// exactly as the divider does and for the same reason. The microcode starts it
-// on one microword and reads the answer on the next, which costs one clock and
-// takes the DSP out of the chain entirely. scripts/rd68011.xdc has the
-// measurement.
-//
+// So it sits outside, with registered operands and a registered result, exactly
+// as the divider does. One microword starts it, the next reads the answer.
 // There is no busy signal: the answer is ready on the next edge, always.
 
 module rd68011_mul (

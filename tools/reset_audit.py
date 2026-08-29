@@ -27,9 +27,9 @@ One register has no reset, and it is named here
 -----------------------------------------------
 The microcode store's output register, `uw_q` in rtl/gen/rd68011_ucode_rom.sv,
 takes no reset value. It cannot: a block memory's read register is inside the
-memory primitive, and requiring a reset on it is requiring the store to be
-logic -- 6665 LUTs on the Artix-7 and 23604 logic elements on the MAX 10, half
-the design on one part and two thirds of it on the other.
+memory primitive, so requiring a reset on it requires the store to be logic --
+6665 LUTs on the Artix-7 and 23604 logic elements on the MAX 10, which
+doc/size-and-speed.md measures.
 
 What the rule exists to prevent is a design that depends on power-on state.
 This one does not. The store is addressed by `upc_nxt`, which rd68011_seq.sv

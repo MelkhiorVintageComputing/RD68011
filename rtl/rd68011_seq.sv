@@ -203,8 +203,8 @@ module rd68011_seq (
   // `upc <= upc_nxt` is unconditional outside reset, so ROM[upc] this clock is
   // ROM[upc_nxt] of the last one: a memory addressed a microword early holds
   // exactly the same word at exactly the same time, and costs no clock. That
-  // is what lets it be a block memory rather than 6665 LUTs of logic -- see
-  // doc/size-and-speed.md, which measures both.
+  // is what lets it be a block memory rather than logic; doc/size-and-speed.md
+  // measures both.
   //
   // uw_q inside it takes no reset, which is the one exception to CLAUDE.md's
   // rule; tools/reset_audit.py names it, enforces that it is the only one, and
@@ -219,17 +219,14 @@ module rd68011_seq (
   // computes at the end of this one, when the bus cycle terminates, the
   // condition resolves and any fault is known.
   //
-  // This used to be a second read of the store at that address, and
-  // doc/critical-path.md measures what it cost: the store's address net alone
-  // carried 1.241 ns of routing to 1189 loads, and on the arm that decodes an
-  // instruction it was the second of two lookups in series.
-  //
-  // Now nothing is looked up late. Every candidate successor's preview is in
-  // hand a whole clock early -- a microword carries its own two successors'
-  // previews in `rq0` and `rq1`, the decoder emits its entry point's, the
-  // entry points the sequencer can be thrown to have constant ones -- and the
-  // late signals only choose between them. `rq_nxt` below is that choice, and
-  // it is written to mirror `upc_nxt` arm for arm.
+  // Nothing is looked up late. Every candidate successor's preview is in hand
+  // a whole clock early -- a microword carries its own two successors' previews
+  // in `rq0` and `rq1`, the decoder emits its entry point's, and the entry
+  // points the sequencer can be thrown to have constant ones -- so the late
+  // signals only choose between them. `rq_nxt` below is that choice, written
+  // to mirror `upc_nxt` arm for arm. A second read of the store at that address
+  // would be the obvious alternative, and doc/critical-path.md measures what it
+  // costs.
   logic [rd68011_ucode_pkg::RQW-1:0] rq_nxt;
 
   `define RF(w, f) w[rd68011_ucode_pkg::R_``f``_LSB +: rd68011_ucode_pkg::R_``f``_W]
@@ -337,9 +334,8 @@ module rd68011_seq (
   // A program read that loop mode suppresses issues no cycle, so it has no
   // req_last to wait for either. The rule this comes from is set out at the
   // prefetch pipe below, where the rest of loop mode's effect lives; it is
-  // declared here because retire reads it and a name has to be declared
-  // before it is used -- iverilog, Verilator and yosys accept the other
-  // order, and Vivado's xvlog correctly does not.
+  // declared here because retire reads it and a name has to be declared before
+  // it is used (doc/coding-standard.md).
   logic loop_suppress;
   assign loop_suppress = loop_active && bus_busy &&
                          (f_fc == rd68011_ucode_pkg::U_FC_PROG) &&
@@ -365,10 +361,9 @@ module rd68011_seq (
   assign rdata = rerun_skip ? dib : req_rdata;
 
   // Signals the prefetch pipe and the datapath's source multiplexer read, but
-  // which are driven further down alongside the logic that produces them. They
-  // are declared here because a name has to be declared before it is used --
-  // iverilog, Verilator and yosys all accept the other order, and Vivado's
-  // xvlog correctly does not.
+  // which are driven further down alongside the logic that produces them, and
+  // declared here because a name has to be declared before it is used
+  // (doc/coding-standard.md).
   logic [31:0] a_bus, b_bus, y;  // the ALU result bus and its two sources
   logic        cc_true;          // the condition the cc field selects
   logic  [2:0] irq_taken;        // the level being serviced, latched
@@ -419,11 +414,10 @@ module rd68011_seq (
   //
   // The distinction earns its keep in one place: the next microword's address
   // register (`n_ea_reg`) is selected from a field of the opcode, and reading
-  // the full ir_nxt there put the ALU and the shifter in the address unit's
-  // fan-in -- read data, through the datapath, into a register number, into a
-  // 16:1 register-file read, into the address unit, in half a clock. It was
-  // worth 1.22 ns, which is the largest single frequency change this design has
-  // had; doc/size-and-speed.md measures it.
+  // the full `ir_nxt` there would put the ALU and the shifter in the address
+  // unit's fan-in -- read data, through the datapath, into a register number,
+  // into a 16:1 register-file read, into the address unit, in half a clock.
+  // doc/size-and-speed.md measures what that costs.
   //
   // Synthesis has no way to know that the microword which writes ir from the
   // ALU is never one whose successor addresses through a register field, so
@@ -470,12 +464,11 @@ module rd68011_seq (
   // change on a microword that ends an instruction: the pipe advancing, and
   // loop mode putting the looped instruction back. Both are registers.
   //
-  // `ir_nxt` would be the obvious thing to use and is what this was. It also
-  // carries RTE's restore of ir out of the ALU -- which is never on a microword
-  // that decodes anything, but synthesis has no way to know that, so the ALU
-  // ended up feeding the decoder, the decoder feeding the microcode store, and
-  // the store feeding the bus request, all inside half a clock. That chain was
-  // the critical path; scripts/rd68011.xdc has the measurement.
+  // `ir_nxt` would be the obvious thing to use, but it also carries RTE's
+  // restore of ir out of the ALU -- never on a microword that decodes anything,
+  // though synthesis has no way to know that. It would put the ALU into the
+  // decoder, the decoder into the microcode store and the store into the bus
+  // request, all inside half a clock. doc/critical-path.md measures it.
   //
   // These deliberately do not test `commit`, although the pipe only advances
   // when it holds. `dec_entry` and `dec_dbcc` are read in exactly one place --
@@ -513,9 +506,6 @@ module rd68011_seq (
   // it, so the microcode never has to know how an address turned out.
   assign rdata_byte = addr_lsb ? rdata[7:0] : rdata[15:8];
 
-  // The index register of a brief extension word (PRM section 2). Bit 15 picks
-  // data or address, bits 14-12 the number, and bit 11 selects the whole
-  // register or its sign-extended low word.
   // The register in bits 11:9, available at the same time as the one the
   // addressing mode names: ADD <ea>,Dn needs both in one microword.
   logic [31:0] reg2_val;
@@ -529,6 +519,9 @@ module rd68011_seq (
   // ADDQ and SUBQ take their operand from bits 11:9, where zero means eight.
   logic [31:0] quick_val;
   assign quick_val = (ir[11:9] == 3'd0) ? 32'd8 : {29'd0, ir[11:9]};
+  // The index register of a brief extension word (PRM section 2). Bit 15 picks
+  // data or address, bits 14-12 the number, and bit 11 selects the whole
+  // register or its sign-extended low word.
   assign index_reg = `RDREG({irc[15], irc[14:12]});
   assign index_val = irc[11] ? index_reg
                              : {{16{index_reg[15]}}, index_reg[15:0]};
@@ -765,10 +758,6 @@ module rd68011_seq (
                      : ir[5] ? regs[{1'b0, ir[11:9]}][5:0]
                              : ((ir[11:9] == 3'd0) ? 6'd8 : {3'd0, ir[11:9]});
 
-  // The bit a BTST/BCHG/BCLR/BSET names, as a mask. The number comes from a
-  // register for the dynamic forms and from the extension word for the static
-  // ones, and it is taken modulo the operand's width -- 32 for a register
-  // destination, 8 for a memory one (PRM section 4).
   // The condition code test of PRM section 3, on bits 11:8. Bcc, DBcc and Scc
   // all use it, and it is the only place the flags are read as a group.
   always_comb begin
@@ -861,6 +850,9 @@ module rd68011_seq (
     endcase
   end
 
+  // The bit a BTST/BCHG/BCLR/BSET names, as a mask. The number comes from a
+  // register for the dynamic forms and from the extension word for the static
+  // ones, taken modulo the operand's width (PRM section 4).
   logic  [4:0] bit_num;
   logic        bit_z;
 
@@ -881,17 +873,11 @@ module rd68011_seq (
   // it arrives on the A bus out of the data output buffer.
   assign bit_z = ((b_bus & a_bus) == 32'd0);
 
-  // The divider, which is sequential: the sequencer waits on it the way it
-  // waits on a bus cycle. See rd68011_divider for why this one unit is not
-  // combinational like the rest.
-  // The multiplier. Started by the microword whose ALU operation names it and
-  // read by the one after; rd68011_mul says why it is a unit of its own and
-  // not an ALU operation.
   // Whether the instruction just fetched can be the looped one. Read against
-  // ir_nxt, because the decision is made on the second fetch of it: "when the
-  // processor fetches the looped instruction the second time and determines
-  // that the looped instruction is a loop mode instruction, the processor
-  // automatically enters the loop mode".
+  // the prefetch pipe, because the decision is made on the second fetch of it:
+  // "when the processor fetches the looped instruction the second time and
+  // determines that the looped instruction is a loop mode instruction, the
+  // processor automatically enters the loop mode".
   logic loop_op_ok;
   rd68011_loop_rom u_loop_rom (.op (ir_pipe_nxt), .is_loop (loop_op_ok));
 
@@ -903,6 +889,9 @@ module rd68011_seq (
   // on with a warning, so the netlist quietly stops matching the source. On the
   // right of an `assign` it reads them correctly. doc/coding-standard.md has the
   // seven-line reproduction.
+
+  // The multiplier. Started by the microword whose ALU operation names it and
+  // read by the one after; rd68011_mul says why it is a unit of its own.
   logic mul_start, mul_signed;
   assign mul_signed = (f_alu == rd68011_ucode_pkg::U_ALU_MULS);
   assign mul_start  = commit && ((f_alu == rd68011_ucode_pkg::U_ALU_MULU) ||
@@ -918,6 +907,9 @@ module rd68011_seq (
       .result    (mul_res)
   );
 
+  // The divider, which is sequential: the sequencer waits on it the way it
+  // waits on a bus cycle. rd68011_divider says why this one unit is not
+  // combinational like the rest.
   logic        div_busy, div_ovf;
   logic        div_start, div_signed;
   assign div_start  = commit && `UF(uw, DIVST);
@@ -1185,7 +1177,7 @@ module rd68011_seq (
         // RTR restores the condition codes and leaves the supervisor half of
         // the status register alone (PRM section 4).
         rd68011_ucode_pkg::U_DST_CCR: ;
-        default: ;   // NONE and SR, which is not written from here yet
+        default: ;   // NONE, and SR, which is written with the flags below
       endcase
     end
   end
@@ -1366,8 +1358,6 @@ module rd68011_seq (
     end
   end
 
-  // An external reset holds the sequencer at the reset entry point (UM 5.5).
-  //
   // A pending interrupt is taken instead of the next instruction, at the point
   // the microcode would have decoded one -- which is where the machine is in a
   // state the exception frame can be built from. STOP waits here too, for the
@@ -1531,9 +1521,9 @@ module rd68011_seq (
   // through, the next microword has to see the new value, because the register
   // file will not have it until after the edge.
   //
-  // Only when the current microword is actually retiring. Until then uw_nxt is
-  // this same microword, and letting the bypass through would hand (An)+ its
-  // own incremented value as the address -- addressing An+2 instead of An.
+  // Only when the current microword is actually retiring. Until then the next
+  // microword is this same one, and letting the bypass through would hand (An)+
+  // its own incremented value as the address -- addressing An+2 instead of An.
   //
   // A write to A7 goes to the bank sr[S] names, so it is only the value the
   // next microword reads if the bank has not changed underneath it.
@@ -2062,10 +2052,10 @@ module rd68011_seq (
     end
   end
 
-  // Inputs the sequencer will consume once exceptions and interrupts exist.
+  // Bus-unit status the sequencer does not read, and `wreg_val`'s low bits: a
+  // byte merge keeps only the top 24 bits of the destination and a word merge
+  // only the top 16, so the bottom byte is never read back.
   logic unused_seq;
-  // wreg_val's low bits: a byte merge keeps only the top 24 of the old value
-  // and a word merge only the top 16, so the bottom byte is never read back.
   assign unused_seq = &{1'b1, req_ack, req_end, ipl_sync_n, halt_sync_n,
                         bus_idle, dec_illegal, vbr, wreg_val[7:0]};
 

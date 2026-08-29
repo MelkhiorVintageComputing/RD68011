@@ -74,11 +74,9 @@
   logic        req_ack;
   logic [15:0] req_rdata;
   logic  [2:0] req_end;
-  // The signal the sequencer actually acts on. req_end is a clock later and so
-  // is only a report; a cycle that sets req_end to CE_BERR without ever raising
-  // req_fault faults nothing at all. This harness used to bring out only
-  // req_end, which is why the late bus error could be broken for eight phases
-  // with case 4 below passing.
+  // The signal the sequencer actually acts on, so it is what the tests check.
+  // req_end is a clock later and so is only a report: a cycle that sets req_end
+  // to CE_BERR without ever raising req_fault faults nothing at all.
   logic        req_fault;
   logic        req_fault_wr;
   // Sticky, because req_fault is asserted for one falling edge inside the cycle
