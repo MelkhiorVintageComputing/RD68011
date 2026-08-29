@@ -94,8 +94,8 @@ A sweep therefore reports three numbers: passed, failed, and skipped — with th
 skips broken down into "not implemented" and "needing exception processing", so
 a partial implementation says what is missing rather than quietly passing.
 
-As of P6 the sweep runs **124 opcode files and 23492 tests with zero
-failures**, 4442 of them address errors. Nothing is skipped as not implemented:
+The sweep runs **124 opcode files and 23492 tests with zero failures**, 4442 of
+them address errors. Nothing is skipped as not implemented:
 all 89 MC68010 instructions are built. 1308 tests remain skipped, all of them
 because the reference took a group 1 or 2 exception and pushed a three-word
 frame where an MC68010 pushes four.
