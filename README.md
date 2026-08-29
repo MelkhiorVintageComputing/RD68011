@@ -42,9 +42,11 @@ it wants; the bus interface unit owns *when* every pin moves.
   │   └──────────┬──────────────────────────────────▲───────────────┘  │
   │              │                                  │                  │
   │   req_valid  │  req_kind  req_fc  req_addr      │  req_ack         │
-  │   req_uds    │  req_lds   req_wdata req_last    │  req_rdata       │
-  │   reset_req  │                                  │  req_end         │
+  │   req_uds    │  req_lds   req_wdata             │  req_last        │
+  │   reset_req  │  dbf                             │  req_rdata       │
+  │              │                                  │  req_end         │
   │              │                                  │  req_fault[_wr]  │
+  │              │                                  │  reset_busy      │
   │              │                                  │  ipl/reset/halt  │
   │              ▼                                  │  bus_idle        │
   │   ┌──────────────────────── rd68011_biu ────────┴───────────────┐  │
@@ -65,48 +67,64 @@ a slow M6800 peripheral and a retried cycle all look the same from above.
 
 ### The microcode engine
 
-One microword per clock edge pair, 145 bits wide, 6674 of them.
+One microword per clock, 146 bits wide, 6674 of them.
 
 ```
-   ir ─┐      ┌────────────────┐  entry point ──────────┐
+   ir ─┐      ┌────────────────┐   entry point ─────────┐
        ├─────►│   decode_rom   │                        │
-  irc ─┘      │ 1401 patterns  │  request preview ────┐ │
+  irc ─┘      │ 1440 patterns  │   request preview ───┐ │
               └────────────────┘                      │ │
-                                                      │ │
-              ┌────────────────┐                      │ │
-  upc ───────►│   ucode_rom    │── uw ──┬─────────────┼─┼──► datapath control,
-              │  6674 × 145 b  │        │             │ │    prefetch, loop mode,
-              └────────────────┘        │             │ │    condition codes
-                                        │             │ │
-             next, target2 ─────────────┤             ▼ ▼
-             rq0, rq1 previews ─────────┘      ┌──────────────────────┐
-                                               │   select the arm     │
-             bus cycle terminated? ───────────►│   NEXT · COND        │
-             condition true? ─────────────────►│   DECODE · RESUME    │
-             fault? ──────────────────────────►│   fault entry · hold │
-                                               └────┬────────────┬────┘
-                                          µaddr ────┘            └──── preview
-                                                 ▼                       ▼
-                                                upc'          the request the BIU
-                                                              latches on this edge
+                                                      ▼ ▼
+  bus cycle terminated? ───┐    ┌───────────────────────────────────┐
+  condition true? ─────────┼───►│      select the next arm          │
+  fault? ──────────────────┘    │  NEXT · COND · DECODE · RESUME    │
+                                │  fault entry · hold               │
+  this microword's ────────────►│                                   │
+  next / next|1, rq0 / rq1      └──────┬─────────────────────┬──────┘
+                                 upc' ─┘                     └── its preview
+                                       │                            │
+              ┌────────────────────────▼────────────┐               ▼
+              │  ucode_rom   8192 × 30, registered  │      the request the BIU
+              │  Read at upc' rather than upc: the  │      latches on this edge
+              │  same word at the same time, and a  │
+              │  memory instead of logic.           │
+              └────────┬──────────────────┬─────────┘
+               control │                  │ preview
+                 index ▼                  ▼ index
+           ┌───────────────────┐  ┌───────────────────┐
+           │ uctl_rom 600 × 91 │  │ urq_rom  126 × 42 │
+           └─────────┬─────────┘  └─────────┬─────────┘
+                     └───── uw, 146 b ──────┘
+                                │
+                                ▼
+              datapath control · prefetch · loop mode ·
+              condition codes · both successors' previews
 ```
 
-Two things in that picture are the answer to a timing problem rather than the
-obvious design, and `doc/critical-path.md` is the measurement that led to both:
+Three things in that picture are answers to a measurement rather than the
+obvious design:
 
 - **A microword carries its own successors' bus requests.** The request the bus
   unit latches has to come from the microword that will be current *after* the
   coming edge — which depends on the cycle terminating, a condition resolving
-  and any fault. That used to be a second 8192-entry lookup at a late address.
-  Now nothing is looked up late: each microword carries the previews of both its
-  successors, the decoder emits one beside its entry point, and the arms that
-  hold the micro-PC reuse the current microword's own fields.
+  and any fault. A second lookup at that late address is the obvious way, and an
+  expensive one, so nothing is looked up late: each microword carries the
+  previews of both its successors, the decoder emits one beside its entry point,
+  and the arms that hold the micro-PC reuse the current microword's own fields.
 - **Only one condition can steer the bus.** Of 228 conditional microwords, the
   two arms present a different bus request in exactly 56 — all of them MOVEM's
   mask test, deciding whether another transfer follows. So the request is
   selected on that test alone, and the ALU, the shifter, the divider and the
   multiplier leave the request's fan-in by construction. The assembler enforces
   it, so a future microcode edit that broke the property would fail the build.
+- **The store is read a microword early, and is two tables deep.** `upc` takes
+  `upc'` unconditionally outside reset, so a memory addressed at `upc'` with a
+  registered read holds the same word at the same time — no clock lost, and a
+  block RAM instead of logic. Storing an *index* into the 600 distinct control
+  patterns and the 126 distinct preview pairs then makes the stored word 30 bits
+  rather than 146.
+
+`doc/critical-path.md` measures the first two, `doc/size-and-speed.md` the third.
 
 ### The datapath
 
@@ -229,7 +247,9 @@ under **iverilog, Verilator, yosys, Vivado, Quartus and Questa** — the
 intersection of what those six accept is the language this project is written
 in, `make lint` runs the three that need no vendor installation — and
 `make audit` proves, in the source *and* in the yosys netlist, that not one of
-1379 flip-flops initialises outside reset.
+1385 flip-flops initialises outside reset. Exactly one register is exempt — the
+microcode store's read register, which a block RAM keeps inside the primitive —
+and the audit names it, explains it, and fails if a second one appears.
 
 **AC timing is decided, not measured.** An RTL model has no analogue delays, so
 section 10's nanosecond limits cannot be measured from it. They can still be
@@ -340,9 +360,10 @@ Post-route, `xc7a100tcsg324-1`, out of context, 48 ns with a 50 % duty cycle:
 | Block RAM | 7.5 of 135 |
 
 48 ns is the constraint every figure in this project is measured against, not
-the limit: the design also closes at 44, 42 and 40 ns, and fails at 36. It used
-to be 13121 LUTs with the microcode store as half of them — `doc/size-and-speed.md`
-is what changed that, and what it measured on the way.
+the limit: the design also closes at 44, 42 and 40 ns, and fails at 36. On a
+MAX 10 `10M50DAF484C7G` the same design fits in 13749 logic elements — 28 % of
+the part — and 30 M9K memory blocks, at 19.98 MHz. `doc/size-and-speed.md` has
+how it got there: six candidates measured on both devices, four kept.
 
 Two cautions, both learned here: **place and route varies more than small changes
 do** — two runs differing only in the contents of one unreachable microcode word
@@ -400,7 +421,7 @@ make timing     # AC-specification conformance
 make synth impl # Vivado synthesis, then place and route
 make paths      # what limits the frequency, unreachable routes excluded
 make lint-questa lint-quartus   # two more front-ends, from the Altera tools
-make quartus    # ... and the MAX 10 fit, for a second frequency — 19.82 MHz
+make quartus    # ... and the MAX 10 fit, for a second frequency — 19.98 MHz
 make check      # the gate: ucode-check, lint, audit, sim, programs, AC timing
 ```
 
