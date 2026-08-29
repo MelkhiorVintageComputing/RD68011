@@ -273,17 +273,15 @@ itself, because that is where anyone changing the number will look.
 
 ## Not yet implemented
 
-The bus unit is complete; the parts of §5 and §6 that belong to the sequencer
-were finished in P4 and P6, and are listed here with where they landed:
+The bus unit is complete, and so are the parts of §5 and §6 that belong to the
+sequencer. They are listed here with where they landed:
 
 - The reset *exception* — reading the initial SSP from $000000 and PC from
-  $000004, setting the interrupt mask to 7 and clearing VBR (UM 5.5). Done in
-  P4.
-- Double bus fault detection. Done in P6: the sequencer tracks whether it is
-  inside group 0 exception processing and drives `dbf` when a fault arrives
-  while it is, which the bus unit turns into HALT out (UM 5.4.4). Only an
-  external reset clears it.
-- Interrupt recognition and priority. Done in P4.
-- Breakpoint acknowledge cycles are wired as a cycle kind (`CT_BKPT`); BKPT
-  issues one as of P5, with function codes all ones and zeros on every address
-  line, as PRM section 4 specifies for this part.
+  $000004, setting the interrupt mask to 7 and clearing VBR (UM 5.5).
+- Double bus fault detection: the sequencer tracks whether it is inside group 0
+  exception processing and drives `dbf` when a fault arrives while it is, which
+  the bus unit turns into HALT out (UM 5.4.4). Only an external reset clears it.
+- Interrupt recognition and priority.
+- Breakpoint acknowledge cycles are wired as a cycle kind (`CT_BKPT`), and BKPT
+  issues one, with function codes all ones and zeros on every address line, as
+  PRM section 4 specifies for this part.

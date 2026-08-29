@@ -21,7 +21,7 @@ All at the 60 ns constraint the design started from, so the rows compare:
 
 | | worst slack | what was limiting it |
 |---|--:|---|
-| P8, as measured | 0.289 ns | a route the microcode cannot take |
+| as first measured | 0.289 ns | a route the microcode cannot take |
 | ... with that route excluded | 1.464 ns | the decoder and the preview store, in series |
 | decode the next opcode early | 0.534 / 1.943 ns | the write data, over-constrained |
 | previews carried in the microword | 1.953 ns | the write data |

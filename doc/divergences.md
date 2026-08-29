@@ -134,7 +134,7 @@ manual and against the vectors before being relied on.
 | **`BKPT` runs a breakpoint acknowledge cycle** -- CPU space, function codes all ones, zeros on every address line -- and then takes an illegal instruction exception however that cycle ended (PRM section 4). The MC68000 runs no cycle at all. | Implemented and checked by function code, not by cycle index. |
 | **`MOVE from CCR`** is an MC68010 addition and has no MC68000 vectors at all. | Implemented; the sweep has nothing to compare it against, so it is covered by the directed tests. |
 | **`VBR`** relocates the vector table; the MC68000 always used address zero. | Implemented. Reset clears it, as UM 5.5 requires. |
-| **`RTE` checks the frame format** and traps to vector 14 on a code it does not recognise (UM 6.4). | Implemented for format $0; format $8 arrives in P6. |
+| **`RTE` checks the frame format** and traps to vector 14 on a code it does not recognise (UM 6.4). | Implemented for both format $0 and format $8. |
 | **Loop mode** (UM appendix A): a DBcc whose displacement is minus four and whose target is a one-word loop mode instruction stops fetching altogether. | Implemented, and checked by `sim/tb/core_loop_tb.sv` -- which asks the question that matters as a negative one: once the loop is running, no cycle in program space happens at all. |
 
 ### How the sweep tells an exception apart
@@ -168,13 +168,13 @@ mechanisms -- instruction continuation and loop mode -- are built, the design
 places and routes on a named part at 20.8 MHz, and no register in it
 initialises outside reset. `doc/implementation.md` is the record.
 
-## Deliberate divergences added in P7
+## Deliberate divergences: loop mode
 
 | | Why |
 |---|--- |
 | **Table A-1 is read as "every one-word instruction whose memory operands use only (An), (An)+ and -(An)"**, which admits MOVE (Ay)+ to (Ax)+ -- a cell table A-1 omits and table 9-3 gives a cycle count for. | The two tables disagree, and the page is the most OCR-damaged in the manual. A missing row in a scanned list is a likelier explanation than one arbitrary hole in an otherwise complete matrix, and table 9-3 having a number in the cell settles it. The hole both tables agree on -- a register source to -(Ax) -- is kept. The list is generated from `tools/ucode/program.py` into `rtl/gen/rd68011_loop_rom.sv`, so it can be read and argued with. |
 
-## Deliberate divergences added in P6
+## Deliberate divergences: the format $8 frame
 
 | | Why |
 |---|--- |
@@ -183,7 +183,7 @@ initialises outside reset. `doc/implementation.md` is the record.
 | **The sixteen internal words carry our own encoding**, listed in `doc/checkpoint.md`. | This is what UM 6.4 asks for, and the version number in bits 10-13 of the first of them is the architecture's own mechanism for saying so. A frame stamped with another implementation's number is refused with a format error, exactly as the manual prescribes. |
 | **The program counter a fault stacks is the prefetch pointer.** UM 6.3.9.2 says only that it "may be advanced by as many as five words" beyond the instruction. | It is the value RTE has to put back for the instruction to carry on, so it is the one that is saved. Any value within the range the manual allows is conformant, and this one is the useful one. |
 
-## Deliberate divergences added in P5
+## Deliberate divergences: MOVES and MOVEM
 
 | | Why |
 |---|--- |

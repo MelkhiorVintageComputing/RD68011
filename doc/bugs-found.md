@@ -578,7 +578,7 @@ family), the `-(Ay),-(Ax)` multiprecision forms, and the return-address pushes
 of `JSR`, `BSR`, `PEA` and `LINK`.
 
 The frame has a word for that latch -- `SP+36`/`SP+38`, ours, and
-`doc/checkpoint.md` has listed it in the checkpoint set since P5. The frame
+`doc/checkpoint.md` has listed it in the checkpoint set all along. The frame
 build destroyed it before writing it. Every word of the frame is written through
 an `aupd` on the stack pointer, and an `aupd` is exactly what loads the latch,
 so the first frame write overwrote it and the ten-writes-later word that was

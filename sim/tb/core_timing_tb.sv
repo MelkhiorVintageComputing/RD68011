@@ -147,7 +147,7 @@ module core_timing_tb;
   initial begin
     errors = 0;
 
-    $display("== the P5 instructions, measured ==");
+    $display("== instruction timings, measured ==");
 
     // Four instructions whose section 9 entry is not in doubt, so that a
     // measurement that disagrees below is the instruction and not the harness.

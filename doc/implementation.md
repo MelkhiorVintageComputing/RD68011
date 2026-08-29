@@ -176,7 +176,7 @@ The summary is:
 
 | | worst slack, all at 60 ns |
 |---|--:|
-| P8, as measured | 0.289 ns |
+| as first measured | 0.289 ns |
 | ... with the unreachable route excluded | 1.464 ns |
 | decode the next opcode without waiting for the bus cycle | 0.534 ns |
 | previews carried in the microword, `rd68011_ureq_rom` deleted | 1.953 ns |
@@ -282,7 +282,7 @@ declaration that could infer a register, anywhere under `rtl/`.
 **Netlist.** yosys synthesises the whole design to gate-level flops and the
 cell types are read back. A flop without a reset is a different cell there —
 `$_DFF_P_` rather than `$_DFF_PN0_` — so one that got past the source check by
-some route nobody thought of still shows up. As of P9:
+some route nobody thought of still shows up. The current output:
 
 ```
 reset audit: 16 files, no initial blocks, no latches, no declaration initialisers
@@ -325,8 +325,8 @@ registers that cross-module optimisation used to remove now survive.
 
 Every one of those cell names carries a reset polarity and a reset value. The
 absence of a resetless type is the point, not the count -- but the count should
-still be right, and until P9 it was not. It read 2684, and every figure in the
-table was twice what it should have been: `synth` prints statistics of its own
+still be right, and for a long time it was not. It read 2684, and every figure
+in the table was twice what it should have been: `synth` prints statistics of its own
 before the explicit `stat` does, so the output holds two identical blocks and
 the audit summed both. The doubling was noticed and then explained away, as
 yosys flattening without merging. That explanation was wrong, and the size of

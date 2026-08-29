@@ -28,8 +28,8 @@ the instruction and not the harness.
 
 **Every row is a regression check, not a report.** It carries what this design
 takes as well as what section 9 gives, and the test fails if the first number
-moves. It was a report until P6, and that let four rows quietly start measuring
-an exception instead of the instruction they name: RTS and RTD popped a return
+moves. Being a report rather than a check is what once let four rows quietly
+measure an exception instead of the instruction they name: RTS and RTD popped a return
 address out of memory the harness never wrote, and DIVU and DIVS divided by a
 register that was zero. Each row now sets up what it needs.
 
@@ -166,9 +166,10 @@ other instruction's here.
 
 ### What matches exactly
 
-Worth recording because it is most of P5: MOVEM at every size, direction and
-mode; MOVEP at both sizes and both directions; CMPM; EXG; and the byte and word
-forms of ADDX and SUBX all measure exactly what section 9 gives them. MOVEM is
+Worth recording because it is most of the multi-cycle group: MOVEM at every
+size, direction and mode; MOVEP at both sizes and both directions; CMPM; EXG;
+and the byte and word forms of ADDX and SUBX all measure exactly what section 9
+gives them. MOVEM is
 the one that took design work to achieve -- 8+4n and 12+4n leave no room for
 per-register overhead at all, which is why its register number comes from a
 priority encoder over the mask and its loop branch rides the transfer
@@ -225,9 +226,10 @@ MC68000 with a seven-word frame.
 
 ## What changed the clock and not these numbers
 
-Three things came off the critical path in P8 -- the multiplier moved into a
-unit of its own, the decoder stopped taking its address through the ALU, and
-the second read of the microcode store was narrowed to the fields a bus request
-needs. None of them changed a cycle count, which is what
+Three things came off the critical path while the frequency was being chased --
+the multiplier moved into a unit of its own, the decoder stopped taking its
+address through the ALU, and the late second read of the microcode store gave
+way to previews carried in the microword. None of them changed a cycle count,
+which is what
 `sim/tb/core_timing_tb.sv` is there to say: every row of it was measured again
 afterwards and none moved. `doc/implementation.md` has what they did change.
