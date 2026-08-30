@@ -178,7 +178,8 @@ depends on which combinations the design happens to exercise.
 | Vivado | needs the package file read before its users | `synth.tcl` sorts `rd68011_pkg.sv` first |
 | Vivado | a signal used before its declaration is only `[Synth 8-6901]`, an *info* | `synth.tcl` and `impl.tcl` promote it to an error; Questa rejects the same thing natively, and it is how the one instance in this design was found |
 | Quartus | on MAX 10, an inferred ROM stays in logic with no warning unless the image carries its contents | `set_global_assignment -name INTERNAL_FLASH_UPDATE_MODE "SINGLE COMP IMAGE WITH ERAM"`; the microcode store was 23,696 logic elements and 0 memory bits without it and 62 with |
-| Quartus | `romstyle` is recognised on a ROM and `rom_style` is not (`Warning (10335)`) | neither is needed: a `case` in an `always_ff` infers memory under both tools with no attribute at all |
+| Vivado | the ROM mapping in its own synthesis report is **preliminary**, and timing optimisation may reverse it afterwards with no message. Building the core with `LOOP_BUF_WORDS=16` was enough: the report still said Block RAM, the netlist had none, and the microcode store came back as 1900 extra LUTs | say which memory and stop it being a choice: `(* rom_style = "block" *)` on the store's output register. `make impl LOOPBUF=16` measures both ways |
+| Quartus | `ramstyle` is recognised on an inferred ROM; `rom_style` is not (`Warning (10335)`) | carry both attributes -- each tool honours its own, ignores the other, and this one warns about it once |
 | Quartus | `small` is a reserved word in its SystemVerilog | do not name a module or signal that |
 | iverilog | assigning a ternary of two enum values to an enum variable is "This assignment requires an explicit cast" | use `if`/`else` inside the case item |
 | iverilog | `unique`/`unique0` on a case are parsed but ignored, with a "sorry" note per occurrence | harmless; keep them for the other five |

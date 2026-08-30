@@ -374,9 +374,16 @@ def emit_urom(words, tab):
     A registered case is what both Vivado and Quartus infer a block memory
     from, and it is the only form available -- an array would have to be
     filled by an initial block or $readmemh, which CLAUDE.md bars and
-    tools/reset_audit.py checks for. Nothing here asks for a memory: no
-    synthesis attribute is used, so an ASIC flow synthesises the same case as
-    logic, and the two tables below shrink it there just as much.
+    tools/reset_audit.py checks for.
+
+    The attributes say which memory, and they are not decoration. Vivado's own
+    report calls its choice preliminary and its timing optimisation may reverse
+    it later: building the core with LOOP_BUF_WORDS at 16 was enough to make it
+    do so, and the store came back as 1900 LUTs with no message saying anything
+    had been declined. What the store is made of should not turn on unrelated
+    logic somewhere else in the design. Both attributes are ignored by a tool
+    that does not know them, so an ASIC flow still synthesises the same case as
+    logic and the two tables below shrink it there just as much.
 
     The read is registered and the address is upc_nxt rather than upc, so the
     word this holds is the same word at the same time -- see the note in
@@ -400,6 +407,7 @@ def emit_urom(words, tab):
            '    output logic [rd68011_ucode_pkg::UW-1:0]    uw',
            ');', '',
            '  // { preview index, control index, successor }',
+           '  (* rom_style = "block", ramstyle = "M9K" *)',
            '  logic [rd68011_ucode_pkg::UL1-1:0] l1_q;', '',
            '  always_ff @(posedge clk) begin',
            '    case (addr)']

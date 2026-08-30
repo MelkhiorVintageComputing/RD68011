@@ -11,6 +11,7 @@ module rd68011_ucode_rom (
 );
 
   // { preview index, control index, successor }
+  (* rom_style = "block", ramstyle = "M9K" *)
   logic [rd68011_ucode_pkg::UL1-1:0] l1_q;
 
   always_ff @(posedge clk) begin

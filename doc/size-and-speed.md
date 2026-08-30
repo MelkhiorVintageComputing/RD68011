@@ -484,8 +484,42 @@ whole RTL is clean under it. Questa rejects the same construct natively, which i
 The general point is the one this document keeps arriving at: a diagnostic nobody has
 watched fail is not a gate. This one was not even a diagnostic until it was promoted.
 
+## A second defect, found by unrelated work
+
+This study left the microcode store with no synthesis attribute on purpose, and
+`tools/ucode/assemble.py` said why: a registered `case` infers a block memory under both
+tools without one, and asking for nothing keeps an ASIC flow synthesising the same case as
+logic. Both halves were true and the conclusion was still wrong.
+
+Building the core with the loop buffer's parameter at 16 words -- a change with no
+connection to the store at all -- was enough for Vivado to put the store back in logic:
+**1900 extra LUTs**, and its own report still said `Block RAM`. The mapping in that report
+is preliminary, as the note under the companion DSP table says in as many words, and
+`Timing Optimization` runs afterwards and may reverse it. Nothing is printed when it does.
+
+| `LOOP_BUF_WORDS` | | Slice LUTs | block RAM |
+|--:|---|--:|--:|
+| 16 | inference left to the tool | 8907 | **0** |
+| 16 | `(* rom_style = "block" *)` | 7015 | 7.5 |
+
+So the store now carries `rom_style` for Vivado and `ramstyle` for Quartus, which warns
+about the other one and is recorded in `doc/coding-standard.md` doing so. Neither is
+understood by an ASIC flow, so the reason the attributes were left off still holds; what
+does not hold is the idea that a tool's default is a decision the design has made.
+
+It is the same lesson as the one above, arrived at from the other side: there, a diagnostic
+nobody had watched fail; here, an inference nobody had watched decline.
+
 ## What is left
 
+- **The loop buffer's hit test is the floor when the buffer is on.** At 16 words and
+  above the worst path ends at `lb_hit`/`lb_hit2`: read data, through the datapath, into
+  `pc_nxt`, and then a 23-bit subtract against the window base. 21.72 MHz becomes 21.13.
+  The subtract only needs `pc_nxt` for the one case that is already forced to miss -- the
+  microword loading the program counter -- so computing it from `pc` plus the prefetch
+  increment instead, and marking that one microword invalid, takes the ALU out of it
+  entirely. Not done: the default core does not have the path at all, and a board that
+  turns the buffer on is trading 2.7 % of the clock for thirty per cent of the clocks.
 - **The shifter is the floor now.** Three shifter families sit inside 0.5 ns of each other
   and `alu -> alu_y` is 2.5 ns behind. The barrel is shared and the operand widths are
   already trimmed by both tools, so what remains is the barrel's own depth.

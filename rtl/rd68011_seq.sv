@@ -1811,10 +1811,28 @@ module rd68011_seq #(
     end
   end
 
-  assign lb_off_nxt  = pc_nxt[23:1] - lb_base_nxt;
+  // Where `pc` will be, without asking the ALU.
+  //
+  // `pc_nxt` is `pc`, `pc + 2`, or the ALU's answer, and only the first two
+  // matter: the third is a microword loading the program counter, and the
+  // fetch after one of those is forced to miss anyway. Taking `pc_nxt`
+  // literally here would put this subtract on the end of the longest path in
+  // the design -- read data, through the datapath, into `pc` -- and it is
+  // measurably the wrong thing to do: it cost the MAX 10 ten per cent of its
+  // clock, and doc/size-and-speed.md has the pair of fits. Both terms below
+  // come from registers instead, and the one case they get wrong is the one
+  // `lb_arm_pc` marks invalid.
+  //
+  // The cost is that the word at the window base is never filled: the fetch
+  // that would have filled it is the forced miss. It is also the word that is
+  // re-read every trip for the same reason, so nothing is lost twice.
+  logic [23:1] lb_off0, lb_off1;
+  assign lb_off0     = pc[23:1] - lb_base;
+  assign lb_off1     = lb_off0 + 23'd1;
+  assign lb_off_nxt  = (commit && pf_fetch) ? lb_off1 : lb_off0;
   assign lb_off2_nxt = lb_off_nxt + 23'd1;
-  assign lb_in_nxt   = lb_armed_nxt && (lb_off_nxt  < LB_NW);
-  assign lb_in2_nxt  = lb_armed_nxt && (lb_off2_nxt < LB_NW);
+  assign lb_in_nxt   = lb_armed_nxt && !lb_arm_pc && (lb_off_nxt  < LB_NW);
+  assign lb_in2_nxt  = lb_armed_nxt && !lb_arm_pc && (lb_off2_nxt < LB_NW);
   assign lb_idx_nxt  = lb_off_nxt[LB_IW:1];
 
   logic lb_hit_nxt, lb_hit2_nxt;
