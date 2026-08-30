@@ -12,6 +12,13 @@
 `ifndef RD68011_CORE_HARNESS_SVH
 `define RD68011_CORE_HARNESS_SVH
 
+// The loop buffer is off unless a testbench asks for it, which it does by
+// defining this before the include. Every existing test therefore instantiates
+// exactly the core it always did.
+`ifndef RD68011_LOOP_BUF_WORDS
+  `define RD68011_LOOP_BUF_WORDS 0
+`endif
+
   localparam realtime CLK_PERIOD = 125.0;   // 8 MHz
   localparam int      MAXTR      = 512;
 
@@ -34,8 +41,9 @@
   logic        e_o, vpa_n_i, vma_n_o, vma_oe;
   logic  [2:0] fc_o;
   logic        fc_oe;
+  logic        loop_inv_n_i;
 
-  rd68011_top dut (
+  rd68011_top #(.LOOP_BUF_WORDS (`RD68011_LOOP_BUF_WORDS)) dut (
       .clk (clk), .rst_n (rst_n),
       .a_o (a_o), .a_oe (a_oe),
       .d_i (d_i), .d_o (d_o), .d_oe (d_oe),
@@ -46,7 +54,7 @@
       .ipl_n_i (ipl_n_i), .berr_n_i (berr_n_i),
       .reset_n_i (reset_n_i), .reset_n_o (reset_n_o), .reset_n_oe (reset_n_oe),
       .halt_n_i (halt_n_i), .halt_n_o (halt_n_o), .halt_n_oe (halt_n_oe),
-      .loop_inv_n_i (1'b1),
+      .loop_inv_n_i (loop_inv_n_i),
       .e_o (e_o), .vpa_n_i (vpa_n_i), .vma_n_o (vma_n_o), .vma_oe (vma_oe),
       .fc_o (fc_o), .fc_oe (fc_oe)
   );
@@ -358,6 +366,7 @@
       berr_retry = 1'b0;
       berr_count = 0;
       tb_halt_n  = 1'b1;
+      loop_inv_n_i = 1'b1;
       // RESET and HALT asserted together is what resets the processor
       // (UM 5.5); the sequencer sits at its reset entry point until they go.
       reset_n_i  = 1'b0;

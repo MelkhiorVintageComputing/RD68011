@@ -242,6 +242,11 @@ module rd68011_seq #(
   logic             lb_in;
   logic             lb_hit;
   logic             lb_hit2;
+  // Whether *this* microword's program read was answered. The decision is made
+  // once, when the request is presented and declined, and then held -- it must
+  // not be a second opinion, or a microword whose cycle really did start could
+  // retire on a word out of the buffer while the bus unit is still driving.
+  logic             lb_served;
 
   // The MC68010's function code registers, which MOVES uses to reach an
   // address space of the program's choosing. Three bits each; MOVEC reads
@@ -412,7 +417,7 @@ module rd68011_seq #(
   // and answering it out of a window filled in the old mode is precisely what it
   // exists to prevent.
   logic loop_fetch_hit;
-  assign loop_fetch_hit = LB_ON && lb_hit && !loop_active && bus_busy &&
+  assign loop_fetch_hit = lb_served && bus_busy &&
                           (f_fc   == rd68011_ucode_pkg::U_FC_PROG) &&
                           (f_bus  == rd68011_ucode_pkg::U_BUS_READ) &&
                           (f_asel == rd68011_ucode_pkg::U_ASEL_PC);
@@ -1754,7 +1759,7 @@ module rd68011_seq #(
 
   // A program read that the buffer could not answer brings its word back, so
   // the window fills itself over the first trip and needs no fill pass.
-  assign lb_fill = LB_ON && commit && lb_in && !loop_active && !loop_fetch_hit &&
+  assign lb_fill = LB_ON && commit && lb_in && !loop_active && !lb_served &&
                    bus_busy &&
                    (f_fc   == rd68011_ucode_pkg::U_FC_PROG) &&
                    (f_bus  == rd68011_ucode_pkg::U_BUS_READ) &&
@@ -1825,8 +1830,12 @@ module rd68011_seq #(
   // the first fetch after a loop's backward branch always goes to the bus --
   // one program cycle a trip rather than none, which doc/timing-divergences.md
   // measures.
+  // Decided only on a microword boundary. While a cycle is in progress the
+  // request must not move, and `retire` is exactly when it is allowed to: the
+  // bus unit's own contract is that a sequencer which does not want the next
+  // cycle to start back to back drops req_valid on `req_last`.
   logic n_loop_hit;
-  assign n_loop_hit = LB_ON && !loop_active && !lb_arm_pc &&
+  assign n_loop_hit = LB_ON && retire && !loop_active && !lb_arm_pc &&
                       ((commit && pf_fetch) ? lb_hit2 : lb_hit) &&
                       (n_fc   == rd68011_ucode_pkg::U_FC_PROG) &&
                       (n_bus  == rd68011_ucode_pkg::U_BUS_READ) &&
@@ -1952,6 +1961,7 @@ module rd68011_seq #(
       lb_in    <= 1'b0;
       lb_hit   <= 1'b0;
       lb_hit2  <= 1'b0;
+      lb_served <= 1'b0;
       for (i = 0; i < LB_M; i = i + 1) begin
         lb_word[i] <= 16'd0;
       end
@@ -2082,6 +2092,7 @@ module rd68011_seq #(
       lb_in    <= lb_in_nxt;
       lb_hit   <= lb_hit_nxt;
       lb_hit2  <= lb_hit2_nxt;
+      if (retire) lb_served <= n_loop_hit;
       if (lb_fill) lb_word[lb_idx] <= rdata;
 
       // -- Loop mode ----------------------------------------------------------

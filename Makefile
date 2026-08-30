@@ -337,9 +337,17 @@ PROGHEX := $(addprefix $(PROGDIR)/,$(addsuffix .hex,$(PROGS)))
 # off for a dozen clocks or more. `make programs WAITS=13` is the check.
 WAITS ?= 0
 
+# The loop buffer, for the two targets that run real code: `make programs
+# LOOPBUF=16` and `make cosim LOOPBUF=16` build the same core with a window of
+# that many words. Zero, the default, is the MC68010. The programs are
+# self-checking and the co-simulation compares every register against Musashi,
+# so between them they say what the buffer is supposed to leave alone.
+LOOPBUF ?= 0
+IVLB    := $(if $(filter-out 0,$(LOOPBUF)),-DRD68011_LOOP_BUF_WORDS=$(LOOPBUF),)
+
 programs: dirs $(PROGHEX)
-	@echo "== test programs (waits=$(WAITS)) =="
-	@iverilog $(IVFLAGS) -I sim/tb -o $(BUILD)/program_tb.vvp \
+	@echo "== test programs (waits=$(WAITS), loop buffer $(LOOPBUF)) =="
+	@iverilog $(IVFLAGS) $(IVLB) -I sim/tb -o $(BUILD)/program_tb.vvp \
 	    -s core_program_tb $(RTL) $(MODELS) sim/tb/core_program_tb.sv 2>&1 | \
 	    grep -v 'sorry:' || true
 	@fail=0; for p in $(PROGHEX); do \
@@ -350,6 +358,36 @@ programs: dirs $(PROGHEX)
 	         grep -v 'sorry:'); \
 	  echo "$$out"; \
 	  case "$$out" in *"PASS"*) ;; *) fail=1;; esac; \
+	done; exit $$fail
+
+# What the loop buffer is worth, in clocks, on real code.
+#
+# Every program run twice against the same image -- once as an MC68010 and once
+# with a window of LBWORDS words -- and both have to pass, because the buffer
+# is a fetch optimisation and is allowed to change nothing else. The clock
+# counts are the measurement; doc/timing-divergences.md keeps them.
+LBWORDS ?= 16
+
+loopbuf: dirs $(PROGHEX)
+	@echo "== the loop buffer, $(LBWORDS) words =="
+	@iverilog $(IVFLAGS) -I sim/tb -o $(BUILD)/program_tb.vvp \
+	    -s core_program_tb $(RTL) $(MODELS) sim/tb/core_program_tb.sv 2>&1 | \
+	    grep -v 'sorry:' || true
+	@iverilog $(IVFLAGS) -DRD68011_LOOP_BUF_WORDS=$(LBWORDS) -I sim/tb \
+	    -o $(BUILD)/program_lb.vvp -s core_program_tb $(RTL) $(MODELS) \
+	    sim/tb/core_program_tb.sv 2>&1 | grep -v 'sorry:' || true
+	@printf '%-12s %10s %10s %9s\n' program off $(LBWORDS) change
+	@fail=0; for p in $(PROGHEX); do \
+	  n=$$(basename $$p .hex); \
+	  a=sim/programs/$$n.args; extra=$$(test -f $$a && cat $$a || true); \
+	  for v in program_tb program_lb; do \
+	    out=$$(vvp $(BUILD)/$$v.vvp +prog=$$p +timeout=6000000 \
+	           +waits=$(WAITS) $$extra 2>&1 | grep -v 'sorry:'); \
+	    case "$$out" in *"PASS"*) ;; *) echo "$$out"; fail=1;; esac; \
+	    eval "$$v=$$(echo "$$out" | sed -n 's/.* in \([0-9]*\) clocks/\1/p')"; \
+	  done; \
+	  printf '%-12s %10s %10s %8s%%\n' $$n $$program_tb $$program_lb \
+	    $$(python3 -c "print('%+.1f' % (100.0*($$program_lb-$$program_tb)/$$program_tb))"); \
 	done; exit $$fail
 
 # ---------------------------------------------------------------------------
@@ -507,8 +545,8 @@ $(COSIMDIR)/musashi_trace: tools/cosim/musashi_trace.c tools/cosim/m68kconf.h
 	    $(COSIMDIR)/m68kops.c -lm
 
 cosim: programs $(COSIMDIR)/musashi_trace
-	@echo "== musashi co-simulation =="
-	@iverilog $(IVFLAGS) -I sim/tb -o $(BUILD)/program_tb.vvp \
+	@echo "== musashi co-simulation (loop buffer $(LOOPBUF)) =="
+	@iverilog $(IVFLAGS) $(IVLB) -I sim/tb -o $(BUILD)/program_tb.vvp \
 	    -s core_program_tb $(RTL) $(MODELS) sim/tb/core_program_tb.sv 2>&1 | \
 	    grep -v 'sorry:' || true
 	@fail=0; for p in $(COSIMPROG); do \
