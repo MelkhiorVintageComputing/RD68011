@@ -13,6 +13,14 @@ puts "RD68011: synthesising $top for $part"
 
 # The file list, in dependency order, comes from the Makefile: packages have to
 # be read before their users and there is no reason for two places to know that.
+# The loop buffer's width, so the area and frequency it costs can be measured
+# rather than argued about. Absent or zero is the default core, which is an
+# MC68010 and is what every number in doc/implementation.md is of.
+set lbw 0
+if {[llength $argv] > 3} { set lbw [lindex $argv 3] }
+set lbgen {}
+if {$lbw != 0} { set lbgen [list -generic LOOP_BUF_WORDS=$lbw] }
+
 set f [open $root/build/rtl.f r]
 set rtl [split [string trim [read $f]] "\n"]
 close $f
@@ -26,7 +34,8 @@ set_msg_config -id "Synth 8-6901" -new_severity ERROR
 read_verilog -sv $rtl
 read_xdc $root/scripts/rd68011.xdc
 
-synth_design -top $top -part $part -mode out_of_context -flatten_hierarchy none
+synth_design -top $top -part $part -mode out_of_context -flatten_hierarchy none \
+             {*}$lbgen
 
 report_utilization  -file utilization.rpt
 report_timing_summary -delay_type max -max_paths 10 -file timing.rpt

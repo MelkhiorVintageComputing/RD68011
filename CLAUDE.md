@@ -103,6 +103,8 @@ make harte-all  # the whole sweep, every opcode file the ISA covers
 make programs # build sim/programs/ with m68k-linux-gnu and run them
 make programs WAITS=13  # ... against slow memory, as a shared bus makes it
 make cosim    # ... and run them against Musashi, comparing every register
+make loopbuf  # every program twice, with and without the loop buffer
+make programs LOOPBUF=16  # ... or just the one way; `make cosim LOOPBUF=16` too
 make suska    # compare bus transactions against the Suska VHDL core under ghdl
 make suska-ssw # the special status word of a faulted cycle, on both processors
 make timing   # AC-specification conformance: is any pad-delay assignment legal?

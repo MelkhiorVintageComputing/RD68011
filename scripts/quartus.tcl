@@ -47,6 +47,15 @@ if {[string match -nocase "MAX 10" $family]} {
         "SINGLE COMP IMAGE WITH ERAM"
 }
 
+# The loop buffer's width, so the area and frequency it costs can be measured
+# rather than argued about. Absent or zero is the default core, which is an
+# MC68010 and is what every number in doc/implementation.md is of.
+set lbw 0
+if {[llength $argv] > 6} { set lbw [lindex $argv 6] }
+if {$lbw != 0} {
+    set_parameter -name LOOP_BUF_WORDS $lbw
+}
+
 set f [open $root/build/rtl.f r]
 set rtl [split [string trim [read $f]] "\n"]
 close $f

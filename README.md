@@ -14,7 +14,8 @@ implementation's source.
 | **ISA** | all **89** MC68010 instructions, every addressing mode, every exception |
 | **Bus** | asynchronous S0–S7 cycles, read-modify-write, arbitration, M6800 synchronous cycles, autovectored and vectored interrupts |
 | **MC68010 proper** | instruction continuation (format $8 frame + RTE), loop mode, VBR, SFC/DFC, MOVEC/MOVES/RTD/BKPT |
-| **Verified by** | 23492 reference vectors, 93991 co-simulated instructions, 15 directed testbenches, 6 programs, a second core in VHDL |
+| **Optional** | a loop buffer, off by default: loops of any shape and any instruction, up to `LOOP_BUF_WORDS` words, run with one instruction fetch a trip instead of one a word — **-29 %** of the clocks on compiled C |
+| **Verified by** | 23492 reference vectors, 95275 co-simulated instructions, 16 directed testbenches, 7 programs, a second core in VHDL |
 | **Implemented** | 20.8 MHz post-route on an `xc7a100t-1`, 6585 LUTs, 1342 FFs, 7.5 block RAMs |
 | **For scale** | the fastest MC68010 Motorola shipped ran at 12.5 MHz |
 
@@ -39,6 +40,7 @@ it wants; the bus interface unit owns *when* every pin moves.
   │   ┌──────────────────────── rd68011_seq ────────────────────────┐  │
   │   │  microcode engine · datapath · register file · address unit │  │
   │   │  prefetch pipe · loop mode · fault checkpointing            │  │
+  │   │  loop buffer (LOOP_BUF_WORDS, off by default)                │  │
   │   └──────────┬──────────────────────────────────▲───────────────┘  │
   │              │                                  │                  │
   │   req_valid  │  req_kind  req_fc  req_addr      │  req_ack         │
@@ -237,9 +239,9 @@ found the bugs the others did.
 | | What it is | Scale |
 |---|---|--:|
 | **Reference vectors** | `make harte-all` runs SingleStepTests through the core one instruction at a time, comparing registers, prefetch pipe, memory and the whole bus transaction list | 124 opcode files, **23492 tests, zero failures** |
-| **Directed testbenches** | `make sim` — what vectors cannot reach: the bus protocol edge by edge, faults and continuation, loop mode, arbitration, the MC68010's own instructions, exact clock counts | 15 testbenches |
-| **Real programs** | `make programs` — flat images built with `m68k-linux-gnu` and run to completion, self-checking; sequences long enough for carried state to be what breaks | 6 programs, incl. C at `-Os` |
-| **Co-simulation** | `make cosim` compares PC, SR and all sixteen registers against Musashi before every instruction | **93991 instructions, every register the same** |
+| **Directed testbenches** | `make sim` — what vectors cannot reach: the bus protocol edge by edge, faults and continuation, loop mode and the loop buffer, arbitration, the MC68010's own instructions, exact clock counts | 16 testbenches |
+| **Real programs** | `make programs` — flat images built with `m68k-linux-gnu` and run to completion, self-checking; sequences long enough for carried state to be what breaks | 7 programs, incl. C at `-Os` |
+| **Co-simulation** | `make cosim` compares PC, SR and all sixteen registers against Musashi before every instruction | **95275 instructions, every register the same** |
 | **A second core** | `make suska` runs the Suska WF68K10, an unrelated VHDL MC68010, under ghdl and compares bus transactions | 79 data accesses, same addresses, same order |
 
 Plus the ones that ask whether any of it can be built: every module elaborates

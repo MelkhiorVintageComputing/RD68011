@@ -189,7 +189,7 @@ quartus: dirs
 	@rm -rf $(QUARTUSDIR) && mkdir -p $(QUARTUSDIR)
 	@printf '%s\n' $(addprefix $(CURDIR)/,$(RTL)) > $(BUILD)/rtl.f
 	@cd $(QUARTUSDIR) && $(QUARTUS) quartus_sh -t $(CURDIR)/scripts/quartus.tcl \
-	    "$(AFAMILY)" $(APART) $(XTOP) $(CURDIR) fit $(AJOBS) > fit.log 2>&1 || \
+	    "$(AFAMILY)" $(APART) $(XTOP) $(CURDIR) fit $(AJOBS) $(LOOPBUF) > fit.log 2>&1 || \
 	    { grep -E '^(RD68011|Error)' fit.log; \
 	      echo "quartus: failed, see $(QUARTUSDIR)/fit.log"; exit 1; }
 	@grep -E 'Implicit Net warning' $(QUARTUSDIR)/fit.log && \
@@ -217,7 +217,7 @@ synth: dirs
 	@printf '%s\n' $(addprefix $(CURDIR)/,$(RTL)) > $(BUILD)/rtl.f
 	@cd $(BUILD) && VIVADO_SETTINGS=$(VIVADO_SETTINGS) \
 	    $(CURDIR)/scripts/vivado.sh -mode batch -nojournal -nolog \
-	    -source ../scripts/synth.tcl -tclargs $(XPART) $(XTOP) $(CURDIR)
+	    -source ../scripts/synth.tcl -tclargs $(XPART) $(XTOP) $(CURDIR) $(LOOPBUF)
 
 # Place and route, for the number that means something: two thirds of the
 # critical path is routing, and before placement that part is an estimate.
@@ -227,7 +227,7 @@ impl: dirs
 	@printf '%s\n' $(addprefix $(CURDIR)/,$(RTL)) > $(BUILD)/rtl.f
 	@cd $(BUILD) && VIVADO_SETTINGS=$(VIVADO_SETTINGS) \
 	    $(CURDIR)/scripts/vivado.sh -mode batch -nojournal -nolog \
-	    -source ../scripts/impl.tcl -tclargs $(XPART) $(XTOP) $(CURDIR)
+	    -source ../scripts/impl.tcl -tclargs $(XPART) $(XTOP) $(CURDIR) $(LOOPBUF)
 
 # What actually limits the frequency. `make impl` reports the worst path static
 # timing analysis can find, which for this design is one the microcode cannot

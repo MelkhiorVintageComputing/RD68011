@@ -210,6 +210,46 @@ more here than section 9's 18: the counter test is a microword and its branch
 arm is another, where the original folds them into work it was doing anyway.
 Leaving on the condition matches exactly, at 20.
 
+### The loop buffer, when a board turns it on
+
+Everything above is the processor as an MC68010, which is what
+`LOOP_BUF_WORDS = 0` builds and what every number in this document is measured
+from. This section is the other configuration. `doc/divergences.md` states what
+it is and what its coherency contract is; this is what it costs and saves.
+
+It is a divergence by construction and by intent: the point of it is that
+instruction fetches do not happen. Nothing else moves -- `pc` advances exactly
+as it would have, so the pipe, the frames and the instruction boundaries are
+identical, which `make cosim LOOPBUF=16` checks against Musashi register by
+register over 95,000 instructions.
+
+**On whole programs**, from `make loopbuf`, which runs each of `sim/programs/`
+twice against the same image with a sixteen-word window:
+
+| | MC68010 | 16 words | |
+|---|--:|--:|--:|
+| `p02_excep` | 12279 | 8484 | **-30.9 %** |
+| `p04_ccode` | 314251 | 222484 | **-29.2 %** |
+| `p07_loops` | 9827 | 7187 | **-26.9 %** |
+| `p01_flow` | 18475 | 15985 | -13.5 % |
+| `p05_stress` | 460988 | 446588 | -3.1 % |
+| `p03_fault` | 11323 | 11179 | -1.3 % |
+| `p06_ssw` | 4656 | 4656 | 0.0 % |
+
+The spread is the point rather than the headline. `p06_ssw` has no loop worth
+the name and gets nothing; `p05_stress` is one enormous straight-line body run
+three hundred times, far past any window this would build, and gets only what
+its short inner loops give it; `p04_ccode` is ordinary compiled C and gets
+nearly thirty per cent.
+
+**One cycle a trip, not none.** The fetch immediately after the loop's backward
+branch always goes to the bus. Deciding a hit for a program counter the ALU is
+only now producing would put a 23-bit compare into the cone `doc/critical-path.md`
+shows is limiting, so the core declines to try. A loop of *w* words therefore
+costs one program-space cycle a trip where the MC68010 pays *w*, and loop mode
+proper -- untouched, and still taken first on the loops it can take -- pays none
+at all.
+
 ### Fault processing and RTE with a long frame
 
 Section 9 gives RTE 112(27/10) for "Long, Retry Read", 112(26/1) for "Long,
