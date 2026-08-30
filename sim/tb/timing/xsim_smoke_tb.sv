@@ -47,6 +47,7 @@ module xsim_smoke_tb;
       .reset_n_o (o_reset_n_o), .reset_n_oe (o_reset_n_oe),
       .halt_n_i (halt_n_i),
       .halt_n_o (o_halt_n_o), .halt_n_oe (o_halt_n_oe),
+      .loop_inv_n_i (1'b1),
       .e_o (o_e_o), .vpa_n_i (1'b1),
       .vma_n_o (o_vma_n_o), .vma_oe (o_vma_oe),
       .fc_o (o_fc_o), .fc_oe (o_fc_oe)

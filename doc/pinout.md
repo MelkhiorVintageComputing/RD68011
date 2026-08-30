@@ -101,8 +101,16 @@ group is the mapping that does.
 | `reset_n_o`, `reset_n_oe` | out | Open drain. `reset_n_o` is constant 0; the `RESET` instruction asserts `reset_n_oe` for 124 clocks to reset peripherals without disturbing the core. |
 | `halt_n_i` | in | Halts bus activity at the end of the current cycle. |
 | `halt_n_o`, `halt_n_oe` | out | Open drain. `halt_n_o` is constant 0; driven on double bus fault. |
+| `loop_inv_n_i` | in | **Not an MC68010 pin.** Empties the loop buffer and holds it empty while asserted, so a pulse invalidates and a permanent assertion disables. Asynchronous, through the same two ranks as RESET and HALT, so it must be held for at least **two clock periods** to be seen. Ignored unless the core is built with `LOOP_BUF_WORDS` set; tie it high otherwise. |
 
 There is no `MODE` pin — that is MC68HC001/MC68EC000 only.
+
+`loop_inv_n_i` exists because the loop buffer caches *logical* addresses and an MC68010 is
+a processor with an MMU in front of it. The core invalidates by itself on the three changes
+it can see — a write of its own into the window, another master taking the bus, and any
+transition of the supervisor bit, which changes the address space a program fetch is made
+in. A mapping changed by anything else is invisible to it, and this pin is how the system
+says so. `doc/divergences.md` states the contract in full.
 
 ### M6800 peripheral control (§3.7)
 

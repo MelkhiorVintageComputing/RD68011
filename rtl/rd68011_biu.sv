@@ -83,6 +83,11 @@ module rd68011_biu #(
     output logic        halt_sync_n,
     output logic        bus_idle,     // no cycle in progress and bus is ours
     input  logic        dbf,          // double bus fault: drive HALT out (UM 5.4.4)
+    // Two things the loop buffer has to know and only this unit can see: that
+    // the bus has gone to another master, and that the board is asking for an
+    // invalidate. Both are ignored unless rd68011_seq's LOOP_BUF_WORDS is set.
+    output logic        bus_granted,     // the buses belong to someone else
+    output logic        loop_inv_sync_n, // synchronised loop_inv_n_i
 
     // -- Pins -----------------------------------------------------------------
     output logic [23:1] a_o,
@@ -109,6 +114,7 @@ module rd68011_biu #(
     input  logic        halt_n_i,
     output logic        halt_n_o,
     output logic        halt_n_oe,
+    input  logic        loop_inv_n_i,
     output logic        e_o,
     input  logic        vpa_n_i,
     output logic        vma_n_o,
@@ -127,6 +133,12 @@ module rd68011_biu #(
   rd68011_sync #(.WIDTH(1)) u_sync_reset (.clk(clk), .rst_n(rst_n), .d(reset_n_i), .q(reset_sync_n));
   rd68011_sync #(.WIDTH(1)) u_sync_halt  (.clk(clk), .rst_n(rst_n), .d(halt_n_i),  .q(halt_sync_n));
   rd68011_sync #(.WIDTH(3)) u_sync_ipl   (.clk(clk), .rst_n(rst_n), .d(ipl_n_i),   .q(ipl_sync_n));
+
+  // The loop-buffer invalidate is asynchronous like the rest of them, and goes
+  // through the same two ranks. That is what sets its minimum assertion width
+  // at two clock periods, which doc/pinout.md states.
+  rd68011_sync #(.WIDTH(1)) u_sync_linv  (.clk(clk), .rst_n(rst_n), .d(loop_inv_n_i),
+                                          .q(loop_inv_sync_n));
 
   // ===========================================================================
   // M6800 enable clock (UM 3.7, appendix B)
@@ -781,7 +793,6 @@ module rd68011_biu #(
   // Whether the bus belongs to someone else. Declared here rather than with the
   // output enables below, which are its main use, because d_oe reads it too and
   // a name has to be declared before it is used (doc/coding-standard.md).
-  logic bus_granted;
   assign bus_granted = arb_bus_released_nxt;
 
   // Table 3-4 again: the data bus is also released while RESET is asserted and

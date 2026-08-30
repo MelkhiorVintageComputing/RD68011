@@ -12,7 +12,12 @@
 // yosys 0.52 supports neither `import pkg::*` nor user types on ports.
 // See doc/coding-standard.md.
 
-module rd68011_top (
+module rd68011_top #(
+    // Passed straight to rd68011_seq, where it is documented. Zero is an
+    // MC68010; anything else turns the loop buffer on, which loop_inv_n_i
+    // below then belongs to.
+    parameter int LOOP_BUF_WORDS = 0
+) (
     // Clock and hardware reset -----------------------------------------------
     input  logic        clk,      // free-running, both edges used (UM 3.9)
     input  logic        rst_n,    // not an MC68010 pin: async init, see doc/pinout.md
@@ -52,6 +57,13 @@ module rd68011_top (
     input  logic        halt_n_i,
     output logic        halt_n_o,   // open drain: constant 0
     output logic        halt_n_oe,
+    // Not an MC68010 pin, and meaningless unless LOOP_BUF_WORDS is set: while
+    // it is asserted the loop buffer is emptied and kept empty, so a pulse
+    // invalidates and a permanent assertion disables. A SystemVerilog port
+    // list cannot be made conditional on a parameter across the six front-ends
+    // this has to elaborate under, so the pin is always here; tie it high on a
+    // core built with the default. See doc/pinout.md.
+    input  logic        loop_inv_n_i,
 
     // M6800 peripheral control (UM 3.7) --------------------------------------
     output logic        e_o,        // never three-stated
@@ -85,8 +97,10 @@ module rd68011_top (
   logic        halt_sync_n;
   logic        bus_idle;
   logic        dbf;
+  logic        bus_granted;
+  logic        loop_inv_sync_n;
 
-  rd68011_seq u_seq (
+  rd68011_seq #(.LOOP_BUF_WORDS (LOOP_BUF_WORDS)) u_seq (
       .clk          (clk),
       .rst_n        (rst_n),
       .req_valid    (req_valid),
@@ -106,6 +120,8 @@ module rd68011_top (
       .reset_sync_n (reset_sync_n),
       .halt_sync_n  (halt_sync_n),
       .bus_idle     (bus_idle),
+      .bus_granted  (bus_granted),
+      .loop_inv_sync_n (loop_inv_sync_n),
       .reset_req    (reset_req),
       .reset_busy   (reset_busy),
       .dbf          (dbf)
@@ -137,6 +153,8 @@ module rd68011_top (
       .halt_sync_n  (halt_sync_n),
       .bus_idle     (bus_idle),
       .dbf          (dbf),
+      .bus_granted  (bus_granted),
+      .loop_inv_sync_n (loop_inv_sync_n),
 
       .a_o        (a_o),        .a_oe       (a_oe),
       .d_i        (d_i),        .d_o        (d_o),        .d_oe (d_oe),
@@ -149,6 +167,7 @@ module rd68011_top (
       .berr_n_i   (berr_n_i),
       .reset_n_i  (reset_n_i),  .reset_n_o  (reset_n_o),  .reset_n_oe (reset_n_oe),
       .halt_n_i   (halt_n_i),   .halt_n_o   (halt_n_o),   .halt_n_oe  (halt_n_oe),
+      .loop_inv_n_i (loop_inv_n_i),
       .e_o        (e_o),        .vpa_n_i    (vpa_n_i),
       .vma_n_o    (vma_n_o),    .vma_oe     (vma_oe),
       .fc_o       (fc_o),       .fc_oe      (fc_oe)

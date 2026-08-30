@@ -32,7 +32,17 @@
 // faulted access, so resuming at the saved micro-address re-executes the
 // microword and reissues exactly the same request. See doc/checkpoint.md.
 
-module rd68011_seq (
+module rd68011_seq #(
+    // The loop buffer: how many words of a loop it can hold, or zero for none.
+    //
+    // Zero is the MC68010, exactly -- the whole buffer constant-folds away and
+    // loop mode is UM appendix A's and nothing else. Any other value adds a
+    // window of that many words that program fetches are served from, which
+    // makes loops of any shape and any instruction cheap and is a deliberate
+    // divergence from the original's bus behaviour. doc/divergences.md states
+    // the contract and doc/timing-divergences.md measures it.
+    parameter int LOOP_BUF_WORDS = 0
+) (
     input  logic        clk,
     input  logic        rst_n,
 
@@ -55,6 +65,8 @@ module rd68011_seq (
     input  logic        reset_sync_n,
     input  logic        halt_sync_n,
     input  logic        bus_idle,
+    input  logic        bus_granted,     // the buses belong to someone else
+    input  logic        loop_inv_sync_n, // the board is invalidating the loop buffer
     output logic        reset_req,
     input  logic        reset_busy,   // the RESET instruction's pulse is running
     output logic        dbf
@@ -184,6 +196,52 @@ module rd68011_seq (
   logic        loop_m4;      // the DBcc's displacement was minus four
   logic  [1:0] loop_pending; // what RTE read out of a frame, applied at RESUME
   logic  [1:0] loop_saved;   // ... and what a fault put there
+
+  // ---------------------------------------------------------------------------
+  // The loop buffer -- not an MC68010 mechanism
+  //
+  // Loop mode above cannot grow. It works by *suppressing* fetches, so there is
+  // nowhere for a second instruction word to live and nowhere for an extension
+  // word to come from, which is exactly what table A-1's shape is; and the one
+  // word it does hold has one slot in the format $8 frame, which is
+  // architecture and not ours to widen.
+  //
+  // This is the other way round: a window of LOOP_BUF_WORDS words that program
+  // fetches are *satisfied* from. `pc` advances as it always did, so the pipe,
+  // the frames and the instruction boundaries are bit for bit what a run
+  // without the buffer produces -- the only difference is bus cycles that did
+  // not happen. Any instruction of any length in any addressing mode can be in
+  // the loop, and any backward transfer of control can close it.
+  //
+  // Everything here is a hint. A miss is always legal, so the arming rule can
+  // be as approximate as it likes and the only cost of being wrong is a bus
+  // cycle. That is what makes it safe to put beside a bus whose behaviour is a
+  // hard requirement.
+  //
+  // The window is a virtual address, because an MC68010's addresses are: the
+  // words are only good while the mapping of the window and the address space
+  // being fetched from are both unchanged. doc/divergences.md sets out the four
+  // ways that can stop being true and which of them the core discharges itself.
+  localparam bit LB_ON = (LOOP_BUF_WORDS > 0);
+  localparam int LB_N  = (LOOP_BUF_WORDS > 0) ? LOOP_BUF_WORDS : 1;
+  localparam int LB_IW = (LB_N > 1) ? $clog2(LB_N) : 1;
+  // Rounded up to the next power of two so that every value the index can take
+  // addresses a word that exists; `lb_in` is what decides whether it counts.
+  localparam int LB_M  = 1 << LB_IW;
+  localparam logic [22:0] LB_NW = 23'(LB_N);
+
+  logic [15:0]      lb_word [0:LB_M-1];
+  logic [LB_M-1:0]  lb_val;      // per word, so the window fills as it is used
+  logic [23:1]      lb_base;     // first word of the window
+  logic             lb_armed;
+  // Where `pc` sits in the window, decided an edge early so that the request
+  // path sees registers and not a 23-bit compare. `lb_hit2` is the same answer
+  // for `pc + 2`, which is where the next microword will read if this one
+  // prefetches.
+  logic [LB_IW-1:0] lb_idx;
+  logic             lb_in;
+  logic             lb_hit;
+  logic             lb_hit2;
 
   // The MC68010's function code registers, which MOVES uses to reach an
   // address space of the program's choosing. Three bits each; MOVEC reads
@@ -344,8 +402,23 @@ module rd68011_seq (
   // An address error's cycle never starts, so there is no req_last to wait
   // for; a microword resumed with the rerun flag set has had its access done
   // in software, so there is none either. Both end the microword here.
+  // A program read the loop buffer can answer issues no cycle either, for the
+  // same reason and with the same effect on `retire`. The two are exclusive:
+  // while loop mode is running no program read is issued at all, so there is
+  // nothing for the buffer to answer.
+  //
+  // Only a read addressed at `pc`. sr_refetch's read of `pc - 2` is deliberately
+  // a re-read in whatever privilege mode the instruction has just established,
+  // and answering it out of a window filled in the old mode is precisely what it
+  // exists to prevent.
+  logic loop_fetch_hit;
+  assign loop_fetch_hit = LB_ON && lb_hit && !loop_active && bus_busy &&
+                          (f_fc   == rd68011_ucode_pkg::U_FC_PROG) &&
+                          (f_bus  == rd68011_ucode_pkg::U_BUS_READ) &&
+                          (f_asel == rd68011_ucode_pkg::U_ASEL_PC);
+
   assign retire   = !bus_busy || req_last || addr_err_q || rerun_skip ||
-                    loop_suppress;
+                    loop_suppress || loop_fetch_hit;
 
   // Retiring and committing are not the same thing once faults exist. A
   // faulted microword ends -- the sequencer moves on to the fault handler --
@@ -358,7 +431,9 @@ module rd68011_seq (
   // a resumed microword whose access software already completed, the data
   // input buffer RTE restored (UM 6.3.9.2).
   logic [15:0] rdata;
-  assign rdata = rerun_skip ? dib : req_rdata;
+  assign rdata = loop_fetch_hit ? lb_word[lb_idx]
+               : rerun_skip     ? dib
+                                : req_rdata;
 
   // Signals the prefetch pipe and the datapath's source multiplexer read, but
   // which are driven further down alongside the logic that produces them, and
@@ -1651,8 +1726,115 @@ module rd68011_seq (
                            (n_fc  == rd68011_ucode_pkg::U_FC_PROG) &&
                            (n_bus == rd68011_ucode_pkg::U_BUS_READ);
 
+  // ===========================================================================
+  // The loop buffer's next state
+  //
+  // All of it lands in a register, so the 23-bit subtract is a whole clock's
+  // work and nothing here reaches the bus request except through `lb_hit` and
+  // `lb_hit2`, which are flops.
+  // ===========================================================================
+  logic [23:1]      lb_base_nxt;
+  logic             lb_armed_nxt;
+  logic [LB_M-1:0]  lb_val_nxt;
+  logic [23:1]      lb_off_nxt, lb_off2_nxt;
+  logic             lb_in_nxt, lb_in2_nxt;
+  logic [LB_IW-1:0] lb_idx_nxt;
+  logic             lb_arm_pc, lb_fill;
+
+  // A taken transfer of control: `y` is going into `pc`, and `pc` still holds
+  // the address the prefetch had reached, one word past the instruction doing
+  // the transferring. Backward by no more than the window is a loop that fits.
+  logic [23:1] lb_delta, lb_tgt_off;
+  logic        lb_back_ok, lb_tgt_in;
+  assign lb_arm_pc  = commit && (f_dst == rd68011_ucode_pkg::U_DST_PC);
+  assign lb_delta   = pc[23:1] - y[23:1];
+  assign lb_tgt_off = y[23:1] - lb_base;
+  assign lb_back_ok = !y[0] && (lb_delta != 23'd0) && (lb_delta <= LB_NW);
+  assign lb_tgt_in  = lb_armed && !y[0] && (lb_tgt_off < LB_NW);
+
+  // A program read that the buffer could not answer brings its word back, so
+  // the window fills itself over the first trip and needs no fill pass.
+  assign lb_fill = LB_ON && commit && lb_in && !loop_active && !loop_fetch_hit &&
+                   bus_busy &&
+                   (f_fc   == rd68011_ucode_pkg::U_FC_PROG) &&
+                   (f_bus  == rd68011_ucode_pkg::U_BUS_READ) &&
+                   (f_asel == rd68011_ucode_pkg::U_ASEL_PC);
+
+  // The four ways a cached word can stop meaning what it meant, in the order
+  // doc/divergences.md lists them. The write snoop is sound rather than
+  // approximate because a write and a fetch inside one armed window are
+  // translated by the same mapping in the same space, so comparing logical
+  // addresses compares the right thing.
+  logic lb_wr_in, lb_flush;
+  assign lb_wr_in = commit && bus_busy && lb_armed &&
+                    (f_bus != rd68011_ucode_pkg::U_BUS_READ) &&
+                    ((cur_addr[23:1] - lb_base) < LB_NW);
+  assign lb_flush = LB_ON && (lb_wr_in || bus_granted || !loop_inv_sync_n ||
+                              (commit && (sr_nxt[rd68011_pkg::SR_S] !=
+                                          sr[rd68011_pkg::SR_S])));
+
+  always_comb begin
+    lb_base_nxt  = lb_base;
+    lb_armed_nxt = lb_armed;
+    lb_val_nxt   = lb_val;
+
+    // The fill first, so that a branch which stays inside the window keeps it.
+    if (lb_fill) lb_val_nxt[lb_idx] = 1'b1;
+
+    if (lb_arm_pc) begin
+      if (lb_tgt_in) begin
+        // A branch within the loop's own body. Same window, new place in it.
+      end else if (lb_back_ok) begin
+        lb_base_nxt  = y[23:1];
+        lb_armed_nxt = 1'b1;
+        lb_val_nxt   = '0;
+      end else begin
+        lb_armed_nxt = 1'b0;
+        lb_val_nxt   = '0;
+      end
+    end
+
+    if (lb_flush) begin
+      lb_armed_nxt = 1'b0;
+      lb_val_nxt   = '0;
+    end
+
+    if (!LB_ON) begin
+      lb_base_nxt  = 23'd0;
+      lb_armed_nxt = 1'b0;
+      lb_val_nxt   = '0;
+    end
+  end
+
+  assign lb_off_nxt  = pc_nxt[23:1] - lb_base_nxt;
+  assign lb_off2_nxt = lb_off_nxt + 23'd1;
+  assign lb_in_nxt   = lb_armed_nxt && (lb_off_nxt  < LB_NW);
+  assign lb_in2_nxt  = lb_armed_nxt && (lb_off2_nxt < LB_NW);
+  assign lb_idx_nxt  = lb_off_nxt[LB_IW:1];
+
+  logic lb_hit_nxt, lb_hit2_nxt;
+  assign lb_hit_nxt  = lb_in_nxt  && lb_val_nxt[lb_idx_nxt];
+  assign lb_hit2_nxt = lb_in2_nxt && lb_val_nxt[lb_off2_nxt[LB_IW:1]];
+
+  // The next microword's program read is answered the same way, decided here
+  // because the bus unit latches the request on the edge that ends this cycle.
+  //
+  // Not on a microword that is loading the program counter: `pc_nxt` is then
+  // the ALU's answer, and asking whether *that* is in the window would put a
+  // 23-bit compare in the one cone doc/critical-path.md says is limiting. So
+  // the first fetch after a loop's backward branch always goes to the bus --
+  // one program cycle a trip rather than none, which doc/timing-divergences.md
+  // measures.
+  logic n_loop_hit;
+  assign n_loop_hit = LB_ON && !loop_active && !lb_arm_pc &&
+                      ((commit && pf_fetch) ? lb_hit2 : lb_hit) &&
+                      (n_fc   == rd68011_ucode_pkg::U_FC_PROG) &&
+                      (n_bus  == rd68011_ucode_pkg::U_BUS_READ) &&
+                      (n_asel == rd68011_ucode_pkg::U_ASEL_PC);
+
   assign req_valid = (n_bus != rd68011_ucode_pkg::U_BUS_NONE) && reset_sync_n &&
-                     !n_addr_err && !skip_next && !halted && !n_loop_suppress;
+                     !n_addr_err && !skip_next && !halted && !n_loop_suppress &&
+                     !n_loop_hit;
   assign req_kind  = n_bus;
   assign req_addr  = n_addr[23:1];
   // The write data comes from the microword that is issuing the write, not
@@ -1763,6 +1945,16 @@ module rd68011_seq (
       loop_m4      <= 1'b0;
       loop_pending <= 2'd0;
       loop_saved   <= 2'd0;
+      lb_base  <= 23'd0;
+      lb_armed <= 1'b0;
+      lb_val   <= '0;
+      lb_idx   <= '0;
+      lb_in    <= 1'b0;
+      lb_hit   <= 1'b0;
+      lb_hit2  <= 1'b0;
+      for (i = 0; i < LB_M; i = i + 1) begin
+        lb_word[i] <= 16'd0;
+      end
       cur_addr   <= 32'd0;
       cur_ssw    <= 16'd0;
       irq_taken   <= 3'd0;
@@ -1877,6 +2069,20 @@ module rd68011_seq (
       if (commit && (f_dst == rd68011_ucode_pkg::U_DST_USP)) begin
         usp <= y;
       end
+
+      // -- The loop buffer ----------------------------------------------------
+      //
+      // The word only ever comes from a read the buffer could not answer, so a
+      // faulted microword writes nothing here for the same reason it writes
+      // nothing anywhere else: `commit` gates it.
+      lb_base  <= lb_base_nxt;
+      lb_armed <= lb_armed_nxt;
+      lb_val   <= lb_val_nxt;
+      lb_idx   <= lb_idx_nxt;
+      lb_in    <= lb_in_nxt;
+      lb_hit   <= lb_hit_nxt;
+      lb_hit2  <= lb_hit2_nxt;
+      if (lb_fill) lb_word[lb_idx] <= rdata;
 
       // -- Loop mode ----------------------------------------------------------
       //
@@ -2056,8 +2262,13 @@ module rd68011_seq (
   // byte merge keeps only the top 24 bits of the destination and a word merge
   // only the top 16, so the bottom byte is never read back.
   logic unused_seq;
+  //
+  // The loop buffer's two inputs are here as well, because with LOOP_BUF_WORDS
+  // at its default they really are unread, and naming them once covers both
+  // configurations.
   assign unused_seq = &{1'b1, req_ack, req_end, ipl_sync_n, halt_sync_n,
-                        bus_idle, dec_illegal, vbr, wreg_val[7:0]};
+                        bus_idle, dec_illegal, vbr, wreg_val[7:0],
+                        bus_granted, loop_inv_sync_n};
 
   `undef UF
   `undef RDREG

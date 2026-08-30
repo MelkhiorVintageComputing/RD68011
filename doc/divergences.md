@@ -174,6 +174,62 @@ initialises outside reset. `doc/implementation.md` is the record.
 |---|--- |
 | **Table A-1 is read as "every one-word instruction whose memory operands use only (An), (An)+ and -(An)"**, which admits MOVE (Ay)+ to (Ax)+ -- a cell table A-1 omits and table 9-3 gives a cycle count for. | The two tables disagree, and the page is the most OCR-damaged in the manual. A missing row in a scanned list is a likelier explanation than one arbitrary hole in an otherwise complete matrix, and table 9-3 having a number in the cell settles it. The hole both tables agree on -- a register source to -(Ax) -- is kept. The list is generated from `tools/ucode/program.py` into `rtl/gen/rd68011_loop_rom.sv`, so it can be read and argued with. |
 
+## Deliberate divergences: the loop buffer
+
+Off by default, and the default is the whole of the compatibility claim above: with
+`LOOP_BUF_WORDS` at zero the buffer constant-folds away and the processor's bus is an
+MC68010's. Everything in this section is what happens when a board sets it.
+
+### What it is
+
+A window of `LOOP_BUF_WORDS` words that program fetches are *satisfied* from rather than
+suppressed. Loop mode as the manual defines it cannot be widened -- it works by stopping
+fetches, so a second instruction word has nowhere to live and an extension word has nowhere
+to come from, which is exactly the shape of table A-1; and the one word it does hold has one
+slot in the format $8 frame, which is architecture. Serving fetches instead of suppressing
+them has neither limit. `pc` advances as it always did, so the prefetch pipe, the stack
+frames and the instruction boundaries are what a run with the buffer off produces, bit for
+bit. The only difference is bus cycles that did not happen.
+
+| | |
+|---|---|
+| **What can be in the loop** | Anything. Any instruction, any length, any addressing mode -- table A-1 does not apply, because the buffer holds extension words as readily as opcodes. |
+| **What can close the loop** | Any backward transfer of control that fits: `DBcc`, `Bcc`, `BRA`, `JMP`, `RTS` alike. The core arms on the microword that loads the program counter and asks only whether the new value is backward by no more than the window. |
+| **Branching inside the body** | Kept. A transfer whose target is already inside the armed window keeps the window rather than re-arming it, so a conditional inside a loop costs nothing. |
+| **What it costs on the bus** | One program-space cycle per trip instead of one per instruction word. Not zero: see below. |
+
+### One cycle a trip, not none
+
+The fetch immediately after the loop's backward branch always goes to the bus. Deciding a
+hit for a program counter the ALU is only now producing would put a 23-bit compare into the
+cone that limits this design's frequency (`doc/critical-path.md`), so the core declines to
+try and takes the cycle instead. It is a conservative rule -- never wrong, only slower --
+and `doc/timing-divergences.md` measures what it leaves on the table.
+
+Loop mode proper still does better on the loops it can take, at zero fetches a trip, and it
+is untouched and still runs first: while it is active no program read is issued at all, so
+the buffer is never consulted.
+
+### The coherency contract
+
+The window is a **logical** address, because an MC68010's addresses are: it exists to run
+virtual memory, and the mapping can change underneath it without a bus cycle it can see. So:
+
+> A cached word is good only while the mapping of the window is unchanged, and while the
+> address space being fetched from is still the one it was filled from.
+
+Under that assumption the write snoop is exactly sound rather than approximate -- a write
+and a fetch inside one armed window are translated by the same mapping in the same space, so
+comparing logical addresses compares the right thing. There are four ways the assumption can
+fail, and the core discharges three of them:
+
+| | Who |
+|---|---|
+| The core writes into the window. | The core. Every committed write is compared against the window and empties it on a match, whatever function code it carried. |
+| Another master takes the bus and may write anything. | The core. `bus_granted` empties it. |
+| The address space changes: a program fetch carries function code 2 or 6 depending on the supervisor bit, and with an MMU those are genuinely different spaces. | The core. **Any** transition of the S bit empties it outright -- no tag, no comparison. A page fault is therefore self-invalidating in the ordinary case: the fault enters supervisor, the handler remaps, RTE returns to user, and the window refills against the new mapping. The cost is that a loop interrupted by a timer tick refills on its next trip. |
+| Anything else: a supervisor-mode remap that never crosses S, a mapping changed by an agent that never took the bus, an alias the core cannot distinguish. | **The system**, through `loop_inv_n_i`. Two clock periods of it empties the buffer; holding it low disables the buffer entirely. `doc/pinout.md` has the pin. |
+
 ## Deliberate divergences: the format $8 frame
 
 | | Why |

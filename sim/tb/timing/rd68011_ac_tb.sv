@@ -50,6 +50,7 @@ module rd68011_ac_tb #(
       .reset_n_o (reset_n_o), .reset_n_oe (reset_n_oe),
       .halt_n_i (halt_n_i),
       .halt_n_o (halt_n_o), .halt_n_oe (halt_n_oe),
+      .loop_inv_n_i (1'b1),
       .e_o (e_o), .vpa_n_i (vpa_n_i),
       .vma_n_o (vma_n_o), .vma_oe (vma_oe),
       .fc_o (fc_o), .fc_oe (fc_oe)
