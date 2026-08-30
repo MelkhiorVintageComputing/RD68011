@@ -367,6 +367,37 @@ module core_loopbuf_tb;
     expect_int("a Bcc loop reads its top once a trip",
                prog_reads_at(LOOP), int'(TRIPS));
 
+    // ======================================================================
+    // Loop mode still wins the loops it can take
+    //
+    //   1010  MOVE.W (A0)+,(A1)+
+    //   1012  DBEQ   D0,1010          -- displacement -4
+    //
+    // The manual's own example, which core_loop_tb runs with the buffer off.
+    // The two mechanisms must not fight: loop mode enters as it always did and
+    // then issues no program read at all, so the buffer is never consulted and
+    // the count is the one core_loop_tb pins. Zero a trip beats one a trip, and
+    // the older mechanism is the one that gets there first.
+    // ======================================================================
+    prologue(TRIPS - 16'd1);
+    poke_w(23'h000808, 16'h32D8);                       // 1010
+    poke_w(23'h000809, 16'h57C8);  poke_w(23'h00080A, 16'hFFFC);
+    jmp_out(23'h00080B);                                // 1016
+    fill(16'hFFFF);
+    core_start();
+    run_until_pc(H_DONE, 6000);
+    for (i = 0; i < int'(TRIPS); i = i + 1) begin
+      expect_u32($sformatf("loop mode: word %0d", i),
+                 {16'd0, mem.peek(DEST[23:1] + 23'(i))},
+                 {16'd0, 16'(16'h1100 + 16'(i))});
+    end
+    expect_int("loop mode is entered and the buffer stays out of it",
+               prog_reads(LOOP[23:0], 24'h001015), 5);
+    if (dut.u_seq.lb_armed !== 1'b0) begin
+      $display("FAIL: the buffer was left armed after loop mode ran");
+      errors = errors + 1;
+    end
+
     core_done("core_loopbuf_tb");
   end
 
