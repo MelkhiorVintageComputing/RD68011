@@ -37,6 +37,10 @@ module core_exception_tb;
   localparam logic [31:0] H_PRIV    = 32'h0000_2600;
   localparam logic [31:0] H_AUTO5   = 32'h0000_2700;
 
+  // Somewhere for the vector table to move to, clear of the handlers, the
+  // program and both stacks.
+  localparam logic [31:0] VBR1 = 32'h0000_4000;
+
   int i;
 
   task automatic check_frame(input string what,
@@ -55,6 +59,30 @@ module core_exception_tb;
       expect_u32({what, ": frame format and vector offset"},
                  {16'd0, mem.peek((sp + 32'd6) >> 1)},
                  {22'd0, want_vec, 2'b00});
+    end
+  endtask
+
+  // The acknowledge cycle itself, which nothing here used to look at. UM 5.1.4
+  // and doc/pinout.md: it runs in CPU space with the level on A1-A3 and every
+  // address line above them driven high. It is checked at two levels rather
+  // than one, because a single level cannot tell the level apart from a
+  // constant.
+  task automatic check_iack(input string what, input logic [2:0] level);
+    int k, n;
+    begin
+      n = 0;
+      for (k = 0; k < ntr; k = k + 1) begin
+        if (tr_fc[k] === 3'b111) begin
+          n = n + 1;
+          expect_u32({what, ": the level on A1-A3 and ones above"},
+                     {9'd0, tr_addr[k]}, {9'd0, 20'hFFFFF, level});
+          if (!tr_rw[k]) begin
+            $display("FAIL: %s: the acknowledge cycle is not a read", what);
+            errors = errors + 1;
+          end
+        end
+      end
+      expect_int({what, ": one acknowledge cycle"}, n, 1);
     end
   endtask
 
@@ -674,6 +702,43 @@ module core_exception_tb;
     run_until_pc(H_LINEA, 800);
     check_frame("vectored interrupt", SSP0 - 32'd8, 16'h2000, PC0 + 32'd4,
                 8'd64);
+    check_iack("vectored interrupt", 3'd4);
+    ipl_n_i = 3'b111;
+
+    // ---- A vectored interrupt through a relocated vector table ------------
+    //
+    // A second level and a second vector number, which is what makes the
+    // address check above say anything: one level on its own cannot tell the
+    // level from a constant.
+    //
+    // VBR is moved first because the number the device supplies and the base
+    // it is added to meet in one place -- `irq_vec` into the vector offset --
+    // and nothing had exercised both at once. 200 is well past the autovectors
+    // and past every vector this file otherwise uses, so a core that ignored
+    // the data bus could not land on the handler by accident.
+    core_reset();
+    poke_l(23'h000000, SSP0);
+    poke_l(23'h000002, PC0);
+    poke_l((VBR1 + 32'd200 * 32'd4) >> 1, H_LINEF);
+    poke_w(H_LINEF[23:1], 16'h60FE);
+    poke_w(23'h000800, 16'h207C);        // 1000: MOVEA.L #VBR1,A0
+    poke_l(23'h000801, VBR1);
+    poke_w(23'h000803, 16'h4E7B);        // 1006: MOVEC A0,VBR
+    poke_w(23'h000804, 16'h8801);
+    poke_w(23'h000805, 16'h46FC);        // 100A: MOVE #$2000,SR
+    poke_w(23'h000806, 16'h2000);
+    poke_w(23'h000807, 16'h60FE);        // 100E: branch to self
+    iack_auto   = 1'b0;
+    iack_vector = 8'd200;
+    core_start();
+    repeat (150) @(posedge clk);
+    expect_u32("relocated table: VBR holds what MOVEC put there",
+               dut.u_seq.vbr, VBR1);
+    ipl_n_i = ~3'd6;
+    run_until_pc(H_LINEF, 800);
+    check_frame("relocated table", SSP0 - 32'd8, 16'h2000, PC0 + 32'd14,
+                8'd200);
+    check_iack("relocated table", 3'd6);
     ipl_n_i = 3'b111;
 
     // ---- STOP waits, and an interrupt is what wakes it --------------------

@@ -74,8 +74,13 @@
 
   assign dbus = d_oe     ? d_o       : 16'bz;
   assign dbus = mem_d_oe ? mem_d_out : 16'bz;
-  // The interrupting device puts its vector number on the low byte.
-  assign dbus = (is_iack && !iack_auto && !iack_berr) ? {8'h00, iack_vector} : 16'bz;
+  // The interrupting device puts its vector number on D0-D7 (UM 5.1.4, figure
+  // 5-11), and the acknowledge is a word read, so something has to be on the
+  // upper half. What a real device drives there is not specified; ones are as
+  // legitimate as zeros and are the stronger test, because a core that took
+  // the wrong byte, or merged the two, then fails instead of passing on a
+  // convenient zero.
+  assign dbus = (is_iack && !iack_auto && !iack_berr) ? {8'hFF, iack_vector} : 16'bz;
   assign d_i  = dbus;
 
   wire [23:1] abus;
