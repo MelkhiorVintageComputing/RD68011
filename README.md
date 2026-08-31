@@ -14,9 +14,9 @@ implementation's source.
 | **ISA** | all **89** MC68010 instructions, every addressing mode, every exception |
 | **Bus** | asynchronous S0–S7 cycles, read-modify-write, arbitration, M6800 synchronous cycles, autovectored and vectored interrupts |
 | **MC68010 proper** | instruction continuation (format $8 frame + RTE), loop mode, VBR, SFC/DFC, MOVEC/MOVES/RTD/BKPT |
-| **Optional** | a loop buffer, off by default: loops of any shape and any instruction, up to `LOOP_BUF_WORDS` words, run with one instruction fetch a trip instead of one a word — **-29 %** of the clocks on compiled C |
+| **Optional** | a loop buffer, off by default: loops of any shape and any instruction, up to `LOOP_BUF_WORDS` words, run with one instruction fetch a trip instead of one a word — **-29 %** of the clocks on compiled C, for 306 flip-flops and no frequency |
 | **Verified by** | 23492 reference vectors, 95275 co-simulated instructions, 16 directed testbenches, 7 programs, a second core in VHDL |
-| **Implemented** | 20.8 MHz post-route on an `xc7a100t-1`, 6585 LUTs, 1342 FFs, 7.5 block RAMs |
+| **Implemented** | 20.8 MHz post-route on an `xc7a100t-1`, 6727 LUTs, 1342 FFs, 7.5 block RAMs |
 | **For scale** | the fastest MC68010 Motorola shipped ran at 12.5 MHz |
 
 ```sh

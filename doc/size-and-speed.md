@@ -512,14 +512,6 @@ nobody had watched fail; here, an inference nobody had watched decline.
 
 ## What is left
 
-- **The loop buffer's hit test is the floor when the buffer is on.** At 16 words and
-  above the worst path ends at `lb_hit`/`lb_hit2`: read data, through the datapath, into
-  `pc_nxt`, and then a 23-bit subtract against the window base. 21.72 MHz becomes 21.13.
-  The subtract only needs `pc_nxt` for the one case that is already forced to miss -- the
-  microword loading the program counter -- so computing it from `pc` plus the prefetch
-  increment instead, and marking that one microword invalid, takes the ALU out of it
-  entirely. Not done: the default core does not have the path at all, and a board that
-  turns the buffer on is trading 2.7 % of the clock for thirty per cent of the clocks.
 - **The shifter is the floor now.** Three shifter families sit inside 0.5 ns of each other
   and `alu -> alu_y` is 2.5 ns behind. The barrel is shared and the operand widths are
   already trimmed by both tools, so what remains is the barrel's own depth.

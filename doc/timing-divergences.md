@@ -242,6 +242,10 @@ three hundred times, far past any window this would build, and gets only what
 its short inner loops give it; `p04_ccode` is ordinary compiled C and gets
 nearly thirty per cent.
 
+What it costs to build is in `doc/implementation.md`: flip-flops for the window
+and, once the hit test stopped asking the ALU where the program counter was
+going, no measurable frequency on either part.
+
 **One cycle a trip, not none.** The fetch immediately after the loop's backward
 branch always goes to the bus. Deciding a hit for a program counter the ALU is
 only now producing would put a 23-bit compare into the cone `doc/critical-path.md`

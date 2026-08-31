@@ -19,11 +19,11 @@ with a 50 % duty cycle:
 | | |
 |---|--:|
 | Clock period | **48.0 ns**, which is **20.8 MHz** |
-| Setup slack | 2.048 ns |
-| Hold slack | 0.138 ns |
-| Slice LUTs | 6585 (10.4 % of the part) |
+| Setup slack | 1.975 ns |
+| Hold slack | 0.143 ns |
+| Slice LUTs | 6727 (10.6 % of the part) |
 | Slice registers | 1342 (1.1 %) |
-| F7 / F8 muxes | 551 / 112 |
+| F7 / F8 muxes | 538 / 96 |
 | DSP48E1 | 3 |
 | Block RAM | 7.5 of 135 |
 
@@ -40,10 +40,10 @@ M9K blocks where the Artix-7 has six-input LUTs and 36 kbit block RAMs.
 
 | | |
 |---|--:|
-| Fmax | **19.98 MHz** |
-| Setup slack | −2.351 ns against 48 ns |
-| Hold slack | 0.322 ns |
-| Logic elements | 13749 (28 % of the part) |
+| Fmax | **20.04 MHz** |
+| Setup slack | −0.951 ns against 48 ns |
+| Hold slack | 0.323 ns |
+| Logic elements | 13733 (28 % of the part) |
 | Registers | 1391 |
 | Embedded 9-bit multipliers | 4 (1 %) |
 | M9K blocks | 30 of 182 (16 %) |
@@ -126,6 +126,49 @@ The MAX 10's worst path is now `req_rdata[7]` to `cyc_addr[20]` in 36 logic
 levels -- the same family as the Artix-7's, read data through the datapath into
 the next address. The two tools now agree about what limits this design, which
 they did not before.
+
+### With the loop buffer turned on
+
+Everything above is `LOOP_BUF_WORDS = 0`, which is the MC68010 and is what the
+project's compatibility claim is about. `doc/divergences.md` says what the other
+configuration is and `doc/timing-divergences.md` measures what it saves; this is
+what it costs to build. Same part, same 48 ns, same flow, one run each:
+
+| `LOOP_BUF_WORDS` | Slice LUTs | registers | block RAM | setup slack | worst path in |
+|--:|--:|--:|--:|--:|---|
+| 0 | 6727 | 1342 | 7.5 | 1.975 ns | the bus unit |
+| 8 | 6907 | 1511 | 7.5 | 1.084 ns | the sequencer's fault address |
+| 16 | 7038 | 1648 | 7.5 | **2.234 ns** | the bus unit |
+| 32 | 7129 | 1921 | 7.5 | 1.491 ns | the bus unit |
+
+The area is flip-flops and almost nothing else -- the window itself, sixteen bits
+a word, plus its valid bits and the base. Thirty-two words is 579 more registers
+and 402 more LUTs, on a part where that is half a per cent of either.
+
+**No frequency, and the four figures say so in the way that matters rather than
+by their order.** They span 1.15 ns, which is inside the 1.3 ns of run-to-run
+spread this project has already measured between two identical netlists, and
+sixteen words comes out *ahead* of the default. What settles it is that in three
+of the four the limiting path is the bus unit's, exactly where it is without the
+buffer, and in the fourth it is the sequencer's fault address -- the buffer's own
+logic is in none of them.
+
+It was in all of them once. The hit test subtracted the window base from
+`pc_nxt`, and `pc_nxt` can be the ALU's answer, so the subtract sat on the end of
+the longest path in the design: read data, through the datapath, into the program
+counter. On the Artix that was worth 0.6 ns; on the MAX 10 it was worth **ten per
+cent of the clock**, 20.04 MHz down to 18.03, with the worst path reading
+`req_rdata[14] -> lb_hit2` through 36 logic levels. It never needed `pc_nxt`: the
+only microword where that is the ALU's answer is one loading the program counter,
+and the fetch after one of those is forced to miss anyway. It comes off `pc` and
+the prefetch increment now, both registers.
+
+On the MAX 10, one fit each:
+
+| `LOOP_BUF_WORDS` | Fmax | logic elements | registers | M9K |
+|--:|--:|--:|--:|--:|
+| 0 | 20.04 MHz | 13733 (28 %) | 1391 | 30 |
+| 16 | **20.40 MHz** | 14262 (29 %) | 1697 | 30 |
 
 ### Where the area goes
 
