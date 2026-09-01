@@ -769,8 +769,42 @@ access cannot reach vector 3 by construction. That is an argument, though, and
 an argument is not a test -- which is why the sweep exists and why it carries an
 injection that makes it fail.
 
+### The follow-up, with a bus capture and a mechanism
+
+A second report came back with what the first was missing: a cycle-level capture
+of the fault rather than an inference from a core file. The same instruction
+takes vector 3 and **no bus cycle is issued for the access at all**, so the core
+is deciding internally. The discriminator is that the loop must be **re-entered
+by `RTE`** -- which is why the first sweep, and the reporter's own freestanding
+probe, both passed: neither ever resumed the loop, the probe because it masks
+interrupts to level 7.
+
+Two resume paths can do that, and in this design they share almost nothing:
+
+- **A short frame**, from an exception taken at an instruction boundary, which
+  comes back through `DECODE`. For this to be the reported case the loop has to
+  be running in *user* mode, so that the `RTE` changes the supervisor bit on the
+  way out -- which the first sweep, running entirely in supervisor mode, could
+  not have exercised.
+- **A long frame**, from a bus error on the copy's own access -- the page-fault
+  path the machine actually takes -- which comes back through `RESUME` and
+  `upc_save` and re-executes the faulted microword with the rerun flag clear, so
+  the access is retried.
+
+`core_strncpy_tb` now does both, and counts what it achieved rather than
+asserting it: **829** cases where the `RTE` demonstrably resumed inside the loop,
+**365** of those with both operands odd, and **42** resumed out of a format $8
+frame with loop mode running when the fault hit. Nothing faults. The page-fault
+handler saves every register and writes and reads back through `-(An)` before
+returning, because a two-instruction handler restores almost nothing and every
+instruction-restart defect this project has found was found by one doing real
+work.
+
 **What it does not rule out.** There is no MMU here and one flat memory, so
-anything that depends on which pages are involved, on translation, or on A23 is
-out of reach of a core-only test, and the report says as much. What is ruled out
-is the plain reading: this loop, in loop mode, at every alignment and length and
-interrupt phase a core-only test can produce, does not fault.
+anything that depends on which pages are involved, or on translation, is out of
+reach of a core-only test. A23 is out of reach of the memory model, but that gap
+is narrower than it looks: `n_addr_err` reads no address bit above A0, so no
+high-order bit can reach the decision. What is ruled out is the mechanism as
+stated: this loop, in loop mode, at every alignment and length, in user mode and
+supervisor, resumed by `RTE` out of both frame formats, at five memory latencies,
+does not fault.
