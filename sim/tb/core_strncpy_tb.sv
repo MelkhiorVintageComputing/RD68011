@@ -104,6 +104,18 @@ module core_strncpy_tb;
       bad_loop_ir <= 1'b1;
   end
 
+  // The same question where the handler has a loop of its own, which is
+  // legitimately looping a different instruction. Everything below $2000 is the
+  // program under test; the handlers are above it. So this asks only about the
+  // loop that matters: while *user* code is looping, is the looped instruction
+  // still the one in the user loop?
+  logic bad_user_loop_ir;
+  always @(posedge clk) begin
+    if (rst_n && dut.u_seq.loop_active &&
+        (dut.u_seq.ir_pc < 32'h0000_2000) &&
+        (dut.u_seq.loop_ir !== 16'h10D9)) bad_user_loop_ir <= 1'b1;
+  end
+
   logic saw_loop_fault;
   always @(posedge clk) begin
     if (rst_n && dut.u_seq.fault && dut.u_seq.loop_active) saw_loop_fault <= 1'b1;
@@ -196,6 +208,7 @@ module core_strncpy_tb;
       saw_loop = 1'b0;
       saw_loop_fault = 1'b0;
       bad_loop_ir = 1'b0;
+      bad_user_loop_ir = 1'b0;
       irq_seen = 1'b0;
       irq_pc   = 32'd0;
       poke_w(MARK[23:1], 16'd0);
@@ -614,6 +627,114 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
     end
   endtask
 
+  // ---------------------------------------------------------------------------
+  // A page-fault handler that runs a loop mode loop of its own
+  //
+  // The push-versus-pop comparison in the fourth report shows the incoming
+  // frame carrying `ir` = $10D9, the instruction really executing, and
+  // `loop_ir` = $22C1 in the same frame -- an opcode from the kernel's own
+  // copy routine. `loop_active` is set in exactly two places: LP_ENTER, which
+  // writes `loop_ir` on the same edge, and RESUME, which does not. So the only
+  // way those two words can disagree is if the handler ran a loop of its own
+  // between them.
+  //
+  // A real kernel does. bzero and copyin are one-word moves closed by a DBcc
+  // with a displacement of minus four, which is precisely a loop mode loop, and
+  // $22C1 is `MOVE.L D1,(A1)+`. So this handler runs one, with that very
+  // opcode, before returning.
+  // ---------------------------------------------------------------------------
+  task automatic handler_loop_case(input string what, input logic [31:0] dst,
+                                   input logic [31:0] src,
+                                   input logic [31:0] fault_at);
+    begin
+      groundwork();
+      //   ADDQ.W  #1,($0604).W
+      //   MOVEM.L D0-D7/A0-A6,-(A7)
+      //   MOVEA.L #$6800,A1
+      //   MOVE.L  #12,D1
+      //   MOVE.W  #3,D0
+      //   BRA.S   2f
+      // 1: MOVE.L D1,(A1)+        <- $22C1, one word, loopable
+      // 2: DBF    D0,1b           <- displacement minus four: loop mode
+      //   MOVEM.L (A7)+,D0-D7/A0-A6
+      //   RTE
+      poke_w(H_BERR[23:1] + 23'd0,  16'h5278);
+      poke_w(H_BERR[23:1] + 23'd1,  BERRN[15:0]);
+      poke_w(H_BERR[23:1] + 23'd2,  16'h48E7);
+      poke_w(H_BERR[23:1] + 23'd3,  16'hFFFE);
+      poke_w(H_BERR[23:1] + 23'd4,  16'h227C);
+      poke_l(H_BERR[23:1] + 23'd5,  32'h0000_6800);
+      poke_w(H_BERR[23:1] + 23'd7,  16'h223C);
+      poke_l(H_BERR[23:1] + 23'd8,  32'h0000_000C);
+      poke_w(H_BERR[23:1] + 23'd10, 16'h303C);
+      poke_w(H_BERR[23:1] + 23'd11, 16'd3);
+      poke_w(H_BERR[23:1] + 23'd12, 16'h6002);
+      poke_w(H_BERR[23:1] + 23'd13, 16'h22C1);
+      poke_w(H_BERR[23:1] + 23'd14, 16'h51C8);
+      poke_w(H_BERR[23:1] + 23'd15, 16'hFFFC);
+      poke_w(H_BERR[23:1] + 23'd16, 16'h4CDF);
+      poke_w(H_BERR[23:1] + 23'd17, 16'h7FFF);
+      poke_w(H_BERR[23:1] + 23'd18, 16'h4E73);
+
+      for (j = 0; j < 24; j = j + 1) begin
+        poke_w((src + 32'(j) * 32'd2) >> 1, 16'(16'h4152 + 16'(j) * 16'h0101));
+      end
+      for (j = 0; j < 24; j = j + 1) poke_w((dst >> 1) + 23'(j), 16'hFFFF);
+
+      poke_w(23'h000800, 16'h207C);  poke_l(23'h000801, USP0);
+      poke_w(23'h000803, 16'h4E60);
+      poke_w(23'h000804, 16'h46FC);  poke_w(23'h000805, 16'h0000);
+      poke_w(23'h000806, 16'h207C);  poke_l(23'h000807, dst);
+      poke_w(23'h000809, 16'h227C);  poke_l(23'h00080A, src);
+      poke_w(23'h00080C, 16'h223C);  poke_l(23'h00080D, 32'd12);
+      poke_w(23'h00080F, 16'h2008);
+      poke_w(23'h000810, 16'h6002);
+      poke_w(23'h000811, 16'h10D9);
+      poke_w(23'h000812, 16'h57C9);  poke_w(23'h000813, 16'hFFFC);
+      poke_w(23'h000814, 16'h60FE);
+
+      berr_addr = fault_at[23:1];
+      berr_en   = 1'b1;
+      core_start();
+      kk = 0;
+      while ((berr_count == 0) && (kk < 900)) begin
+        @(posedge clk);
+        kk = kk + 1;
+      end
+      berr_en = 1'b0;
+      run_prog(what, UDONE, 8000);
+      berr_en = 1'b0;
+
+      if (mark() != 0) begin
+        $display("FAIL: %s: vector %0d was taken", what, mark());
+        dump_frame(what);
+        errors = errors + 1;
+        faults = faults + 1;
+      end else begin
+        if (mem.peek(BERRN[23:1]) == 16'd0) begin
+          $display("FAIL: %s: no page fault was taken", what);
+          errors = errors + 1;
+        end
+        if (bad_user_loop_ir) begin
+          $display("FAIL: %s: the user loop resumed with the handler's looped instruction",
+                   what);
+          errors = errors + 1;
+        end
+        if (!saw_loop_fault) begin
+          $display("FAIL: %s: the page fault did not land in loop mode", what);
+          errors = errors + 1;
+        end
+        for (j = 0; j < 12; j = j + 1) begin
+          if (peek_b(dst + 32'(j)) !== peek_b(src + 32'(j))) begin
+            $display("FAIL: %s: byte %0d is %02h, expected %02h", what, j,
+                     peek_b(dst + 32'(j)), peek_b(src + 32'(j)));
+            errors = errors + 1;
+          end
+        end
+      end
+    end
+  endtask
+
   initial begin
     errors = 0;
     faults = 0;
@@ -784,9 +905,25 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
     // ======================================================================
     clobber_case("frame SP+56 clobbered with $22C1", 16'h22C1);
 
+    // ======================================================================
+    // The handler runs a loop mode loop of its own, as a kernel's does
+    // ======================================================================
+    for (j = 0; j < 4; j = j + 1) begin
+      for (i = 0; i < 6; i = i + 1) begin
+        handler_loop_case($sformatf("handler loops, fault at dst word %0d, dst%s src%s",
+                                    i, j[1] ? "+1" : "  ", j[0] ? "+1" : "  "),
+                          32'h0000_5000 + 32'(j[1]), 32'h0000_4000 + 32'(j[0]),
+                          32'h0000_5000 + 32'(i) * 32'd2);
+      end
+    end
+    for (i = 0; i < 6; i = i + 1) begin
+      handler_loop_case($sformatf("handler loops, reported operands, dst word %0d", i),
+                        SUN_DST, SUN_SRC, SUN_DST + 32'(i) * 32'd2);
+    end
+
     $display("  strncpy reproducer: %0d cases, %0d took an exception",
              2 + 4 * 16 + 4 + 161 + 241 + 241 + 4 * 161 + 4 * 141 +
-             4 * 6 + 6 + 4 * 6 + 4 * 6, faults);
+             4 * 6 + 6 + 4 * 6 + 4 * 6 + 1 + 4 * 6 + 6, faults);
     $display("  of the user-mode cases, %0d were resumed by RTE inside the loop, %0d of them with both operands odd", resumed_in_loop, resumed_both_odd);
     $display("  and %0d were resumed out of a format $8 frame after a page fault, %0d of those with loop mode running when it hit", resumed_after_berr, resumed_in_loop_mode);
     if (resumed_after_berr == 0) begin

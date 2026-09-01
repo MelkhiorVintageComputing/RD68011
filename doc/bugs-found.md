@@ -863,3 +863,50 @@ That does not prove the field failure is that and not something else. It does
 mean the cheap next measurement is upstream of the core: capture the *page
 fault's* frame as well as the address error's, and compare the SP+56 the core
 pushed with the SP+56 the `RTE` read back.
+
+### The fourth report, and what its comparison does and does not show
+
+The fourth report recovered both frames from the one capture and tabulated them
+side by side. Two things in it are new and both matter.
+
+**`SP+30` differs and `SP+56` does not.** The frame the kernel hands back carries
+`ir` = `$10D9`, the `MOVE.B` really executing, *and* `loop_ir` = `$22C1` in the
+same frame. The frame the core builds a moment later has `$22C1` in both. So the
+disagreement is already present in the incoming frame, and what the core does
+after the `RTE` -- putting `loop_ir` into `ir` through `LOOPBACK` -- is what it
+is built to do.
+
+**Its incoming frame is coherent everywhere else.** `upc_save` = `$4D` is
+microword 77, the source-byte read of `move_byte_apost2apost`; the SSW `$1301`
+says byte, read, user data; the fault address is even. All of that is the
+legitimate demand-paging fault on the first byte, correctly described.
+
+That leaves one question: how can `loop_active` be set while `loop_ir` disagrees
+with `ir`? In this design `loop_active` is set in exactly two places --
+`LP_ENTER`, which writes `loop_ir` on the same edge, and `RESUME`, which does
+not -- and `RESUME` is reachable from one microword, the long-frame `RTE`. So a
+handler running a **loop of its own** between them is the only core-side path,
+and a real kernel has one: `bzero` and `copyin` are one-word moves closed by a
+`DBcc` with a displacement of minus four, which is a loop mode loop, and `$22C1`
+is `MOVE.L D1,(A1)+`.
+
+`core_strncpy_tb` now runs 30 cases where the page-fault handler does exactly
+that -- saves every register, runs a loop mode loop on `$22C1`, restores, `RTE`
+-- across four alignments and every faulting word, with a monitor that fails the
+case if the *user* loop ever resumes with anything but its own instruction. The
+handler's loop is legitimately looping `$22C1` at the time, so the monitor is
+scoped by program counter rather than by value. All 30 pass, and 2030 cases in
+total now find nothing.
+
+**One correction is owed to the comparison itself.** It concludes that "nothing
+between the push and the pop altered that word", but the two columns are the
+*pop of the bus-error frame* and the *push of the address-error frame* -- two
+different frames. The bus-error frame's own push is not in the window, so the
+interval that matters is precisely the one not measured. What the capture shows
+is that `SP+56` was already `$22C1` when `RTE` read it; what would settle it is
+recording what the core *wrote* there, which needs the recorder triggered on the
+bus-error handler instead.
+
+On this side that write has been observed directly: in the clobber case above
+the testbench prints `SP+56` before touching it, and the core had put `$10D9`
+there -- the instruction actually in the loop.
