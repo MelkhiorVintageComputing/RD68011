@@ -714,3 +714,63 @@ Clearing `ADDR_HIZ_BETWEEN_CYCLES` again fails 38 checks: 13 in `bus_rw_tb`, 24
 in `bus_wait_rmw_tb` and 1 in `bus_arb_tb`. `bus_system_tb` passes either way,
 and should -- what it tests is RESET, which releases the address bus under both
 readings.
+
+## A report that did not reproduce, and what that is worth
+
+Not every report is a defect, and the ones that are not still cost something to
+settle. This one is here because the settling is the useful part.
+
+**What was reported.** Three unrelated programs on a Sun-2/50 replica running
+SunOS 4.0.3 die with `SIGBUS` at the same instruction in libc's `strncpy`, with
+the same registers, across two root filesystems and two storage regions. On that
+kernel `SIGBUS` reaches user space only from `T_ADDRERR`, so the machine was
+reporting an **address error on a byte move** -- which a 68010 has no reason to
+raise, byte accesses having no alignment requirement. The loop is four
+instructions of setup and two of body, and one byte has been copied when the
+fault is taken, so both operands are odd on the pass that fails.
+
+The report was careful enough to state the objection to its own headline: if
+`MOVE.B (A1)+,(A0)+` faulted whenever both operands were odd, the second byte of
+every ordinary string copy would fault, and the machine would not boot. So
+either the trigger is narrower than the alignment, or the frame does not name
+the instruction that faulted.
+
+**What was built.** `sim/tb/core_strncpy_tb.sv`, the loop copied opcode for
+opcode from the report's disassembly -- including that it is entered at the
+`DBEQ` rather than at the `MOVE`, so the first thing executed is the decrement
+and branch. 231 cases: all four entry alignments with *n* from 1 to 16, the
+operands far apart in the address space, the reported operands themselves with
+every address bit as reported except A23 (which this memory model does not
+answer), and the loop interrupted at each of 161 consecutive clocks.
+
+**The result is negative and it is worth something, because of three things
+that go with it.**
+
+- *The controls fire.* A word read at an odd address takes vector 3 and a byte
+  read at an odd address does not, both checked every run. Without those a null
+  result would be indistinguishable from a handler that was never going to run.
+- *Loop mode was running.* The displacement is minus four and
+  `MOVE.B (Ay)+,(Ax)+` is in table A-1, so the copy runs with no instruction
+  fetches at all -- the state the reported fault would have been taken in. A
+  monitor fails the case if `loop_active` never came up, so this is checked
+  rather than assumed.
+- *The reproducer catches the reported fault when it is put there.* Deleting the
+  byte-size exemption from `n_addr_err` -- one term of one expression -- makes
+  every case take vector 3, and the frame it builds is the frame the Sun-2
+  reported: format 8, vector offset $00c, fault address the odd source, and a
+  stacked PC of `$101a`, which is the **extension word of the `DBEQ`**. The
+  report's own PC, `_strncpy + $14`, is the extension word of its `DBEQ`. So the
+  reading of the frame in the report is right about what such a fault would look
+  like; the core does not produce one.
+
+The RTL says the same thing more directly and was checked first:
+`rd68011_seq.sv`'s `n_addr_err` requires `n_size != U_SIZE_BYTE`, so a byte
+access cannot reach vector 3 by construction. That is an argument, though, and
+an argument is not a test -- which is why the sweep exists and why it carries an
+injection that makes it fail.
+
+**What it does not rule out.** There is no MMU here and one flat memory, so
+anything that depends on which pages are involved, on translation, or on A23 is
+out of reach of a core-only test, and the report says as much. What is ruled out
+is the plain reading: this loop, in loop mode, at every alignment and length and
+interrupt phase a core-only test can produce, does not fault.

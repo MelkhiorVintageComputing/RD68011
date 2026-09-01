@@ -536,7 +536,9 @@ sim: dirs
 	for tb in $(TBS); do \
 	  name=$$(basename $$tb .sv); \
 	  iverilog $(IVFLAGS) -I sim/tb -o $(BUILD)/$$name.vvp -s $$name $(RTL) $(MODELS) $$tb; \
-	  out=$$(vvp $(BUILD)/$$name.vvp); \
+	  a=sim/tb/$$name.args; \
+	  extra=$$(test -f $$a && cat $$a || true); \
+	  out=$$(vvp $(BUILD)/$$name.vvp $$extra); \
 	  echo "$$out"; \
 	  case "$$out" in *FAIL*) fail=1;; esac; \
 	  case "$$out" in *PASS*) ;; *) echo "$$name: no PASS reported"; fail=1;; esac; \
