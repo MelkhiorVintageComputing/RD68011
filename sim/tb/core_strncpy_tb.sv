@@ -90,6 +90,7 @@ module core_strncpy_tb;
   // looped instruction and the two loop-state bits at SP+56, and RTE has to put
   // them back. A sweep whose faults all landed outside loop mode would be
   // testing a simpler path than the reported one.
+  //
   // The register the third report's frame implicates. That frame is entirely
   // self-consistent with the core executing MOVE.L D1,(A1)+ -- the opcode in
   // `ir`, the resume micro-address, the data output buffer and the fault
@@ -102,6 +103,33 @@ module core_strncpy_tb;
   always @(posedge clk) begin
     if (rst_n && dut.u_seq.loop_active && (dut.u_seq.loop_ir !== 16'h10D9))
       bad_loop_ir <= 1'b1;
+  end
+
+  // Every write to `loop_ir`, with enough context to say which microword did
+  // it. The fifth report puts the corruption between a correct restore and the
+  // next iteration, inside the core, so this is the register to watch change.
+  logic        trace_loop_ir;
+  // Set to clear the resumed frame's loop-state bits, so the resume comes
+  // back with loop mode off and the DBcc must re-enter it.
+  logic        clear_loop_bits;
+  logic [15:0] prev_loop_ir;
+  always @(posedge clk) begin
+    if (rst_n) begin
+      if (trace_loop_ir && (dut.u_seq.loop_ir !== prev_loop_ir)) begin
+        $display("      loop_ir %04h -> %04h at upc %0d, ir %04h, ir_pc %08h, active %b",
+                 prev_loop_ir, dut.u_seq.loop_ir, dut.u_seq.upc, dut.u_seq.ir,
+                 dut.u_seq.ir_pc, dut.u_seq.loop_active);
+      end
+      // ... and LP_ENTER itself, which re-latching the same value would
+      // otherwise hide.
+      if (trace_loop_ir && dut.u_seq.commit &&
+          (dut.u_seq.f_lp == rd68011_ucode_pkg::U_LP_ENTER)) begin
+        $display("      LP_ENTER at upc %0d: ir_nxt %04h, m4 %b, op_ok %b, active %b",
+                 dut.u_seq.upc, dut.u_seq.ir_nxt, dut.u_seq.loop_m4,
+                 dut.u_seq.loop_op_ok, dut.u_seq.loop_active);
+      end
+      prev_loop_ir <= dut.u_seq.loop_ir;
+    end
   end
 
   // The same question where the handler has a loop of its own, which is
@@ -702,6 +730,16 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
         kk = kk + 1;
       end
       berr_en = 1'b0;
+      if (clear_loop_bits) begin
+        // Wait for the handler, by which time the frame is complete.
+        kk = 0;
+        while ((dut.u_seq.ir_pc !== H_BERR) && (kk < 400)) begin
+          @(posedge clk);
+          kk = kk + 1;
+        end
+        poke_w((dut.u_seq.ssp + 32'd26) >> 1,
+               mem.peek((dut.u_seq.ssp + 32'd26) >> 1) & 16'hFCFF);
+      end
       run_prog(what, UDONE, 8000);
       berr_en = 1'b0;
 
@@ -740,6 +778,7 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
     faults = 0;
     irq_at = 0;
     wait_states = 0;
+    clear_loop_bits = 1'b0;
     resumed_in_loop  = 0;
     resumed_both_odd = 0;
     resumed_after_berr = 0;
@@ -920,6 +959,50 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
       handler_loop_case($sformatf("handler loops, reported operands, dst word %0d", i),
                         SUN_DST, SUN_SRC, SUN_DST + 32'(i) * 32'd2);
     end
+
+    // The field configuration exactly: the page fault lands on the *source*
+    // read -- an even address, the loop's first byte -- and the handler runs a
+    // loop mode loop of its own before returning. That is the fifth report's
+    // sequence step for step.
+    for (j = 0; j < 4; j = j + 1) begin
+      for (i = 0; i < 6; i = i + 1) begin
+        handler_loop_case($sformatf("handler loops, fault on source word %0d, dst%s src%s",
+                                    i, j[1] ? "+1" : "  ", j[0] ? "+1" : "  "),
+                          32'h0000_5000 + 32'(j[1]), 32'h0000_4000 + 32'(j[0]),
+                          32'h0000_4000 + 32'(i) * 32'd2);
+      end
+    end
+    for (i = 0; i < 6; i = i + 1) begin
+      handler_loop_case($sformatf("handler loops, reported operands, source word %0d", i),
+                        SUN_DST, SUN_SRC, SUN_SRC + 32'(i) * 32'd2);
+    end
+
+    // One of them again with every write to loop_ir printed, so a run that does
+    // go wrong says where rather than only that.
+    trace_loop_ir = 1'b1;
+    handler_loop_case("traced: handler loops, fault on the first source byte",
+                      32'h0000_5000, 32'h0000_4000, 32'h0000_4000);
+    trace_loop_ir = 1'b0;
+
+    // ======================================================================
+    // Resumed with loop mode *off*, so the DBcc has to enter it again
+    //
+    // The trace above shows why this needed its own case. After an ordinary
+    // resume `loop_active` comes back set, the loop closes through LOOPBACK,
+    // and LP_ENTER is never reached -- so the sweep never exercised the one
+    // path that latches `loop_ir` from a fetch. Clearing the frame's loop bits
+    // while the handler runs forces it: the DBcc takes the ordinary route,
+    // refills the pipe from the loop top and re-enters through LP_ENTER.
+    //
+    // It is also the shape the fifth report's hypothesis needs, so it is worth
+    // knowing what the core does with it.
+    // ======================================================================
+    trace_loop_ir = 1'b1;
+    clear_loop_bits = 1'b1;
+    handler_loop_case("traced: resumed with the frame's loop bits cleared",
+                      32'h0000_5000, 32'h0000_4000, 32'h0000_4000);
+    clear_loop_bits = 1'b0;
+    trace_loop_ir = 1'b0;
 
     $display("  strncpy reproducer: %0d cases, %0d took an exception",
              2 + 4 * 16 + 4 + 161 + 241 + 241 + 4 * 161 + 4 * 141 +

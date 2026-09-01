@@ -910,3 +910,41 @@ bus-error handler instead.
 On this side that write has been observed directly: in the clobber case above
 the testbench prints `SP+56` before touching it, and the core had put `$10D9`
 there -- the instruction actually in the loop.
+
+### The fifth report closed the interval, and opened a better question
+
+A single capture then covered the whole fault -- the page fault, the frame going
+down, the handling, the `RTE` reading it back, and the address error -- with
+`SP+56` written exactly twice, once by each frame push, and read back as
+`$10D9`. Memory is clean and the clobber reading is withdrawn. `loop_ir`
+acquires `$22C1` inside the core, after a correct restore.
+
+That is a much sharper statement, and it is answerable from the microcode. The
+testbench now traces every write to `loop_ir` and every `LP_ENTER`, and there
+are **two resume paths**:
+
+- **Loop mode restored active.** `RESUME` takes `loop_active` from the frame's
+  version word, the faulted microword re-executes, and the `DBcc` is steered to
+  its loop-mode routine, which closes the loop through `LOOPBACK`. `LP_ENTER`
+  is never reached and `loop_ir` keeps what the `RTE` gave it. This is the
+  ordinary path and 2030 cases confirm it, including 30 where the handler runs a
+  loop mode loop of its own on `$22C1` -- the exact scenario the report's
+  hypothesis needs.
+- **Loop mode restored off.** The `DBcc` takes the ordinary route, refills the
+  pipe from the loop top with real fetches, and `LP_ENTER` latches
+  `loop_ir <= ir_nxt` -- *the word the fetch returned*. Forced by clearing the
+  frame's loop bits, the trace shows `LP_ENTER ... ir_nxt 10d9`, correct because
+  the fetch was correct.
+
+So the report's hypothesis names a real path, just not the one an ordinary
+resume takes. And on that second path a fetch returning `$22C1` would produce
+everything captured, faithfully, with no core defect: `$22C1` is a *kernel*
+opcode, on a machine whose handler had just changed the MMU.
+
+The two are distinguished by one observation the capture cannot currently make:
+**loop mode issues no instruction fetches**, and the capture filter stores only
+the supervisor stack. Program cycles at the loop's own addresses between the
+`RTE` and the address error decide it -- absent means the loop closed through
+`LOOPBACK` and something unfound wrote `loop_ir`; present means loop mode did
+not come back on, `LP_ENTER` latched from the fetch, and the question is what
+the instruction stream returned.
