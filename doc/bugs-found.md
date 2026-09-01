@@ -808,3 +808,58 @@ high-order bit can reach the decision. What is ruled out is the mechanism as
 stated: this loop, in loop mode, at every alignment and length, in user mode and
 supervisor, resumed by `RTE` out of both frame formats, at five memory latencies,
 does not fault.
+
+### The third report settled it, by capturing the frame
+
+The third report captured the format $8 frame word by word off the bus and read
+it as evidence that the core had formed a malformed access -- "a byte move
+described as a word write". It is better evidence than that. **The frame is not
+malformed. It is a faithful description of the core executing a different
+instruction**, and every field agrees:
+
+| the frame said | which is |
+|---|---|
+| `ir` = `$22C1` | `MOVE.L D1,(A1)+` |
+| resume micro-address = `$34A` | 842, the first microword of `move_long_r2apost` |
+| data output buffer = `$0000000C` | `D1` = 12, which is what that instruction writes |
+| SSW = `$0001` | word, write, user data -- correct for a long write's first cycle |
+| fault address = `a1`, odd | correct: a word write there *is* an address error |
+| version word = `$2E00` | version `$B`, loop state `10`: loop mode running, phase 0 |
+
+So the alignment check is right, the access it objected to was genuinely
+word-sized, and the defect is one register upstream: `ir` held the wrong opcode.
+In loop mode `ir` comes from `loop_ir` through `LOOPBACK`, so `loop_ir` is the
+register to look at -- and the frame's own `loop_ir` slot, SP+56, also held
+`$22C1`, which is one corruption explaining both.
+
+`core_strncpy_tb` watches `loop_ir` on every clock loop mode is active, across
+all 1999 cases. It is never wrong, and in the page-fault cases the frame the
+core pushes carries the right value -- SP+56 reads `$10D9`, the instruction that
+is actually in the loop.
+
+**So the last case in that testbench asks the other question, and it reproduces
+the report exactly.** The handler writes `$22C1` into SP+56 before returning --
+one word, nothing else -- and the resumed loop faults with:
+
+| | reproduced | reported |
+|---|---|---|
+| format / vector offset | `800C` | `800C` |
+| special status word | `0001` | `0001` |
+| fault address | the source pointer, odd | the source pointer, odd |
+| stacked PC | the `DBEQ`'s extension word | the `DBEQ`'s extension word |
+| stacked SR | `0000` | `0000` |
+
+Every observable, from one input: **the frame's SP+56 word changed between the
+push and the `RTE`**. The core cannot defend against that. `RTE` validates the
+format word and the version number, which is what UM 6.4 asks for, and nothing
+else in the frame -- and SP+56's meaning is this implementation's own, recorded
+in `doc/divergences.md` as a deliberate divergence, because the sixteen internal
+words are implementation-defined and a real MC68010 has something else there.
+Software that relocates a format $8 frame between stacks, rebuilds it, or
+normalises its internal words will break exactly this way and no other
+implementation's frame would tell it so.
+
+That does not prove the field failure is that and not something else. It does
+mean the cheap next measurement is upstream of the core: capture the *page
+fault's* frame as well as the address error's, and compare the SP+56 the core
+pushed with the SP+56 the `RTE` read back.

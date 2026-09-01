@@ -90,6 +90,20 @@ module core_strncpy_tb;
   // looped instruction and the two loop-state bits at SP+56, and RTE has to put
   // them back. A sweep whose faults all landed outside loop mode would be
   // testing a simpler path than the reported one.
+  // The register the third report's frame implicates. That frame is entirely
+  // self-consistent with the core executing MOVE.L D1,(A1)+ -- the opcode in
+  // `ir`, the resume micro-address, the data output buffer and the fault
+  // address all agree -- so the access was genuinely a word write and the
+  // alignment check was right to object. What is wrong is the *opcode*, and in
+  // loop mode `ir` comes from `loop_ir` through LOOPBACK. So: whenever loop
+  // mode is running here, `loop_ir` had better be the instruction that is
+  // actually in the loop.
+  logic bad_loop_ir;
+  always @(posedge clk) begin
+    if (rst_n && dut.u_seq.loop_active && (dut.u_seq.loop_ir !== 16'h10D9))
+      bad_loop_ir <= 1'b1;
+  end
+
   logic saw_loop_fault;
   always @(posedge clk) begin
     if (rst_n && dut.u_seq.fault && dut.u_seq.loop_active) saw_loop_fault <= 1'b1;
@@ -181,6 +195,7 @@ module core_strncpy_tb;
       poke_w(BERRN[23:1], 16'd0);
       saw_loop = 1'b0;
       saw_loop_fault = 1'b0;
+      bad_loop_ir = 1'b0;
       irq_seen = 1'b0;
       irq_pc   = 32'd0;
       poke_w(MARK[23:1], 16'd0);
@@ -368,6 +383,11 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
           $display("FAIL: %s: loop mode never ran", what);
           errors = errors + 1;
         end
+        if (bad_loop_ir) begin
+          $display("FAIL: %s: loop mode ran with the wrong looped instruction",
+                   what);
+          errors = errors + 1;
+        end
         // 1022 is the MOVE.B and 1024 the DBEQ, so either means the RTE
         // resumed the loop rather than something before or after it.
         if (irq_seen && ((irq_pc == 32'h0000_1022) ||
@@ -483,6 +503,11 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
         errors = errors + 1;
         faults = faults + 1;
       end else begin
+        if (bad_loop_ir) begin
+          $display("FAIL: %s: loop mode ran with the wrong looped instruction",
+                   what);
+          errors = errors + 1;
+        end
         if (mem.peek(BERRN[23:1]) == 16'd0) begin
           $display("FAIL: %s: no page fault was taken, so nothing was resumed",
                    what);
@@ -500,6 +525,92 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
         end
       end
       berr_en = 1'b0;
+    end
+  endtask
+
+  // ---------------------------------------------------------------------------
+  // The frame's looped-instruction word, clobbered while the handler runs
+  //
+  // Everything above says the core does not corrupt `loop_ir` by itself. This
+  // asks the other question: *if* that word came back changed, would the
+  // failure look like the one reported? The frame is 29 words of which sixteen
+  // are internal, and their meaning is ours rather than the architecture's --
+  // `doc/divergences.md` records that as a deliberate divergence. RTE validates
+  // the format word and the version number and nothing else, so a frame whose
+  // internal words have been disturbed between the push and the return is
+  // undetectable to the core by construction.
+  //
+  // The handler here writes $22C1 -- the exact opcode the reported frame
+  // carried -- into SP+56 before returning.
+  // ---------------------------------------------------------------------------
+  task automatic clobber_case(input string what, input logic [15:0] poison);
+    logic [31:0] fb;
+    begin
+      groundwork();
+      poke_w(H_BERR[23:1] + 23'd0, 16'h5278);
+      poke_w(H_BERR[23:1] + 23'd1, BERRN[15:0]);
+      poke_w(H_BERR[23:1] + 23'd2, 16'h4E73);         // RTE
+      for (j = 0; j < 24; j = j + 1) begin
+        poke_w((32'h0000_4000 + 32'(j) * 32'd2) >> 1,
+               16'(16'h4152 + 16'(j) * 16'h0101));
+      end
+      for (j = 0; j < 24; j = j + 1) poke_w(23'h002800 + 23'(j), 16'hFFFF);
+
+      poke_w(23'h000800, 16'h207C);  poke_l(23'h000801, USP0);
+      poke_w(23'h000803, 16'h4E60);
+      poke_w(23'h000804, 16'h46FC);  poke_w(23'h000805, 16'h0000);
+      poke_w(23'h000806, 16'h207C);  poke_l(23'h000807, 32'h0000_5000);
+      poke_w(23'h000809, 16'h227C);  poke_l(23'h00080A, 32'h0000_4000);
+      poke_w(23'h00080C, 16'h223C);  poke_l(23'h00080D, 32'd12);
+      poke_w(23'h00080F, 16'h2008);
+      poke_w(23'h000810, 16'h6002);
+      poke_w(23'h000811, 16'h10D9);
+      poke_w(23'h000812, 16'h57C9);  poke_w(23'h000813, 16'hFFFC);
+      poke_w(23'h000814, 16'h60FE);
+
+      // Fault on the fourth destination word, so loop mode is running well
+      // before the page fault lands.
+      berr_addr = 23'h002803;
+      berr_en   = 1'b1;
+      core_start();
+      kk = 0;
+      while ((berr_count == 0) && (kk < 900)) begin
+        @(posedge clk);
+        kk = kk + 1;
+      end
+      berr_en = 1'b0;
+      // Wait for the handler, by which time the whole frame is on the stack.
+      kk = 0;
+      while ((dut.u_seq.ir_pc !== H_BERR) && (kk < 400)) begin
+        @(posedge clk);
+        kk = kk + 1;
+      end
+      fb = dut.u_seq.ssp;
+      $display("      %s: frame at %08h, SP+56 was %04h", what, fb,
+               mem.peek((fb + 32'd56) >> 1));
+      poke_w((fb + 32'd56) >> 1, poison);
+      run_prog(what, UDONE, 6000);
+      berr_en = 1'b0;
+
+      dump_frame(what);
+      // The reported frame, field for field. This is the check that the
+      // explanation is the explanation and not a story that fits.
+      expect_int({what, ": vector 3, as reported"}, mark(), 3);
+      expect_u32({what, ": format and vector offset $800C, as reported"},
+                 {16'd0, mem.peek((dut.u_seq.ssp + 32'd6) >> 1)},
+                 32'h0000_800C);
+      expect_u32({what, ": special status word $0001, as reported"},
+                 {16'd0, mem.peek((dut.u_seq.ssp + 32'd8) >> 1)},
+                 32'h0000_0001);
+      // The fault address is the *source* pointer, which a byte move only ever
+      // reads -- odd, so a word write there is an address error.
+      expect_u32({what, ": the fault address is the source pointer, odd"},
+                 {mem.peek((dut.u_seq.ssp + 32'd10) >> 1),
+                  mem.peek((dut.u_seq.ssp + 32'd12) >> 1)}, 32'h0000_4007);
+      // And the stacked PC is the DBEQ's extension word, exactly as reported.
+      expect_u32({what, ": the stacked PC is the DBEQ's extension word"},
+                 {mem.peek((dut.u_seq.ssp + 32'd2) >> 1),
+                  mem.peek((dut.u_seq.ssp + 32'd4) >> 1)}, 32'h0000_1026);
     end
   endtask
 
@@ -663,6 +774,15 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
       end
     end
     wait_states = 0;
+
+    // ======================================================================
+    // What a disturbed frame word would look like
+    //
+    // Not a pass/fail case -- it is deliberately corrupting the frame, so a
+    // fault here is the expected outcome and the point is what the fault looks
+    // like. Compared against the reported frame in the summary below.
+    // ======================================================================
+    clobber_case("frame SP+56 clobbered with $22C1", 16'h22C1);
 
     $display("  strncpy reproducer: %0d cases, %0d took an exception",
              2 + 4 * 16 + 4 + 161 + 241 + 241 + 4 * 161 + 4 * 141 +
