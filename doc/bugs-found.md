@@ -948,3 +948,34 @@ the supervisor stack. Program cycles at the loop's own addresses between the
 `LOOPBACK` and something unfound wrote `loop_ir`; present means loop mode did
 not come back on, `LP_ENTER` latched from the fetch, and the question is what
 the instruction stream returned.
+
+### The capture itself, and what a recorder cannot say
+
+The raw capture was then supplied and worked through. Its central conclusion
+holds and is now confirmed directly rather than by inference: **no write touches
+`0x3A46`-`0x3A7E` between the frame push and the `RTE`**, so memory held the
+pushed values throughout. The stack is exonerated.
+
+Two things in it are worth keeping, because both are the kind of mistake that
+costs a week.
+
+**The recorder cannot see read data at all.** Every one of its 2205 read samples
+carries the sentinel `DEAD`; the column is the CPU's data-*out* register. The
+capture's own comment block describes it instead as a one-transaction lag, which
+turns the write immediately following the last frame read into "the `RTE` read
+back `$22C1`" -- the misreading that produced the earlier clobber conclusion,
+mine included. The giveaway is a single write that also carries `DEAD`: it lands
+on `SP+20`, the data input buffer, which is exactly what a core stacks when the
+faulting read never delivered.
+
+**So "memory held `$10D9`" and "the core loaded `$10D9`" are different claims,
+and only the first is measured.** What the `RTE` latched is a read, and reads are
+invisible here. That leaves three possibilities rather than two -- memory wrong
+(excluded), the read returning something other than memory (unobserved), or the
+restore correct and the register changing afterwards (what the directed cases
+cannot produce).
+
+One incidental confirmation: the capture shows `SP+56` read twice per `RTE`, once
+in a prologue and once in the ascending scan, which the report flagged as
+unexpected. It is UM 6.4 step 3, the accessibility probe at the last word of the
+frame, and `tools/ucode/program.py` emits it in that order with that comment.
