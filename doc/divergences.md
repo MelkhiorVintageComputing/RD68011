@@ -174,6 +174,70 @@ initialises outside reset. `doc/implementation.md` is the record.
 |---|--- |
 | **Table A-1 is read as "every one-word instruction whose memory operands use only (An), (An)+ and -(An)"**, which admits MOVE (Ay)+ to (Ax)+ -- a cell table A-1 omits and table 9-3 gives a cycle count for. | The two tables disagree, and the page is the most OCR-damaged in the manual. A missing row in a scanned list is a likelier explanation than one arbitrary hole in an otherwise complete matrix, and table 9-3 having a number in the cell settles it. The hole both tables agree on -- a register source to -(Ax) -- is kept. The list is generated from `tools/ucode/program.py` into `rtl/gen/rd68011_loop_rom.sv`, so it can be read and argued with. |
 
+## An ambiguity: loop mode and RTE, after a bus error
+
+Not a divergence but an unresolved reading, recorded here because the design has
+to pick one and only silicon can settle it. `RTE_RESTORES_LOOP` builds either;
+**the default is `1'b0`.**
+
+UM appendix A says both of these, two paragraphs apart:
+
+> In addition to the normal termination conditions for the loop, several
+> abnormal conditions cause the MC68010 to **exit the loop mode**. These
+> abnormal conditions are as follows: Interrupts, Trace Exceptions, Reset
+> Operations, **Bus Errors**.
+
+> A bus error during loop mode operation is handled the same as during other
+> processing; however, when the return from exception (RTE) instruction
+> continues execution of the looped instruction, **the three-word loop is not
+> fetched again**.
+
+**The reading the default builds (`RTE_RESTORES_LOOP = 0`).** A bus error exits
+loop mode, exactly as the first paragraph lists it and exactly as an interrupt
+does. The second paragraph is about the *continuation*: the faulted instruction
+resumes out of the frame without being refetched, which is a real difference
+from the interrupt case, where the instruction restarts and its opcode is read
+again. Loop mode then re-enters through the DBcc, as the manual says it "can be
+restarted" after an interrupt. The cost is that the DBcc must read the
+displacement word loop mode never read, so three of the loop's words come back
+over the bus.
+
+**The other reading (`RTE_RESTORES_LOOP = 1`).** "The three-word loop" is three
+words, not one, and only the restore-loop-mode reading spares all three -- under
+the other, the looped instruction and the DBcc's opcode come from the frame but
+the displacement is fetched. "However" is contrastive, and "an instruction
+continued from a frame is not refetched" is true of every instruction the
+MC68010 continues, so there would be nothing to contrast. On this reading the
+first paragraph's "exit" means leaving loop-mode *execution* to process the
+exception, and the second says a bus error's loop comes back.
+
+Both are defensible and the manual does not decide between them. **Resolving it
+needs a real MC68010**: run a loop-mode loop, fault the looped instruction's
+operand, return with RTE, and count the program-space cycles that follow. Five
+is the second reading, eight the first. `sim/tb/core_loop_tb.sv` measures exactly
+that and asserts whichever the build selects.
+
+**Why the default is the first reading.** It is the one that works. A downstream
+Sun-2 replica running SunOS 4.0.3 died in `strncpy` for months; a build with
+`RTE_RESTORES_LOOP = 0` cleared every known failure, and a bisect against
+`RTE_KEEPS_LOOP_BUF` put it wholly on this crossing. The defect has not been
+isolated in the RTL -- `doc/bugs-found.md` records what has been eliminated --
+so the default is chosen on evidence rather than on argument, and the other
+build is kept so the defect can still be reproduced.
+
+**What both readings require, and what is tested either way.** The faulted
+instruction must be *continued*, not restarted: between the RTE's last read of
+the frame and the retried access that finishes the instruction there must be no
+instruction fetch at all. Any reload of the loop's words is visible on the bus
+only after the instruction has been replayed. `core_loop_tb` asserts that in both
+configurations, and it is the check that makes the count above a choice of
+reading rather than a defect.
+
+**What it costs.** Nothing measurable: every program in `sim/programs/` runs to
+the same clock count either way, because the parameter can only matter where a
+bus error is taken inside a running loop. Where it does, it is three bus cycles
+against the hundreds a fault, a handler and an RTE already cost.
+
 ## Deliberate divergences: the loop buffer
 
 Off by default, and the default is the whole of the compatibility claim above: with

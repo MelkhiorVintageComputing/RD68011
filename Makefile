@@ -347,9 +347,9 @@ IVLB    := $(if $(filter-out 0,$(LOOPBUF)),-DRD68011_LOOP_BUF_WORDS=$(LOOPBUF),)
 
 # The diagnostic build in which no part of a loop crosses an RTE:
 # `make programs RTELOOP=0` and `make cosim RTELOOP=0`. One is the MC68010.
-RTELOOP ?= 1
+RTELOOP ?= 0
 RTEBUF  ?= 1
-IVRL    := $(if $(filter-out 1,$(RTELOOP)),-DRD68011_RTE_RESTORES_LOOP=$(RTELOOP),) \
+IVRL    := $(if $(filter-out 0,$(RTELOOP)),-DRD68011_RTE_RESTORES_LOOP=$(RTELOOP),) \
            $(if $(filter-out 1,$(RTEBUF)),-DRD68011_RTE_KEEPS_LOOP_BUF=$(RTEBUF),)
 
 programs: dirs $(PROGHEX)

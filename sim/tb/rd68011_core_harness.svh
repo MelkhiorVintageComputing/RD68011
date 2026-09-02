@@ -19,10 +19,11 @@
   `define RD68011_LOOP_BUF_WORDS 0
 `endif
 
-// One is the MC68010: RTE brings loop mode back out of a format $8 frame. Zero
-// builds the diagnostic core in which no part of a loop survives an RTE.
+// Zero -- the default -- exits loop mode on a bus error and lets the DBcc
+// re-enter it. One restores it from the format $8 frame. doc/divergences.md
+// argues both readings of appendix A.
 `ifndef RD68011_RTE_RESTORES_LOOP
-  `define RD68011_RTE_RESTORES_LOOP 1
+  `define RD68011_RTE_RESTORES_LOOP 0
 `endif
 
 // The other half of the same crossing: whether the loop buffer's window

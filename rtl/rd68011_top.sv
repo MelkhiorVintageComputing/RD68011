@@ -17,10 +17,11 @@ module rd68011_top #(
     // MC68010; anything else turns the loop buffer on, which loop_inv_n_i
     // below then belongs to.
     parameter int LOOP_BUF_WORDS = 0,
-    // Passed straight to rd68011_seq, where it is documented. One is the
-    // MC68010; zero is a diagnostic build in which no part of a loop survives
-    // an RTE.
-    parameter bit RTE_RESTORES_LOOP = 1'b1,
+    // Passed straight to rd68011_seq, where it is documented. Zero -- the
+    // default -- exits loop mode on a bus error and lets the DBcc re-enter it;
+    // one restores it from the frame. Appendix A is ambiguous and
+    // doc/divergences.md argues both readings.
+    parameter bit RTE_RESTORES_LOOP = 1'b0,
     // ... and whether the loop buffer's window survives one. Both default to
     // the MC68010; clearing one at a time says which half of the crossing a
     // downstream failure depends on.

@@ -1094,6 +1094,14 @@ loop mode loop, a short-frame return nested inside the long-frame one, and only
 then the `RTE`. Thirty cases where the interrupt demonstrably landed in the
 handler. All correct.
 
+**The default has changed.** `RTE_RESTORES_LOOP` is now `1'b0`, so a bus error
+exits loop mode and the DBcc re-enters it. That is chosen on evidence, not on
+argument: it is what clears the field failure, and UM appendix A can be read
+both ways -- `doc/divergences.md` argues both and records that only silicon can
+settle it. The other build is kept, because turning a mechanism off is a
+mitigation and the defect is still not isolated. Every program runs to the same
+clock count either way.
+
 That is worth recording as a negative with a shape: **the structure of the
 scenario is not sufficient.** Every element downstream describes -- user to
 supervisor and back, a fault in loop mode, a handler that loops, an interrupt

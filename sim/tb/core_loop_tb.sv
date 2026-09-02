@@ -58,6 +58,47 @@ module core_loop_tb;
     end
   endfunction
 
+  // The index of the RTE's last read of the frame, and of the first write to a
+  // given address after it. Between those two the processor is *continuing* the
+  // faulted instruction, and nothing it does there may be an instruction fetch.
+  //
+  // Anchored on the frame's own addresses rather than on the function code:
+  // this program runs in supervisor mode throughout, so the loop's operand
+  // cycles carry FC 5 as well and would swamp the search.
+  function automatic int last_frame_read();
+    int n;
+    begin
+      n = -1;
+      for (int k = 0; k < ntr; k = k + 1)
+        if (tr_rw[k] && ({tr_addr[k], 1'b0} < SSP0) &&
+            ({tr_addr[k], 1'b0} >= (SSP0 - 32'd64))) n = k;
+      last_frame_read = n;
+    end
+  endfunction
+
+  function automatic int first_write_after(input int from, input logic [23:0] a);
+    int n;
+    begin
+      n = -1;
+      for (int k = ntr - 1; k > from; k = k - 1)
+        if (!tr_rw[k] && ({tr_addr[k], 1'b0} == a)) n = k;
+      first_write_after = n;
+    end
+  endfunction
+
+  function automatic int prog_reads_between(input int lo_i, input int hi_i,
+                                            input logic [23:0] lo,
+                                            input logic [23:0] hi);
+    int n;
+    begin
+      n = 0;
+      for (int k = lo_i + 1; k < hi_i; k = k + 1)
+        if (tr_rw[k] && ((tr_fc[k] == 3'd2) || (tr_fc[k] == 3'd6)) &&
+            ({tr_addr[k], 1'b0} >= lo) && ({tr_addr[k], 1'b0} <= hi)) n = n + 1;
+      prog_reads_between = n;
+    end
+  endfunction
+
   function automatic int data_cycles();
     int n;
     begin
@@ -307,10 +348,42 @@ module core_loop_tb;
                dut.u_seq.regs[9], DEST + 32'd12);
     expect_u32("bus error in a loop: the counter ended at -1",
                dut.u_seq.regs[0] & 32'h0000FFFF, 32'h0000_FFFF);
-    // The loop was rejoined without fetching it again: the only program reads
-    // in the loop are the ones from before the fault plus the final refill.
-    expect_int("bus error in a loop: the loop was not refetched",
-               prog_reads(24'h001010, 24'h001015), 5);
+    // How many of the loop's three words come back over the bus, which is the
+    // half of appendix A the two readings disagree about.
+    //
+    //   RTE_RESTORES_LOOP=1  five. Loop mode comes back out of the frame and no
+    //                        word of the loop is fetched again, which is the
+    //                        literal reading of "the three-word loop is not
+    //                        fetched again".
+    //   RTE_RESTORES_LOOP=0  eight. Loop mode has exited, as appendix A's own
+    //                        list of abnormal conditions says a bus error makes
+    //                        it, so the DBcc runs its ordinary path, reads the
+    //                        displacement loop mode never read, and re-enters.
+    //
+    // doc/divergences.md argues both readings and says which is built.
+    expect_int("bus error in a loop: the loop's words on the bus",
+               prog_reads(24'h001010, 24'h001015),
+               (`RD68011_RTE_RESTORES_LOOP != 0) ? 5 : 8);
+
+    // What neither reading permits, and what makes the difference above a
+    // choice of reading rather than a defect: the faulted instruction has to be
+    // *continued*, not restarted. So between the RTE's last read of the frame
+    // and the retried write that finishes the instruction, there must be no
+    // instruction fetch at all. Any reload of the loop's words is visible on
+    // the bus only after the instruction has been replayed.
+    begin
+      int i_rte, i_wr;
+      i_rte = last_frame_read();
+      i_wr  = first_write_after(i_rte, DEST + 32'd6);
+      if ((i_rte < 0) || (i_wr < 0)) begin
+        $display("FAIL: bus error in a loop: no RTE walk (%0d) or no retried write (%0d)",
+                 i_rte, i_wr);
+        errors = errors + 1;
+      end else begin
+        expect_int("bus error in a loop: the instruction is continued, not refetched",
+                   prog_reads_between(i_rte, i_wr, 24'h001010, 24'h001015), 0);
+      end
+    end
 
     if (errors == 0) $display("PASS: core_loop_tb");
     else             $display("FAIL: core_loop_tb, %0d errors", errors);

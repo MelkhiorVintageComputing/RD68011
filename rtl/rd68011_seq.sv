@@ -67,10 +67,13 @@ module rd68011_seq #(
     // build in which no part of a loop crosses an RTE, which is what it takes to
     // decide whether that crossing is where a reported defect lives.
     //
-    // It has been reported downstream that clearing it corrects the fault, so
-    // the crossing is where the defect lives. RTE_KEEPS_LOOP_BUF below splits
-    // the two halves of that crossing apart so a single boot says which.
-    parameter bit RTE_RESTORES_LOOP = 1'b1,
+    // The default is zero because appendix A is ambiguous and zero is what
+    // works. Its own list of "abnormal conditions [that] cause the MC68010 to
+    // exit the loop mode" includes bus errors, alongside interrupts; the
+    // sentence about RTE reads the other way. doc/divergences.md argues both
+    // and records that only silicon can settle it. Setting this to one builds
+    // the other reading, and a downstream machine that ran it faulted.
+    parameter bit RTE_RESTORES_LOOP = 1'b0,
     // The other half. The loop buffer is not in the frame and nothing restores
     // it, but its window survives a fault and a handler by itself, so a resumed
     // loop can pick up through the buffer rather than through loop mode. Zero
