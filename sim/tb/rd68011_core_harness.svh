@@ -25,6 +25,12 @@
   `define RD68011_RTE_RESTORES_LOOP 1
 `endif
 
+// The other half of the same crossing: whether the loop buffer's window
+// survives an RTE. Zero empties it at RESUME.
+`ifndef RD68011_RTE_KEEPS_LOOP_BUF
+  `define RD68011_RTE_KEEPS_LOOP_BUF 1
+`endif
+
   localparam realtime CLK_PERIOD = 125.0;   // 8 MHz
   localparam int      MAXTR      = 512;
 
@@ -50,7 +56,8 @@
   logic        loop_inv_n_i;
 
   rd68011_top #(.LOOP_BUF_WORDS    (`RD68011_LOOP_BUF_WORDS),
-                .RTE_RESTORES_LOOP (`RD68011_RTE_RESTORES_LOOP)) dut (
+                .RTE_RESTORES_LOOP  (`RD68011_RTE_RESTORES_LOOP),
+                .RTE_KEEPS_LOOP_BUF (`RD68011_RTE_KEEPS_LOOP_BUF)) dut (
       .clk (clk), .rst_n (rst_n),
       .a_o (a_o), .a_oe (a_oe),
       .d_i (d_i), .d_o (d_o), .d_oe (d_oe),

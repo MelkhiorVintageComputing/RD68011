@@ -66,7 +66,20 @@ module rd68011_seq #(
     // hundreds a fault, a handler and an RTE already cost. What it buys is a
     // build in which no part of a loop crosses an RTE, which is what it takes to
     // decide whether that crossing is where a reported defect lives.
-    parameter bit RTE_RESTORES_LOOP = 1'b1
+    //
+    // It has been reported downstream that clearing it corrects the fault, so
+    // the crossing is where the defect lives. RTE_KEEPS_LOOP_BUF below splits
+    // the two halves of that crossing apart so a single boot says which.
+    parameter bit RTE_RESTORES_LOOP = 1'b1,
+    // The other half. The loop buffer is not in the frame and nothing restores
+    // it, but its window survives a fault and a handler by itself, so a resumed
+    // loop can pick up through the buffer rather than through loop mode. Zero
+    // empties it at RESUME.
+    //
+    // The two parameters are separate so that one build each says which half of
+    // "no part of a loop crosses an RTE" is doing the work. Clearing both is the
+    // original diagnostic.
+    parameter bit RTE_KEEPS_LOOP_BUF = 1'b1
 ) (
     input  logic        clk,
     input  logic        rst_n,
@@ -1804,7 +1817,7 @@ module rd68011_seq #(
   // or a resumed loop picks up where it left off through the buffer instead of
   // through loop mode and the experiment proves nothing.
   logic lb_resume_flush;
-  assign lb_resume_flush = !RTE_RESTORES_LOOP && retire &&
+  assign lb_resume_flush = !RTE_KEEPS_LOOP_BUF && retire &&
                            (f_seq == rd68011_ucode_pkg::U_SEQ_RESUME);
   assign lb_flush = LB_ON && (lb_wr_in || bus_granted || !loop_inv_sync_n ||
                               lb_resume_flush ||
