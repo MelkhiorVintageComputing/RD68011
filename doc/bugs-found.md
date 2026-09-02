@@ -979,3 +979,34 @@ One incidental confirmation: the capture shows `SP+56` read twice per `RTE`, onc
 in a prologue and once in the ascending scan, which the report flagged as
 unexpected. It is UM 6.4 step 3, the accessibility probe at the last word of the
 frame, and `tools/ucode/program.py` emits it in that order with that comment.
+
+### A discriminator that was wrong, and a value that varies
+
+The sixth report ran the fetch test with no page filter: **no program-space
+cycles between the `RTE` and the fault.** By the criterion offered here that is
+the `LOOPBACK` path -- except the criterion was wrong, and the reason is this
+project's own feature.
+
+That machine runs `LOOP_BUF_WORDS=16`, and **the loop buffer answers program
+fetches without issuing a bus cycle**. So an absence of FC 2 cycles is equally
+consistent with the buffer serving them, which reopens the `LP_ENTER` path,
+whose microword *is* a fetch. Proposing a bus-visibility test for a machine
+built with a fetch-eliminating option was an error worth recording as one.
+
+It does not obviously explain the value either: for the buffer to serve a wrong
+word at the loop's address its window must be armed at that base, and then it
+holds the loop's own words. The one-parameter experiment settles it and has been
+asked for -- rebuild at `LOOP_BUF_WORDS=0`.
+
+The second finding is the useful one. **The wrong opcode varies between runs**:
+`$22C1` once, `$0074` the next. And the second frame is as self-consistent as
+the first -- `$0074` is `ORI.W #imm,(d8,A4,Xn)`, `upc_save` `$0C74` is microword
+3188 which is that routine's source-word read, the SSW says word *read* and 3188
+is a read, the odd fault address fits an index off `A4`, and the stacked data
+output buffer is the `DBEQ` opcode the routine pulls from `irc` as its immediate.
+
+So both runs say the same thing: the core faithfully executes whatever `loop_ir`
+holds and builds a correct frame describing it. That rules out a family at
+once -- the alignment check, the request formation, the frame builder and the
+decoder are all doing the right thing with the input they are given. The defect
+is confined to one register's value, and it is not a constant.
