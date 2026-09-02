@@ -227,6 +227,7 @@ module core_strncpy_tb;
   int resumed_in_loop_mode;
   int lp_enter_total;
   int nested_ok, nested_halt, nested_skip;
+  int nirq_ok;
 
   // Memory latency. The machine in the report runs at 16.667 MHz against real
   // memory on a shared VME bus, and an earlier report from it is the reason
@@ -1011,6 +1012,145 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
     end
   endtask
 
+  // ---------------------------------------------------------------------------
+  // A page fault, an interrupt *inside the handler*, and another context
+  //
+  // The shape downstream describes and this sweep had never built. The page for
+  // the faulting byte comes off NFS or a disk, so the handler sleeps; the clock
+  // interrupts it, another process is given a slice, and only then does the RTE
+  // run. Between the fault and the resume there is therefore an arbitrary amount
+  // of unrelated execution -- including other loop mode loops, and a short-frame
+  // exception return, neither of which carries any loop state.
+  //
+  // A bus error leaves the interrupt mask alone (only interrupts raise it), so
+  // the handler runs interruptible, exactly as a real one does.
+  //
+  //   user loop, loop mode, page fault      -> format $8 frame
+  //     bus-error handler, its own loop     -> loop_ir becomes the handler's
+  //       IRQ taken inside it                -> short frame, no loop state
+  //         IRQ handler, its own loop        -> loop_ir becomes a third value
+  //       short RTE                          -> no loop state restored
+  //     long RTE                             -> loop state restored from $8
+  //   user loop resumes
+  // ---------------------------------------------------------------------------
+  task automatic nested_irq_case(input string what, input logic [31:0] fault_at,
+                                 input int irq_delay, input logic [15:0] irq_op);
+    begin
+      groundwork();
+      // The bus-error handler: count, save, run a loop mode loop, restore, RTE.
+      poke_w(H_BERR[23:1] + 23'd0,  16'h5278);
+      poke_w(H_BERR[23:1] + 23'd1,  BERRN[15:0]);
+      poke_w(H_BERR[23:1] + 23'd2,  16'h48E7);
+      poke_w(H_BERR[23:1] + 23'd3,  16'hFFFE);
+      poke_w(H_BERR[23:1] + 23'd4,  16'h207C);
+      poke_l(H_BERR[23:1] + 23'd5,  32'h0000_6800);
+      poke_w(H_BERR[23:1] + 23'd7,  16'h227C);
+      poke_l(H_BERR[23:1] + 23'd8,  32'h0000_6880);
+      poke_w(H_BERR[23:1] + 23'd10, 16'h223C);
+      poke_l(H_BERR[23:1] + 23'd11, 32'h0000_000C);
+      poke_w(H_BERR[23:1] + 23'd13, 16'h303C);
+      poke_w(H_BERR[23:1] + 23'd14, 16'd15);
+      poke_w(H_BERR[23:1] + 23'd15, 16'h6002);
+      poke_w(H_BERR[23:1] + 23'd16, 16'h22C1);
+      poke_w(H_BERR[23:1] + 23'd17, 16'h51C8);
+      poke_w(H_BERR[23:1] + 23'd18, 16'hFFFC);
+      poke_w(H_BERR[23:1] + 23'd19, 16'h4CDF);
+      poke_w(H_BERR[23:1] + 23'd20, 16'h7FFF);
+      poke_w(H_BERR[23:1] + 23'd21, 16'h4E73);
+
+      // The interrupt handler, taken from inside it: another context with a
+      // loop mode loop of its own, then a short-frame RTE.
+      poke_w(H_IRQ[23:1] + 23'd0,  16'h5278);
+      poke_w(H_IRQ[23:1] + 23'd1,  IRQN[15:0]);
+      poke_w(H_IRQ[23:1] + 23'd2,  16'h48E7);
+      poke_w(H_IRQ[23:1] + 23'd3,  16'hFFFE);
+      poke_w(H_IRQ[23:1] + 23'd4,  16'h207C);
+      poke_l(H_IRQ[23:1] + 23'd5,  32'h0000_6900);
+      poke_w(H_IRQ[23:1] + 23'd7,  16'h227C);
+      poke_l(H_IRQ[23:1] + 23'd8,  32'h0000_6980);
+      poke_w(H_IRQ[23:1] + 23'd10, 16'h223C);
+      poke_l(H_IRQ[23:1] + 23'd11, 32'h0000_0007);
+      poke_w(H_IRQ[23:1] + 23'd13, 16'h303C);
+      poke_w(H_IRQ[23:1] + 23'd14, 16'd7);
+      poke_w(H_IRQ[23:1] + 23'd15, 16'h6002);
+      poke_w(H_IRQ[23:1] + 23'd16, irq_op);
+      poke_w(H_IRQ[23:1] + 23'd17, 16'h51C8);
+      poke_w(H_IRQ[23:1] + 23'd18, 16'hFFFC);
+      poke_w(H_IRQ[23:1] + 23'd19, 16'h4CDF);
+      poke_w(H_IRQ[23:1] + 23'd20, 16'h7FFF);
+      poke_w(H_IRQ[23:1] + 23'd21, 16'h4E73);
+
+      for (j = 0; j < 24; j = j + 1) begin
+        poke_w((32'h0000_4000 + 32'(j) * 32'd2) >> 1,
+               16'(16'h4152 + 16'(j) * 16'h0101));
+        poke_w(23'h003400 + 23'(j), 16'(16'h2222 + 16'(j)));
+        poke_w(23'h003480 + 23'(j), 16'(16'h3333 + 16'(j)));
+      end
+      for (j = 0; j < 24; j = j + 1) poke_w(23'h002800 + 23'(j), 16'hFFFF);
+
+      poke_w(23'h000800, 16'h207C);  poke_l(23'h000801, USP0);
+      poke_w(23'h000803, 16'h4E60);
+      poke_w(23'h000804, 16'h46FC);  poke_w(23'h000805, 16'h0000);
+      poke_w(23'h000806, 16'h207C);  poke_l(23'h000807, 32'h0000_5000);
+      poke_w(23'h000809, 16'h227C);  poke_l(23'h00080A, 32'h0000_4000);
+      poke_w(23'h00080C, 16'h223C);  poke_l(23'h00080D, 32'd12);
+      poke_w(23'h00080F, 16'h2008);
+      poke_w(23'h000810, 16'h6002);
+      poke_w(23'h000811, 16'h10D9);
+      poke_w(23'h000812, 16'h57C9);  poke_w(23'h000813, 16'hFFFC);
+      poke_w(23'h000814, 16'h60FE);
+
+      berr_addr = fault_at[23:1];
+      berr_en   = 1'b1;
+      core_start();
+      // Wait for the page fault, then let the handler run and interrupt it.
+      kk = 0;
+      while ((berr_n == 0) && (kk < 900)) begin
+        @(posedge clk);
+        kk = kk + 1;
+      end
+      berr_en = 1'b0;
+      repeat (irq_delay) @(posedge clk);
+      ipl_n_i = ~3'd5;
+      kk = 0;
+      while ((mem.peek(IRQN[23:1]) == 16'd0) && (kk < 900)) begin
+        @(posedge clk);
+        kk = kk + 1;
+      end
+      ipl_n_i = 3'b111;
+      run_prog_or_halt(what, UDONE, 20000);
+      berr_en = 1'b0;
+      ipl_n_i = 3'b111;
+
+      if (mark() != 0) begin
+        $display("FAIL: %s: vector %0d was taken", what, mark());
+        dump_frame(what);
+        errors = errors + 1;
+        faults = faults + 1;
+      end else begin
+        if (mem.peek(IRQN[23:1]) == 16'd0) begin
+          $display("NOTE: %s: the interrupt never landed in the handler", what);
+        end else begin
+          nirq_ok = nirq_ok + 1;
+        end
+        if (bad_user_loop_ir) begin
+          $display("FAIL: %s: the user loop ran with the wrong instruction",
+                   what);
+          errors = errors + 1;
+        end
+        for (j = 0; j < 12; j = j + 1) begin
+          if (peek_b(32'h0000_5000 + 32'(j)) !== peek_b(32'h0000_4000 + 32'(j)))
+          begin
+            $display("FAIL: %s: byte %0d is %02h, expected %02h", what, j,
+                     peek_b(32'h0000_5000 + 32'(j)),
+                     peek_b(32'h0000_4000 + 32'(j)));
+            errors = errors + 1;
+          end
+        end
+      end
+    end
+  endtask
+
   initial begin
     errors = 0;
     faults = 0;
@@ -1025,6 +1165,7 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
     nested_ok = 0;
     nested_halt = 0;
     nested_skip = 0;
+    nirq_ok = 0;
 
     // ======================================================================
     // Control one: a word read at an odd address MUST take vector 3
@@ -1256,6 +1397,27 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
              nested_halt, nested_ok, nested_skip);
     if ((nested_halt == 0) || (nested_ok == 0)) begin
       $display("FAIL: the RTE point-of-no-return boundary was not exercised both ways");
+      errors = errors + 1;
+    end
+
+    // ======================================================================
+    // A page fault, interrupted inside the handler, with another loop running
+    // ======================================================================
+    for (j = 0; j < 3; j = j + 1) begin
+      for (i = 4; i <= 120; i = i + 4) begin
+        nested_irq_case($sformatf("page fault + IRQ in handler at +%0d, op %0d",
+                                  i, j),
+                        (j == 0) ? 32'h0000_4000 :
+                        (j == 1) ? 32'h0000_5000 : 32'h0000_4002,
+                        i,
+                        (j == 0) ? 16'h32D8 :
+                        (j == 1) ? 16'h20D9 : 16'h0074);
+      end
+    end
+    $display("  page fault interrupted inside the handler: %0d cases where the interrupt landed",
+             nirq_ok);
+    if (nirq_ok == 0) begin
+      $display("FAIL: no interrupt ever landed inside the page-fault handler");
       errors = errors + 1;
     end
 

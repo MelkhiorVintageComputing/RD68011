@@ -1084,3 +1084,20 @@ are byte-identical across reboots, which a marginal path would not give.
 What would separate them is asked for upstream, cheapest first: the SoC build's
 own timing report for the core's clock domain, a run at half the clock, and --
 worth more than either -- `loop_ir` on the debug bus.
+
+Then the structure of the real sequence was described: the handler sleeps while
+the page comes off NFS or a disk, the clock interrupts it, and another process
+gets a slice before the `RTE` runs. So `core_strncpy_tb` builds that too -- a
+page fault taken in loop mode, a bus-error handler running a loop mode loop of
+its own, **an interrupt taken inside that handler**, a third context with a third
+loop mode loop, a short-frame return nested inside the long-frame one, and only
+then the `RTE`. Thirty cases where the interrupt demonstrably landed in the
+handler. All correct.
+
+That is worth recording as a negative with a shape: **the structure of the
+scenario is not sufficient.** Every element downstream describes -- user to
+supervisor and back, a fault in loop mode, a handler that loops, an interrupt
+inside it, another context, a short frame nested in a long one -- is now built
+here and none of it, alone or together, makes this core mishandle the restore.
+Whatever is required is a property of the machine rather than a property of the
+sequence.
