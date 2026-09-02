@@ -108,6 +108,22 @@ module core_strncpy_tb;
   // Every write to `loop_ir`, with enough context to say which microword did
   // it. The fifth report puts the corruption between a correct restore and the
   // next iteration, inside the core, so this is the register to watch change.
+  // The harness counts injected bus errors on `negedge as_n_o` while `berr_hit`
+  // is a continuous assign on the same signal, so the count races and is missed
+  // whenever the address changes on the same edge AS falls -- which is every
+  // back-to-back cycle. Count them here instead, sampled on the clock, where
+  // there is nothing to race with.
+  logic berr_hit_q;
+  int   berr_n;
+  always @(posedge clk) begin
+    if (!rst_n) begin
+      berr_hit_q <= 1'b0;
+    end else begin
+      berr_hit_q <= berr_hit;
+      if (berr_hit && !berr_hit_q) berr_n <= berr_n + 1;
+    end
+  end
+
   logic        trace_loop_ir;
   // Set to clear the resumed frame's loop-state bits, so the resume comes
   // back with loop mode off and the DBcc must re-enter it.
@@ -174,6 +190,7 @@ module core_strncpy_tb;
 
   int resumed_in_loop, resumed_both_odd, resumed_after_berr;
   int resumed_in_loop_mode;
+  int nested_ok, nested_halt, nested_skip;
 
   // Memory latency. The machine in the report runs at 16.667 MHz against real
   // memory on a shared VME bus, and an earlier report from it is the reason
@@ -195,6 +212,27 @@ module core_strncpy_tb;
   endfunction
 
   // Run until the program says it is done or a handler says it is not.
+  // Like run_prog, but a halted processor is an acceptable end: past RTE's
+  // point of no return a double bus fault is the specified outcome.
+  task automatic run_prog_or_halt(input string what, input logic [31:0] done_pc,
+                                  input int limit);
+    int k;
+    begin
+      k = 0;
+      while ((dut.u_seq.ir_pc !== done_pc) && (mark() == 0) &&
+             !dut.u_seq.halted && (k < limit)) begin
+        @(posedge clk);
+        k = k + 1;
+      end
+      if ((dut.u_seq.ir_pc !== done_pc) && (mark() == 0) &&
+          !dut.u_seq.halted) begin
+        $display("FAIL: %s: neither finished, faulted nor halted after %0d clocks",
+                 what, limit);
+        errors = errors + 1;
+      end
+    end
+  endtask
+
   task automatic run_prog(input string what, input logic [31:0] done_pc,
                           input int limit);
     int k;
@@ -234,6 +272,7 @@ module core_strncpy_tb;
       poke_w(IRQN[23:1], 16'd0);
       poke_w(BERRN[23:1], 16'd0);
       saw_loop = 1'b0;
+      berr_n = 0;
       saw_loop_fault = 1'b0;
       bad_loop_ir = 1'b0;
       bad_user_loop_ir = 1'b0;
@@ -531,7 +570,7 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
       // The page is "allocated" as soon as the fault has been taken once, so
       // the retried access succeeds -- exactly what the handler does.
       kk = 0;
-      while ((berr_count == 0) && (kk < 900)) begin
+      while ((berr_n == 0) && (kk < 900)) begin
         @(posedge clk);
         kk = kk + 1;
       end
@@ -615,7 +654,7 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
       berr_en   = 1'b1;
       core_start();
       kk = 0;
-      while ((berr_count == 0) && (kk < 900)) begin
+      while ((berr_n == 0) && (kk < 900)) begin
         @(posedge clk);
         kk = kk + 1;
       end
@@ -725,7 +764,7 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
       berr_en   = 1'b1;
       core_start();
       kk = 0;
-      while ((berr_count == 0) && (kk < 900)) begin
+      while ((berr_n == 0) && (kk < 900)) begin
         @(posedge clk);
         kk = kk + 1;
       end
@@ -773,6 +812,137 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
     end
   endtask
 
+  // ---------------------------------------------------------------------------
+  // A second fault, taken *during the RTE's own frame walk*
+  //
+  // The sixth report says the wrong opcode varies between runs -- $22C1 once,
+  // $0074 the next -- and that both frames are self-consistent, so the core
+  // executes faithfully whatever `loop_ir` holds. A varying value that is
+  // sometimes a kernel opcode wants a path where `loop_ir` is left holding what
+  // the *handler* put there.
+  //
+  // Built to chase a hypothesis that turned out to be wrong, and kept because
+  // what it actually tests had no test. `RTE` restores `loop_ir` on the last
+  // read of its ascending walk, and on a demand-paged machine any of those 26
+  // reads can fault. The idea was that a nested fault mid-walk would leave
+  // `loop_ir` holding the handler's instruction.
+  //
+  // It cannot, and the reason is deliberate: the microcode marks the restore
+  // walk with the G0 flag, so a bus error there is a **double bus fault** and
+  // the processor halts. UM 6.4 requires exactly that -- past the point where
+  // RTE can turn back, a fault on the rest of a long frame's reads is not an
+  // ordinary bus error -- and UM 6.3.9.1 says only an external reset restarts a
+  // halted processor.
+  //
+  // So the two outcomes are both correct and the boundary between them is the
+  // point of no return: a fault on the prologue reads, the version word or the
+  // accessibility probe is an ordinary bus error and the program carries on; a
+  // fault anywhere in the walk halts. Both are asserted below, and neither had
+  // been tested before.
+  // ---------------------------------------------------------------------------
+  task automatic nested_rte_case(input string what, input int off);
+    logic [31:0] fb;
+    begin
+      groundwork();
+      poke_w(H_BERR[23:1] + 23'd0,  16'h5278);
+      poke_w(H_BERR[23:1] + 23'd1,  BERRN[15:0]);
+      poke_w(H_BERR[23:1] + 23'd2,  16'h48E7);
+      poke_w(H_BERR[23:1] + 23'd3,  16'hFFFE);
+      poke_w(H_BERR[23:1] + 23'd4,  16'h227C);
+      poke_l(H_BERR[23:1] + 23'd5,  32'h0000_6800);
+      poke_w(H_BERR[23:1] + 23'd7,  16'h223C);
+      poke_l(H_BERR[23:1] + 23'd8,  32'h0000_000C);
+      poke_w(H_BERR[23:1] + 23'd10, 16'h303C);
+      poke_w(H_BERR[23:1] + 23'd11, 16'd3);
+      poke_w(H_BERR[23:1] + 23'd12, 16'h6002);
+      poke_w(H_BERR[23:1] + 23'd13, 16'h22C1);   // the handler's looped instruction
+      poke_w(H_BERR[23:1] + 23'd14, 16'h51C8);
+      poke_w(H_BERR[23:1] + 23'd15, 16'hFFFC);
+      poke_w(H_BERR[23:1] + 23'd16, 16'h4CDF);
+      poke_w(H_BERR[23:1] + 23'd17, 16'h7FFF);
+      poke_w(H_BERR[23:1] + 23'd18, 16'h4E73);
+
+      for (j = 0; j < 24; j = j + 1) begin
+        poke_w((32'h0000_4000 + 32'(j) * 32'd2) >> 1,
+               16'(16'h4152 + 16'(j) * 16'h0101));
+      end
+      for (j = 0; j < 24; j = j + 1) poke_w(23'h002800 + 23'(j), 16'hFFFF);
+
+      poke_w(23'h000800, 16'h207C);  poke_l(23'h000801, USP0);
+      poke_w(23'h000803, 16'h4E60);
+      poke_w(23'h000804, 16'h46FC);  poke_w(23'h000805, 16'h0000);
+      poke_w(23'h000806, 16'h207C);  poke_l(23'h000807, 32'h0000_5000);
+      poke_w(23'h000809, 16'h227C);  poke_l(23'h00080A, 32'h0000_4000);
+      poke_w(23'h00080C, 16'h223C);  poke_l(23'h00080D, 32'd12);
+      poke_w(23'h00080F, 16'h2008);
+      poke_w(23'h000810, 16'h6002);
+      poke_w(23'h000811, 16'h10D9);
+      poke_w(23'h000812, 16'h57C9);  poke_w(23'h000813, 16'hFFFC);
+      poke_w(23'h000814, 16'h60FE);
+
+      // The demand-paging fault on the loop's first source byte.
+      berr_addr = 23'h002000;
+      berr_en   = 1'b1;
+      core_start();
+      kk = 0;
+      while ((berr_n == 0) && (kk < 900)) begin
+        @(posedge clk);
+        kk = kk + 1;
+      end
+      berr_en = 1'b0;
+      // Wait for the handler; by now the outer frame is complete.
+      kk = 0;
+      while ((dut.u_seq.ir_pc !== H_BERR) && (kk < 400)) begin
+        @(posedge clk);
+        kk = kk + 1;
+      end
+      fb = dut.u_seq.ssp;
+      // Now arm a fault on one word of that frame, so it lands inside the RTE.
+      berr_addr = (fb + 32'(off)) >> 1;
+      berr_en   = 1'b1;
+      kk = 0;
+      while ((berr_n < 2) && (kk < 3000)) begin
+        @(posedge clk);
+        kk = kk + 1;
+      end
+      berr_en = 1'b0;
+      run_prog_or_halt(what, UDONE, 12000);
+      berr_en = 1'b0;
+
+      if (mark() != 0) begin
+        $display("FAIL: %s: vector %0d was taken, not a bus error", what,
+                 mark());
+        dump_frame(what);
+        errors = errors + 1;
+        faults = faults + 1;
+      end else if (berr_n < 2) begin
+        // A reserved frame word: the walk never reads it, so only the first
+        // fault happened and the program must have finished cleanly.
+        nested_skip = nested_skip + 1;
+      end else if (dut.u_seq.halted) begin
+        // Past RTE's point of no return: a double bus fault, and halted is the
+        // only correct outcome.
+        nested_halt = nested_halt + 1;
+      end else begin
+        // Before it: an ordinary bus error, handled, and the copy completes.
+        nested_ok = nested_ok + 1;
+        for (j = 0; j < 12; j = j + 1) begin
+          if (peek_b(32'h0000_5000 + 32'(j)) !== peek_b(32'h0000_4000 + 32'(j)))
+          begin
+            $display("FAIL: %s: byte %0d is %02h, expected %02h", what, j,
+                     peek_b(32'h0000_5000 + 32'(j)),
+                     peek_b(32'h0000_4000 + 32'(j)));
+            errors = errors + 1;
+          end
+        end
+      end
+      if (bad_user_loop_ir) begin
+        $display("FAIL: %s: the user loop ran with the wrong instruction", what);
+        errors = errors + 1;
+      end
+    end
+  endtask
+
   initial begin
     errors = 0;
     faults = 0;
@@ -783,6 +953,9 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
     resumed_both_odd = 0;
     resumed_after_berr = 0;
     resumed_in_loop_mode = 0;
+    nested_ok = 0;
+    nested_halt = 0;
+    nested_skip = 0;
 
     // ======================================================================
     // Control one: a word read at an odd address MUST take vector 3
@@ -1003,6 +1176,19 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
                       32'h0000_5000, 32'h0000_4000, 32'h0000_4000);
     clear_loop_bits = 1'b0;
     trace_loop_ir = 1'b0;
+
+    // ======================================================================
+    // A nested fault on every word of the frame the RTE is walking
+    // ======================================================================
+    for (i = 0; i <= 56; i = i + 2) begin
+      nested_rte_case($sformatf("nested fault on the RTE's read of SP+%0d", i), i);
+    end
+    $display("  nested faults during RTE: %0d halted on a double bus fault, %0d handled as an ordinary one, %0d on a reserved word",
+             nested_halt, nested_ok, nested_skip);
+    if ((nested_halt == 0) || (nested_ok == 0)) begin
+      $display("FAIL: the RTE point-of-no-return boundary was not exercised both ways");
+      errors = errors + 1;
+    end
 
     $display("  strncpy reproducer: %0d cases, %0d took an exception",
              2 + 4 * 16 + 4 + 161 + 241 + 241 + 4 * 161 + 4 * 141 +

@@ -1010,3 +1010,35 @@ holds and builds a correct frame describing it. That rules out a family at
 once -- the alignment check, the request formation, the frame builder and the
 decoder are all doing the right thing with the input they are given. The defect
 is confined to one register's value, and it is not a constant.
+
+### An attempt at the remaining path, and what it found instead
+
+`loop_active` is set by `LP_ENTER`, which writes `loop_ir` on the same edge, and
+by `RESUME`, which does not. So a value that varies between runs wants a path
+where `loop_ir` is left holding what the *handler* put there. One had never been
+built: **a second fault taken during the `RTE`'s own frame walk.** On a
+demand-paged machine any of those 26 reads can fault, and a nested frame pushed
+mid-walk carries `loop_ir` as it stands.
+
+It cannot happen, and the reason is deliberate. The microcode marks the restore
+walk with the `G0` flag, so a bus error there is a **double bus fault** and the
+processor halts -- UM 6.4 requires it, past the point where `RTE` can turn back,
+and UM 6.3.9.1 makes an external reset the only way out. The RTL comment at
+`group0` says so; the behaviour had simply never been tested.
+
+It is now. Faulting each frame word in turn splits exactly where the manual puts
+the boundary: **20 words halt** on a double bus fault, **6 are handled as
+ordinary bus errors** -- the prologue reads, the version word and the
+accessibility probe, all before the point of no return -- and **3 are the
+reserved words the walk never reads**. The run fails if the boundary is not
+exercised both ways.
+
+Two smaller results came with it. `rd68011_core_harness.svh` counts injected bus
+errors in `always @(negedge as_n_o) if (berr_hit)`, while `berr_hit` is a
+continuous assign on the same signal -- a race that misses the count whenever the
+address changes on the edge `AS` falls, which is every back-to-back cycle. The
+testbench counts them on the clock now instead. And a case that gates on that
+count can silently disarm itself, which is what hid the nested-fault cases until
+the counter was fixed.
+
+The reported defect is still not reproduced.
