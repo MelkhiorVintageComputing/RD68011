@@ -41,7 +41,32 @@ module rd68011_seq #(
     // makes loops of any shape and any instruction cheap and is a deliberate
     // divergence from the original's bus behaviour. doc/divergences.md states
     // the contract and doc/timing-divergences.md measures it.
-    parameter int LOOP_BUF_WORDS = 0
+    parameter int LOOP_BUF_WORDS = 0,
+    // Whether RTE brings loop mode back from a format $8 frame.
+    //
+    // One is the MC68010. UM appendix A: "when the return from exception (RTE)
+    // instruction continues execution of the looped instruction, the three-word
+    // loop is not fetched again" -- so the frame carries the looped instruction
+    // at SP+56 and the loop state in the version word, and RESUME puts both
+    // back.
+    //
+    // Zero is a diagnostic build, and it is safe rather than merely tolerable.
+    // Loop mode's own invariant is that the pipe is left as an ordinary fetch
+    // would have left it -- at phase zero `ir` is the instruction at `ir_pc`,
+    // `irc` is the word after it, and `pc` is frozen at the word after that --
+    // and a fault can only be taken at phase zero, because the DBcc half of a
+    // running loop issues no bus cycle to fault on. So dropping loop mode at
+    // RESUME lands on a boundary an ordinary instruction stream would also have
+    // produced: the resumed instruction's last microword fetches the DBcc's
+    // displacement word, the DBcc is decoded by its ordinary routine, and its
+    // branch re-enters loop mode through LP_ENTER with the looped instruction
+    // fetched from memory.
+    //
+    // The cost is a handful of bus cycles per fault-and-resume, against the
+    // hundreds a fault, a handler and an RTE already cost. What it buys is a
+    // build in which no part of a loop crosses an RTE, which is what it takes to
+    // decide whether that crossing is where a reported defect lives.
+    parameter bit RTE_RESTORES_LOOP = 1'b1
 ) (
     input  logic        clk,
     input  logic        rst_n,
@@ -1774,7 +1799,15 @@ module rd68011_seq #(
   assign lb_wr_in = commit && bus_busy && lb_armed &&
                     (f_bus != rd68011_ucode_pkg::U_BUS_READ) &&
                     ((cur_addr[23:1] - lb_base) < LB_NW);
+  // Nothing restores the loop buffer -- it is not in the frame -- but a build
+  // that keeps loop state out of an RTE has to keep the window out of one too,
+  // or a resumed loop picks up where it left off through the buffer instead of
+  // through loop mode and the experiment proves nothing.
+  logic lb_resume_flush;
+  assign lb_resume_flush = !RTE_RESTORES_LOOP && retire &&
+                           (f_seq == rd68011_ucode_pkg::U_SEQ_RESUME);
   assign lb_flush = LB_ON && (lb_wr_in || bus_granted || !loop_inv_sync_n ||
+                              lb_resume_flush ||
                               (commit && (sr_nxt[rd68011_pkg::SR_S] !=
                                           sr[rd68011_pkg::SR_S])));
 
@@ -2154,8 +2187,8 @@ module rd68011_seq #(
         loop_active <= 1'b0;
       end
       if (retire && (f_seq == rd68011_ucode_pkg::U_SEQ_RESUME)) begin
-        loop_active <= loop_pending[1];
-        loop_ph     <= loop_pending[0];
+        loop_active <= RTE_RESTORES_LOOP && loop_pending[1];
+        loop_ph     <= RTE_RESTORES_LOOP && loop_pending[0];
       end
       // An interrupt or a trace ends it, and can: at the point either is
       // taken the pipe is what an ordinary instruction boundary would have

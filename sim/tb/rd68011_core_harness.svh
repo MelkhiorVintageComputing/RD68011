@@ -19,6 +19,12 @@
   `define RD68011_LOOP_BUF_WORDS 0
 `endif
 
+// One is the MC68010: RTE brings loop mode back out of a format $8 frame. Zero
+// builds the diagnostic core in which no part of a loop survives an RTE.
+`ifndef RD68011_RTE_RESTORES_LOOP
+  `define RD68011_RTE_RESTORES_LOOP 1
+`endif
+
   localparam realtime CLK_PERIOD = 125.0;   // 8 MHz
   localparam int      MAXTR      = 512;
 
@@ -43,7 +49,8 @@
   logic        fc_oe;
   logic        loop_inv_n_i;
 
-  rd68011_top #(.LOOP_BUF_WORDS (`RD68011_LOOP_BUF_WORDS)) dut (
+  rd68011_top #(.LOOP_BUF_WORDS    (`RD68011_LOOP_BUF_WORDS),
+                .RTE_RESTORES_LOOP (`RD68011_RTE_RESTORES_LOOP)) dut (
       .clk (clk), .rst_n (rst_n),
       .a_o (a_o), .a_oe (a_oe),
       .d_i (d_i), .d_o (d_o), .d_oe (d_oe),

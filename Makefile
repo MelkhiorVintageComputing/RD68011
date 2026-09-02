@@ -345,9 +345,14 @@ WAITS ?= 0
 LOOPBUF ?= 0
 IVLB    := $(if $(filter-out 0,$(LOOPBUF)),-DRD68011_LOOP_BUF_WORDS=$(LOOPBUF),)
 
+# The diagnostic build in which no part of a loop crosses an RTE:
+# `make programs RTELOOP=0` and `make cosim RTELOOP=0`. One is the MC68010.
+RTELOOP ?= 1
+IVRL    := $(if $(filter-out 1,$(RTELOOP)),-DRD68011_RTE_RESTORES_LOOP=$(RTELOOP),)
+
 programs: dirs $(PROGHEX)
 	@echo "== test programs (waits=$(WAITS), loop buffer $(LOOPBUF)) =="
-	@iverilog $(IVFLAGS) $(IVLB) -I sim/tb -o $(BUILD)/program_tb.vvp \
+	@iverilog $(IVFLAGS) $(IVLB) $(IVRL) -I sim/tb -o $(BUILD)/program_tb.vvp \
 	    -s core_program_tb $(RTL) $(MODELS) sim/tb/core_program_tb.sv 2>&1 | \
 	    grep -v 'sorry:' || true
 	@fail=0; for p in $(PROGHEX); do \
@@ -546,7 +551,7 @@ $(COSIMDIR)/musashi_trace: tools/cosim/musashi_trace.c tools/cosim/m68kconf.h
 
 cosim: programs $(COSIMDIR)/musashi_trace
 	@echo "== musashi co-simulation (loop buffer $(LOOPBUF)) =="
-	@iverilog $(IVFLAGS) $(IVLB) -I sim/tb -o $(BUILD)/program_tb.vvp \
+	@iverilog $(IVFLAGS) $(IVLB) $(IVRL) -I sim/tb -o $(BUILD)/program_tb.vvp \
 	    -s core_program_tb $(RTL) $(MODELS) sim/tb/core_program_tb.sv 2>&1 | \
 	    grep -v 'sorry:' || true
 	@fail=0; for p in $(COSIMPROG); do \

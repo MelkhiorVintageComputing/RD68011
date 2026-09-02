@@ -124,6 +124,17 @@ module core_strncpy_tb;
     end
   end
 
+  // How often loop mode is entered from scratch. With RTE restoring the loop
+  // this is once per loop; with the diagnostic build it is once more per
+  // fault-and-resume, which is how the run shows the parameter is doing
+  // something rather than quietly being a no-op.
+  int lp_enter_n;
+  always @(posedge clk) begin
+    if (rst_n && dut.u_seq.commit &&
+        (dut.u_seq.f_lp == rd68011_ucode_pkg::U_LP_ENTER) &&
+        dut.u_seq.loop_m4 && dut.u_seq.loop_op_ok) lp_enter_n <= lp_enter_n + 1;
+  end
+
   logic        trace_loop_ir;
   // Set to clear the resumed frame's loop-state bits, so the resume comes
   // back with loop mode off and the DBcc must re-enter it.
@@ -190,6 +201,7 @@ module core_strncpy_tb;
 
   int resumed_in_loop, resumed_both_odd, resumed_after_berr;
   int resumed_in_loop_mode;
+  int lp_enter_total;
   int nested_ok, nested_halt, nested_skip;
 
   // Memory latency. The machine in the report runs at 16.667 MHz against real
@@ -273,6 +285,7 @@ module core_strncpy_tb;
       poke_w(BERRN[23:1], 16'd0);
       saw_loop = 1'b0;
       berr_n = 0;
+      lp_enter_n = 0;
       saw_loop_fault = 1'b0;
       bad_loop_ir = 1'b0;
       bad_user_loop_ir = 1'b0;
@@ -595,6 +608,7 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
         end else begin
           resumed_after_berr = resumed_after_berr + 1;
           if (saw_loop_fault) resumed_in_loop_mode = resumed_in_loop_mode + 1;
+          lp_enter_total = lp_enter_total + lp_enter_n;
         end
         for (j = 0; j < nbytes; j = j + 1) begin
           if (peek_b(dst + 32'(j)) !== peek_b(src + 32'(j))) begin
@@ -672,6 +686,23 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
       run_prog(what, UDONE, 6000);
       berr_en = 1'b0;
 
+      if (`RD68011_RTE_RESTORES_LOOP == 0) begin
+        // The diagnostic build carries no loop state across the RTE, so the
+        // word this case corrupts is never read. The same input that
+        // reproduces the reported failure exactly on an MC68010-faithful core
+        // does nothing at all here, which is the whole point of the parameter.
+        expect_int({what, ": no fault, the corrupted word is never used"},
+                   mark(), 0);
+        for (j = 0; j < 12; j = j + 1) begin
+          if (peek_b(32'h0000_5000 + 32'(j)) !== peek_b(32'h0000_4000 + 32'(j)))
+          begin
+            $display("FAIL: %s: byte %0d is %02h, expected %02h", what, j,
+                     peek_b(32'h0000_5000 + 32'(j)),
+                     peek_b(32'h0000_4000 + 32'(j)));
+            errors = errors + 1;
+          end
+        end
+      end else begin
       dump_frame(what);
       // The reported frame, field for field. This is the check that the
       // explanation is the explanation and not a story that fits.
@@ -691,6 +722,7 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
       expect_u32({what, ": the stacked PC is the DBEQ's extension word"},
                  {mem.peek((dut.u_seq.ssp + 32'd2) >> 1),
                   mem.peek((dut.u_seq.ssp + 32'd4) >> 1)}, 32'h0000_1026);
+      end
     end
   endtask
 
@@ -953,6 +985,7 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
     resumed_both_odd = 0;
     resumed_after_berr = 0;
     resumed_in_loop_mode = 0;
+    lp_enter_total = 0;
     nested_ok = 0;
     nested_halt = 0;
     nested_skip = 0;
@@ -1195,6 +1228,8 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
              4 * 6 + 6 + 4 * 6 + 4 * 6 + 1 + 4 * 6 + 6, faults);
     $display("  of the user-mode cases, %0d were resumed by RTE inside the loop, %0d of them with both operands odd", resumed_in_loop, resumed_both_odd);
     $display("  and %0d were resumed out of a format $8 frame after a page fault, %0d of those with loop mode running when it hit", resumed_after_berr, resumed_in_loop_mode);
+    $display("  loop mode entered from scratch %0d times across those cases (RTE_RESTORES_LOOP=%0d)",
+             lp_enter_total, `RD68011_RTE_RESTORES_LOOP);
     if (resumed_after_berr == 0) begin
       $display("FAIL: no case was resumed after a page fault, which is the mechanism the second report describes");
       errors = errors + 1;

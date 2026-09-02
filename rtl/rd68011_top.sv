@@ -16,7 +16,11 @@ module rd68011_top #(
     // Passed straight to rd68011_seq, where it is documented. Zero is an
     // MC68010; anything else turns the loop buffer on, which loop_inv_n_i
     // below then belongs to.
-    parameter int LOOP_BUF_WORDS = 0
+    parameter int LOOP_BUF_WORDS = 0,
+    // Passed straight to rd68011_seq, where it is documented. One is the
+    // MC68010; zero is a diagnostic build in which no part of a loop survives
+    // an RTE.
+    parameter bit RTE_RESTORES_LOOP = 1'b1
 ) (
     // Clock and hardware reset -----------------------------------------------
     input  logic        clk,      // free-running, both edges used (UM 3.9)
@@ -100,7 +104,8 @@ module rd68011_top #(
   logic        bus_granted;
   logic        loop_inv_sync_n;
 
-  rd68011_seq #(.LOOP_BUF_WORDS (LOOP_BUF_WORDS)) u_seq (
+  rd68011_seq #(.LOOP_BUF_WORDS    (LOOP_BUF_WORDS),
+                .RTE_RESTORES_LOOP (RTE_RESTORES_LOOP)) u_seq (
       .clk          (clk),
       .rst_n        (rst_n),
       .req_valid    (req_valid),
