@@ -1042,3 +1042,45 @@ count can silently disarm itself, which is what hid the nested-fault cases until
 the counter was fixed.
 
 The reported defect is still not reproduced.
+
+### The bisect, and a verdict
+
+A build in which no part of a loop crosses an `RTE` was sent downstream, and it
+cleared every known failure. So the crossing is where the defect lives. The
+diagnostic changed two things at once, so it was split -- `RTE_RESTORES_LOOP`
+for the classic mechanism, `RTE_KEEPS_LOOP_BUF` for the loop buffer's window --
+and one boot each settled it:
+
+> `RTE_RESTORES_LOOP` is the whole of it. `RTE_KEEPS_LOOP_BUF=0` alone changes
+> nothing.
+
+That exonerates the loop buffer, which was the comfortable answer -- opt-in,
+recent, and this project's own addition. The defect is in the **classic
+loop-mode restore**, which is on `master`, in every configuration, and older
+than the buffer by a long way: `loop_active` and `loop_ph` from the frame's
+version word, and `loop_ir` from `SP+56`.
+
+Everything constructible on that path is correct here, and the checks are in
+`core_strncpy_tb`:
+
+- `loop_saved` is captured on `fault`, which clears `loop_active` on the same
+  edge, so a two-clock `fault` would record a loop that had already stopped. It
+  is never two clocks, and the frame's version word records `10` every time.
+- The restore is traced at microword level: 5092 reads `SP+56` and writes
+  `loop_ir` with the right value.
+- `LP_ENTER` does not re-run after an ordinary resume -- the loop closes through
+  `LOOPBACK`, which latches nothing.
+- `rerun_skip` is one-shot and cannot make the walk read `dib` instead of memory.
+- A nested fault during the walk cannot leave a stale `loop_ir` either, because
+  the walk is marked `G0` and a bus error there halts.
+
+So either the kernel does something to that path that a directed handler does
+not -- a context switch with the frame saved to a u-area, a signal frame, a
+nested short-frame return -- or the defect is not in the RTL and simulation is
+clean because simulation has no timing. The evidence cuts both ways: the wrong
+word differs between workloads, which the RTL does not explain, but the cores
+are byte-identical across reboots, which a marginal path would not give.
+
+What would separate them is asked for upstream, cheapest first: the SoC build's
+own timing report for the core's clock domain, a run at half the clock, and --
+worth more than either -- `loop_ir` on the debug bus.

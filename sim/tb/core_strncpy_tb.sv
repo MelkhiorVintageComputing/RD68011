@@ -176,6 +176,30 @@ module core_strncpy_tb;
     if (rst_n && dut.u_seq.fault && dut.u_seq.loop_active) saw_loop_fault <= 1'b1;
   end
 
+  // `fault` gates `loop_saved <= {loop_active, loop_ph}` and also clears
+  // `loop_active` on the same edge. If it were ever asserted for two clocks the
+  // second capture would record a loop that is no longer running, and the frame
+  // would say "not looping" when it was. Watched rather than argued.
+  int  fault_run, fault_run_max;
+  always @(posedge clk) begin
+    if (!rst_n) fault_run <= 0;
+    else if (dut.u_seq.fault) begin
+      fault_run <= fault_run + 1;
+      if (fault_run + 1 > fault_run_max) fault_run_max <= fault_run + 1;
+    end else fault_run <= 0;
+  end
+
+  // And what the loop-state bits actually were when the frame was built.
+  logic [1:0] saved_bits;
+  logic       saved_seen;
+  always @(posedge clk) begin
+    if (rst_n && dut.u_seq.commit &&
+        (dut.u_seq.f_asrc == rd68011_ucode_pkg::U_ASRC_VERWORD)) begin
+      saved_bits <= dut.u_seq.loop_saved;
+      saved_seen <= 1'b1;
+    end
+  end
+
   // Non-zero to have an interrupt arrive that many clocks into the run. The
   // Sun-2 has a 100 Hz clock and the report's machine was multi-user, so the
   // copy was being interrupted; loop mode leaving and re-entering around an
@@ -286,6 +310,8 @@ module core_strncpy_tb;
       saw_loop = 1'b0;
       berr_n = 0;
       lp_enter_n = 0;
+      fault_run_max = 0;
+      saved_seen = 1'b0;
       saw_loop_fault = 1'b0;
       bad_loop_ir = 1'b0;
       bad_user_loop_ir = 1'b0;
@@ -831,6 +857,16 @@ fmt/off=%04h ssw=%04h fault addr=%08h", what, mark(), sp,
         end
         if (!saw_loop_fault) begin
           $display("FAIL: %s: the page fault did not land in loop mode", what);
+          errors = errors + 1;
+        end
+        if (fault_run_max > 1) begin
+          $display("FAIL: %s: fault was asserted for %0d clocks, so loop_saved was captured twice",
+                   what, fault_run_max);
+          errors = errors + 1;
+        end
+        if (saved_seen && (saved_bits !== 2'b10)) begin
+          $display("FAIL: %s: the frame recorded loop state %b, expected 10",
+                   what, saved_bits);
           errors = errors + 1;
         end
         for (j = 0; j < 12; j = j + 1) begin
