@@ -88,15 +88,15 @@ module core_arb_tb;
   // What this does *not* do is fail. Four injections were tried and none of
   // them made it: tying `arb_hold` low; letting ST_ARB reach ST_S0 directly;
   // reordering the ST_IDLE arm to start a cycle before testing the grant; and
-  // masking IPL while the bus is away. The first three are all subsumed by one
-  // fact -- ST_ARB has no arm that reaches ST_S0, and both the ST_IDLE arm and
-  // `after_cycle` test the grant *before* the request -- so the ordering alone
-  // enforces the property and `arb_hold` is redundant with it. That sharpens
-  // what the note further down used to say: `arb_hold` is not untested logic
-  // that happens to be unreached, it is logic the ordering already covers.
-  // The fourth is not a defect at all: UM 3.5 requires the level to be held
-  // until acknowledged, so an interrupt masked during the grant is simply taken
-  // when the bus returns, which is what this asserts anyway.
+  // masking IPL while the bus is away. Once BGACK is out, ST_ARB has no arm
+  // that reaches ST_S0 and both the ST_IDLE arm and `after_cycle` test the
+  // grant before the request, so by then the ordering alone enforces this. The
+  // fourth is not a defect at all: UM 3.5 requires the level to be held until
+  // acknowledged, so an interrupt masked during the grant is simply taken when
+  // the bus returns, which is what this asserts anyway.
+  //
+  // None of that says anything about `arb_hold`, whose window closes before
+  // this test opens -- see `irq_with_br` below, which aims at it directly.
   //
   // So this is a regression test and not a gate, and it is worth keeping as
   // one: it asserts end to end that an interrupt arriving during DMA is
@@ -173,6 +173,73 @@ driven", delay_half);
       // And the program's own work completes: an interrupt it did not ask for,
       // taken across a bus it did not own, costs it time and nothing else.
       check_result("interrupt during a grant");
+    end
+  endtask
+
+  // The other window, and the one the sweep above does not reach: the interrupt
+  // and the bus request arrive *together*.
+  //
+  // `arb_hold` is asserted the moment the arbiter leaves ARB_IDLE -- as soon as
+  // BR is seen -- which is before the buses are released and therefore before
+  // `arb_bus_released_nxt` guards anything. Between those two the ordering in
+  // the state machine does nothing and `arb_hold` is the only thing stopping a
+  // new cycle. An interrupt landing there is the way to ask: the acknowledge
+  // cycle is one the processor wants and was not already running.
+  //
+  // Measured rather than merely asserted, because the number says how wide the
+  // window is: one cycle starts at zero wait states and none at six. That one
+  // is the synchroniser's shadow -- BR takes two clocks to become visible and a
+  // cycle may legitimately start in them -- so more than one would mean a cycle
+  // started after the request was seen.
+  task automatic irq_with_br(input logic [7:0] waits, output int started);
+    int n;
+    begin
+      core_reset();
+      mem.clear();
+      load();
+      poke_l(23'h00003E, IRQ_H);
+      poke_w(IRQ_H[23:1] + 23'd0, 16'h31FC);
+      poke_w(IRQ_H[23:1] + 23'd1, 16'h4444);
+      poke_w(IRQ_H[23:1] + 23'd2, 16'h0906);
+      poke_w(IRQ_H[23:1] + 23'd3, 16'h4E73);
+      poke_w(23'h000483, 16'h0000);
+      mem_waits = waits;
+      core_start();
+      repeat (14) @(posedge clk);
+
+      // Both at once.
+      as_during_grant = 0;
+      watch_as_on     = 1'b1;
+      br_n_i          = 1'b0;
+      ipl_n_i         = ~3'd7;
+      n = 0;
+      while ((a_oe !== 1'b0) && (n < 200)) begin
+        @(posedge clk);
+        n = n + 1;
+      end
+      watch_as_on = 1'b0;
+      started     = as_during_grant;
+      if (started > 1) begin
+        $display("FAIL: interrupt with BR (%0d waits): %0d cycles started after \
+the request was visible", waits, started);
+        errors = errors + 1;
+      end
+
+      bgack_n_i    = 1'b0;
+      wait (bg_n_o === 1'b1);
+      br_n_i       = 1'b1;
+      master_drive = 1'b1;
+      repeat (20) @(posedge clk);
+      master_drive = 1'b0;
+      bgack_n_i    = 1'b1;
+      wait (fc_oe === 1'b1);
+      run_until_pc(IRQ_H, 8000);
+      ipl_n_i = 3'b111;
+      run_until_pc(DONE, 8000);
+      mem_waits = 8'd0;
+      check_result("interrupt with BR");
+      expect_u32("interrupt with BR: the handler ran",
+                 {16'd0, mem.peek(23'h000483)}, 32'h0000_4444);
     end
   endtask
 
@@ -458,14 +525,19 @@ comparison below would prove nothing", n_quiet);
     join_none
     repeat (20) @(posedge clk);
     disable watch_as;
-    // Two things stop a cycle here: the bus unit sits in ST_ARB, which has no
-    // arm that starts one, and `arb_hold` separately suppresses the request.
-    // Tying `arb_hold` low fails nothing in the suite, and the interrupt sweep
-    // above establishes why -- both the ST_IDLE arm and `after_cycle` test the
-    // grant *before* the request, so the ordering already enforces what
-    // `arb_hold` guards. It is redundant with the ordering rather than
-    // untested, which is a better reason to leave it alone than the one this
-    // comment used to give.
+    // Two things stop a cycle here and they cover different windows. Once the
+    // grant is out and the buses are released, the ordering does it: the bus
+    // unit sits in ST_ARB, which has no arm that starts a cycle, and both the
+    // ST_IDLE arm and `after_cycle` test the grant before the request. Before
+    // that -- from BR being seen until the buses are handed over -- only
+    // `arb_hold` does, because `arb_bus_released_nxt` is still low.
+    //
+    // Tying `arb_hold` low still fails nothing here, and `irq_with_br` above
+    // measures why: at zero wait states exactly one cycle starts after BR, and
+    // that one is the synchroniser's shadow rather than anything `arb_hold`
+    // could have stopped. So its window is real but at most a clock wide, and
+    // no test in this file has been able to land a request inside it. That is
+    // narrower than "untested logic" and it is still not "dead logic".
     expect_int("granted: the processor starts no cycle", as_during_grant, 0);
     expect_u32("granted: the buses stay released",
                {28'd0, a_oe, as_oe, ds_oe, fc_oe}, 32'd0);
@@ -489,6 +561,14 @@ comparison below would prove nothing", n_quiet);
     end
 
     irq_grant_sweep();
+
+    begin
+      int s0, s6;
+      irq_with_br(8'd0, s0);
+      irq_with_br(8'd6, s6);
+      $display("  interrupt with BR: cycles started after BR and before the \
+release: %0d at 0 waits, %0d at 6", s0, s6);
+    end
 
     sweep_grant();
 
