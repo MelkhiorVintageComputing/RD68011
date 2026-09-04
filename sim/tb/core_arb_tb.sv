@@ -37,6 +37,7 @@ module core_arb_tb;
   localparam logic [31:0] SSP0 = 32'h0000_2000;
   localparam logic [31:0] PC0  = 32'h0000_1000;
   localparam logic [31:0] DONE = 32'h0000_1012;   // the branch-to-self
+  localparam logic [31:0] IRQ_H = 32'h0000_1100;  // the level 7 handler
 
   int i;
   int n_quiet;
@@ -45,6 +46,16 @@ module core_arb_tb;
   logic        q_rw   [0:MAXTR-1];
 
   int as_during_grant;
+  // Whether the processor actually *wanted* the bus while it did not have
+  // it. Without this, "no cycle started" is satisfied by a processor that
+  // was not asking for one, and the check is vacuous.
+  int req_during_grant;
+  int irq_grant_want, irq_grant_idle;
+  // At module scope rather than forked inside the task: iverilog aborts on a
+  // join_none in an automatic task, and a gated always block says the same
+  // thing with less machinery.
+  logic watch_as_on;
+  always @(negedge as_n_o) if (watch_as_on) as_during_grant = as_during_grant + 1;
 
   // The alternate master, as far as this file needs one: something that drives
   // the data bus while it owns it. Without it a re-latch during the grant
@@ -53,6 +64,136 @@ module core_arb_tb;
   localparam logic [15:0] MASTER_D = 16'h0E66;
   logic master_drive;
   assign dbus = master_drive ? MASTER_D : 16'bz;
+
+
+  // ---------------------------------------------------------------------------
+  // An interrupt arriving while another master owns the bus
+  //
+  // Everything above interrupts nothing. But a machine with DMA in it takes
+  // interrupts during DMA constantly, and an interrupt is the one event that
+  // makes the processor want the bus for something it did not ask for: an
+  // acknowledge cycle in CPU space, a vector read, a frame push and a refill,
+  // none of which the microcode was already running when the bus went away.
+  //
+  // Two things have to hold. The processor must start no cycle while the bus is
+  // someone else's -- and it must *want* one, or that proves nothing, so
+  // `req_valid` is watched too and a run where the processor never asked is a
+  // failure. Then the interrupt has to be taken once the bus comes back, and
+  // the interrupted program has to finish.
+  //
+  // The arrival point is swept in half-clock steps at two memory latencies,
+  // because the state the grant lands in decides which arm of the bus unit
+  // holds it off.
+  //
+  // What this does *not* do is fail. Four injections were tried and none of
+  // them made it: tying `arb_hold` low; letting ST_ARB reach ST_S0 directly;
+  // reordering the ST_IDLE arm to start a cycle before testing the grant; and
+  // masking IPL while the bus is away. The first three are all subsumed by one
+  // fact -- ST_ARB has no arm that reaches ST_S0, and both the ST_IDLE arm and
+  // `after_cycle` test the grant *before* the request -- so the ordering alone
+  // enforces the property and `arb_hold` is redundant with it. That sharpens
+  // what the note further down used to say: `arb_hold` is not untested logic
+  // that happens to be unreached, it is logic the ordering already covers.
+  // The fourth is not a defect at all: UM 3.5 requires the level to be held
+  // until acknowledged, so an interrupt masked during the grant is simply taken
+  // when the bus returns, which is what this asserts anyway.
+  //
+  // So this is a regression test and not a gate, and it is worth keeping as
+  // one: it asserts end to end that an interrupt arriving during DMA is
+  // neither lost nor served early, and that the interrupted program finishes.
+  // Anything that breaks the deferral in a way the ordering does not already
+  // prevent will fire it.
+  // ---------------------------------------------------------------------------
+  task automatic irq_grant_once(input int delay_half, input logic [7:0] waits);
+    begin
+      core_reset();
+      mem.clear();
+      load();
+      poke_l(23'h00003E, IRQ_H);              // autovector 31, level 7
+      poke_w(IRQ_H[23:1] + 23'd0, 16'h31FC);  // MOVE.W #$4444,($0906).W
+      poke_w(IRQ_H[23:1] + 23'd1, 16'h4444);
+      poke_w(IRQ_H[23:1] + 23'd2, 16'h0906);
+      poke_w(IRQ_H[23:1] + 23'd3, 16'h4E73);  // and back, so the program finishes
+      poke_w(23'h000483, 16'h0000);
+      mem_waits = waits;
+      core_start();
+
+      repeat (12) @(posedge clk);
+      repeat (delay_half) @(clk);             // half-clock steps
+      br_n_i = 1'b0;
+      wait (bg_n_o === 1'b0);
+      i = 0;
+      while ((a_oe !== 1'b0) && (i < 120)) begin
+        @(posedge clk);
+        i = i + 1;
+      end
+      bgack_n_i    = 1'b0;
+      wait (bg_n_o === 1'b1);
+      br_n_i       = 1'b1;
+      master_drive = 1'b1;
+
+      // ... and only now does the interrupt arrive.
+      ipl_n_i          = ~3'd7;
+      as_during_grant  = 0;
+      req_during_grant = 0;
+      watch_as_on      = 1'b1;
+      for (i = 0; i < 40; i = i + 1) begin
+        @(posedge clk);
+        if (dut.u_seq.req_valid) req_during_grant = req_during_grant + 1;
+      end
+      watch_as_on = 1'b0;
+      if (as_during_grant != 0) begin
+        $display("FAIL: interrupt during a grant (+%0d half, %0d waits): the \
+processor started %0d cycle(s) on someone else's bus", delay_half, waits,
+                 as_during_grant);
+        errors = errors + 1;
+      end
+      if (req_during_grant == 0) irq_grant_idle = irq_grant_idle + 1;
+      else                       irq_grant_want = irq_grant_want + 1;
+      if ((a_oe !== 1'b0) || (as_oe !== 1'b0) || (ds_oe !== 1'b0) ||
+          (fc_oe !== 1'b0)) begin
+        $display("FAIL: interrupt during a grant (+%0d half): the buses are \
+driven", delay_half);
+        errors = errors + 1;
+      end
+
+      master_drive = 1'b0;
+      bgack_n_i    = 1'b1;                    // and gives it back
+      wait (fc_oe === 1'b1);
+
+      run_until_pc(IRQ_H, 8000);
+      ipl_n_i = 3'b111;                       // one interrupt, not a stream
+      run_until_pc(DONE, 8000);
+      mem_waits = 8'd0;
+      expect_u32("interrupt during a grant: the handler ran once the bus came back",
+                 {16'd0, mem.peek(23'h000483)}, 32'h0000_4444);
+      expect_u32("interrupt during a grant: autovector 31",
+                 {16'd0, mem.peek((SSP0 - 32'd8 + 32'd6) >> 1)},
+                 {22'd0, 8'd31, 2'b00});
+      // And the program's own work completes: an interrupt it did not ask for,
+      // taken across a bus it did not own, costs it time and nothing else.
+      check_result("interrupt during a grant");
+    end
+  endtask
+
+  task automatic irq_grant_sweep();
+    int d;
+    begin
+      irq_grant_want = 0;
+      irq_grant_idle = 0;
+      for (d = 0; d < 20; d = d + 1) irq_grant_once(d, 8'd0);
+      for (d = 0; d < 12; d = d + 1) irq_grant_once(d, 8'd6);
+      $display("  interrupt during a grant: %0d arrivals with a request \
+outstanding, %0d with the processor idle", irq_grant_want, irq_grant_idle);
+      // Both states are worth reaching and only one of them is the interesting
+      // one: a request outstanding is what the hold-off has to suppress.
+      if (irq_grant_want == 0) begin
+        $display("FAIL: no arrival found the processor wanting the bus, so the \
+sweep proves nothing");
+        errors = errors + 1;
+      end
+    end
+  endtask
 
   task automatic run_until_pc(input logic [31:0] want, input int limit);
     int n;
@@ -317,13 +458,14 @@ comparison below would prove nothing", n_quiet);
     join_none
     repeat (20) @(posedge clk);
     disable watch_as;
-    // Two things stop a cycle here and only one of them is covered: the bus
-    // unit sits in ST_ARB, which has no arm that starts one, and `arb_hold`
-    // separately suppresses the request. Tying `arb_hold` low fails nothing in
-    // the suite, so what it guards -- the window between the request being seen
-    // and the bus actually being handed over -- is not reached by any test
-    // here. It is not dead logic, it is untested logic, and the difference
-    // matters if anyone is tempted to remove it.
+    // Two things stop a cycle here: the bus unit sits in ST_ARB, which has no
+    // arm that starts one, and `arb_hold` separately suppresses the request.
+    // Tying `arb_hold` low fails nothing in the suite, and the interrupt sweep
+    // above establishes why -- both the ST_IDLE arm and `after_cycle` test the
+    // grant *before* the request, so the ordering already enforces what
+    // `arb_hold` guards. It is redundant with the ordering rather than
+    // untested, which is a better reason to leave it alone than the one this
+    // comment used to give.
     expect_int("granted: the processor starts no cycle", as_during_grant, 0);
     expect_u32("granted: the buses stay released",
                {28'd0, a_oe, as_oe, ds_oe, fc_oe}, 32'd0);
@@ -345,6 +487,8 @@ comparison below would prove nothing", n_quiet);
         errors = errors + 1;
       end
     end
+
+    irq_grant_sweep();
 
     sweep_grant();
 
