@@ -129,6 +129,9 @@
       .ipl_n_i (ipl_n_i), .berr_n_i (berr_n_i),
       .reset_n_i (reset_n_i), .reset_n_o (reset_n_o), .reset_n_oe (reset_n_oe),
       .halt_n_i (halt_n_i), .halt_n_o (halt_n_o), .halt_n_oe (halt_n_oe),
+      // Not an MC68010 pin and nothing here builds a loop buffer, so it is
+      // tied off rather than left dangling. See doc/pinout.md.
+      .loop_inv_n_i (1'b1),
       .e_o (e_o), .vpa_n_i (vpa_n_i), .vma_n_o (vma_n_o), .vma_oe (vma_oe),
       .fc_o (fc_o), .fc_oe (fc_oe)
   );

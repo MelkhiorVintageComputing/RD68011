@@ -220,6 +220,71 @@ module bus_arb_tb;
     br_n_i = 1'b1;
     repeat (6) @(posedge clk);
 
+    // ---- A grant during a retry --------------------------------------------
+    //
+    // Every other state consults the grant unconditionally. ST_RETRY does not:
+    // while HALT is asserted it stays there, so it is the one state that can
+    // ignore a bus request for an unbounded time -- as long as whoever asserted
+    // BERR and HALT keeps HALT low. That makes it the interesting one, and a
+    // shared bus is exactly where a retry comes from in the first place.
+    //
+    // The property is the same as everywhere else and reaches it by a different
+    // route: the output enables are driven from `bus_granted` directly rather
+    // than from the state machine, so the buses go away on the grant even while
+    // the machine sits in RETRY. Then the rerun must wait for the bus to come
+    // back, and must still be the same cycle.
+    br_n_i    = 1'b1;
+    bgack_n_i = 1'b1;
+    repeat (4) @(posedge clk);
+    slv.poke(23'h002040, 16'hC0DE);
+    as_falls = 0;
+    bus_start(rd68011_pkg::CT_READ, rd68011_pkg::FC_SUPER_D,
+              23'h002040, 1'b1, 1'b1, 16'h0000, t0);
+    wait_state(t0, 4);
+    tb_berr_n = 1'b0;
+    tb_halt_n = 1'b0;               // BERR with HALT: rerun the cycle
+    repeat (4) @(posedge clk);
+    tb_berr_n = 1'b1;               // ... and HALT held, so the rerun waits
+
+    // Somebody wants the bus while the processor is waiting to rerun.
+    br_n_i = 1'b0;
+    wait (bg_n_o === 1'b0);
+    repeat (2) @(posedge clk);
+    expect_val("retry: the buses are released to the grant, not held by RETRY",
+               {28'd0, a_oe, as_oe, ds_oe, fc_oe}, 32'd0);
+    bgack_n_i = 1'b0;
+    wait (bg_n_o === 1'b1);
+    br_n_i    = 1'b1;
+
+    // Now let the retry go while the bus still belongs to someone else. The
+    // processor must not rerun into it.
+    tb_halt_n = 1'b1;
+    arb_held  = 1'b1;
+    fork
+      begin : retry_watch
+        forever begin
+          @(negedge as_n_o);
+          arb_held = 1'b0;
+        end
+      end
+    join_none
+    repeat (12) @(posedge clk);
+    disable retry_watch;
+    expect_val("retry: no rerun while another master holds the bus",
+               {31'd0, arb_held}, 32'd1);
+    expect_val("retry: the buses stay released",
+               {28'd0, a_oe, as_oe, ds_oe, fc_oe}, 32'd0);
+
+    bgack_n_i = 1'b1;               // and gives it back
+    bus_finish();
+    expect_eq("retry: AS asserted twice, once before the grant and once after",
+              as_falls, 2);
+    expect_val("retry: the rerun read the same address",
+               {16'd0, req_rdata}, {16'd0, 16'hC0DE});
+    expect_val("retry: and terminated normally",
+               {29'd0, req_end}, {29'd0, rd68011_pkg::CE_DTACK});
+    repeat (6) @(posedge clk);
+
     harness_done("bus_arb_tb");
   end
 
