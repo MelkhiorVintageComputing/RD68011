@@ -6,7 +6,7 @@
 #
 # 48 ns -- 20.8 MHz, against the fastest original MC68010's 12.5 -- is the
 # number every published figure is measured against, and it is kept there so
-# they stay comparable. It is not the limit: the design closes at 40 ns, and
+# they stay comparable. It is not the limit: the design closes at 34 ns, and
 # doc/size-and-speed.md has the search.
 #
 # What limits it is measured rather than read off `make impl`, because static

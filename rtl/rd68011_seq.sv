@@ -310,7 +310,7 @@ module rd68011_seq #(
   // is what lets it be a block memory rather than logic; doc/size-and-speed.md
   // measures both.
   //
-  // uw_q inside it takes no reset, which is the one exception to CLAUDE.md's
+  // l1_q inside it takes no reset, which is the one exception to CLAUDE.md's
   // rule; tools/reset_audit.py names it, enforces that it is the only one, and
   // carries the argument. The obligation it creates is discharged here: the
   // first arm of `upc_nxt` below tests `rst_n` as well as `reset_sync_n`, so

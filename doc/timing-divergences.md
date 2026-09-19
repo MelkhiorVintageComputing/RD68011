@@ -104,7 +104,9 @@ nanoseconds of clock period: the ALU's result feeds the zero flag, which feeds
 a conditional microword's address, which feeds the microcode store, whose
 output has to reach the bus request pins inside half a clock -- and a
 multiplier in that chain puts a DSP in it, whether or not any multiply ever
-takes its operands from read data. `rtl/rd68011_mul.sv` has the argument.
+takes its operands from read data. `rtl/rd68011_mul.sv` has the argument, and
+why it is now history: that chain no longer exists, and no multiply can take
+read data, because the multiplier's operand buses leave it out.
 
 The divider was sequential from the start, for the more ordinary reason that a
 32-by-16 divide is large; `rtl/rd68011_divider.sv` explains. It takes 33 clocks

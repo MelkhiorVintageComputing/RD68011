@@ -631,16 +631,16 @@ def field_width(name):
 #
 # The bus request the processor presents has to come from the microword that
 # will be current *after* the coming edge, because the bus unit latches it on
-# the edge that ends the current cycle. That means reading the microcode store
-# at an address the sequencer has only just computed -- and with a conditional
-# microword, that address depends on the ALU, which depends on read data. The
-# whole chain is inside half a clock, and it is what limits this design's
-# frequency.
+# the edge that ends the current cycle. That used to mean a second read of the
+# microcode store, at an address computed from the condition -- which put the
+# ALU, and read data behind it, in half a clock. It is now the previews each
+# microword carries for its successors (below), selected on the conditions in
+# BUS_STEERING_CONDS, and doc/critical-path.md has both.
 #
-# So the second read is of a store of its own, holding only the fields a
-# request is built from: a fifth of the width, and a fifth of the logic. Two of
-# its bits are not fields at all but answers computed here, because what the
-# request needs from them is one bit each rather than the six the field holds.
+# These are the fields a request is built from: a fifth of the microword's
+# width. Two of them are not fields at all but answers computed here, because
+# what the request needs from them is one bit each rather than the six the
+# field holds.
 #
 # The order here is the bit order, least significant first, as with FIELDS.
 REQ_FIELDS = [

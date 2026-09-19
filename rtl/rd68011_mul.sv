@@ -5,14 +5,20 @@
 //
 // WHY IT IS NOT IN THE ALU
 //
-// The ALU's result feeds the zero flag, the zero flag feeds the micro-address
-// of a conditional microword, that feeds the microcode store, and the store's
-// output has to reach the bus request pins on the edge that ends the current
-// cycle -- all inside half a clock, because read data arrives on a falling edge
-// and the request is latched on a rising one. A multiplier in that chain puts a
-// DSP in it, and synthesis has no way to know that no multiply ever takes its
-// operands from read data. Keeping it out is worth about ten nanoseconds of
-// clock period; doc/timing-divergences.md has the measurement.
+// When it was taken out, the ALU's result fed the zero flag, the zero flag fed
+// the micro-address of a conditional microword, that fed the microcode store,
+// and the store's output had to reach the bus request pins on the edge that
+// ends the current cycle -- all inside half a clock, because read data arrives
+// on a falling edge and the request is latched on a rising one. A multiplier in
+// that chain put a DSP in it, and synthesis had no way to know that no multiply
+// ever takes its operands from read data. Taking it out was worth about ten
+// nanoseconds of clock period; doc/timing-divergences.md has the measurement.
+//
+// Neither end of that chain is there any more. The bus request is steered on
+// MOVEM's mask test alone, and the multiplier's operands come from source
+// buses that leave read data out, which assemble.py enforces
+// (doc/critical-path.md). So the reason is history; the arrangement stays,
+// because putting the multiplier back would be a new measurement, not a revert.
 //
 // So it sits outside, with registered operands and a registered result, exactly
 // as the divider does. One microword starts it, the next reads the answer.

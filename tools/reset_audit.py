@@ -25,7 +25,7 @@ it for a quick pass during editing.
 
 One register has no reset, and it is named here
 -----------------------------------------------
-The microcode store's output register, `uw_q` in rtl/gen/rd68011_ucode_rom.sv,
+The microcode store's output register, `l1_q` in rtl/gen/rd68011_ucode_rom.sv,
 takes no reset value. It cannot: a block memory's read register is inside the
 memory primitive, so requiring a reset on it requires the store to be logic --
 6665 LUTs on the Artix-7 and 23604 logic elements on the MAX 10, which
