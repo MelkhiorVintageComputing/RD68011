@@ -707,6 +707,28 @@ DEFAULTS['rq1'] = 0
 # pins, silently.
 BUS_STEERING_CONDS = ('MASK',)
 
+# --------------------------------------------------------------------------
+# What read data may meet.
+#
+# The data a bus cycle reads is latched on the falling edge of S6, and the
+# microword that takes it as an operand commits on the next rising edge: half a
+# clock. Whatever it reaches in that half clock is the critical path, and the
+# microprogram needs very little of it. Every microword with a read-data source
+# passes it through, concatenates it with another word (an absolute long
+# address, a long immediate, MOVEP's bytes), sign-extends it, or ORs it into
+# something; none adds it, shifts it, multiplies or divides it, or tests one of
+# its bits. Memory operands those need are staged in T1 first.
+#
+# So rd68011_seq.sv builds its operand buses twice. The adder, the shifter, the
+# decimal unit, the multiplier, the divider and the bit test take the pair
+# without read data, and only the ALU operations below -- and the flag rules,
+# other than the two that come from those units -- see it. A microword outside
+# that would compute on zero where it expected its operand, silently, so
+# assemble.py fails the build instead.
+READ_DATA_SRCS = ('RDATA', 'RDATA_SX', 'RDATA_B')
+READ_DATA_ALU = ('A', 'B', 'CAT', 'CAT8', 'SXW', 'OR')
+READ_DATA_NOT_CCR = ('BIT', 'SHIFT')
+
 
 def req_lsb(name):
     p = 0

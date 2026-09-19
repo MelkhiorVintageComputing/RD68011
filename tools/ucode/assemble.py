@@ -179,6 +179,50 @@ def check_arms(words, rq):
     return sorted(steering), problems
 
 
+def check_read_data(words):
+    """Which microwords take read data as an operand, and what they do with it.
+
+    rd68011_seq.sv gives read data to the ALU operations in
+    isa.READ_DATA_ALU and to nothing else: the adder, the shifter, the decimal
+    unit, the multiplier, the divider and the bit test are fed from operand
+    buses that leave it out, which is what takes them out of the half clock
+    between read data arriving and the next bus cycle starting. A microword
+    that needed one of them would get zero for its operand, so it is a build
+    failure here rather than a wrong result there.
+    """
+    src = {v: k for k, v in isa.SRC.items()}
+    alu = {v: k for k, v in isa.ALU.items()}
+    ccr = {v: k for k, v in isa.CCR.items()}
+    bad = []
+    for i, (fields, _) in enumerate(words):
+        used = [src[fields.get(n, isa.DEFAULTS[n])] for n in ('asrc', 'bsrc')]
+        rd = [u for u in used if u in isa.READ_DATA_SRCS]
+        if not rd:
+            continue
+        what = []
+        op = alu[fields.get('alu', isa.DEFAULTS['alu'])]
+        if op not in isa.READ_DATA_ALU:
+            what.append('alu=%s' % op)
+        rule = ccr[fields.get('ccr', isa.DEFAULTS['ccr'])]
+        if rule in isa.READ_DATA_NOT_CCR:
+            what.append('ccr=%s' % rule)
+        if fields.get('divst', isa.DEFAULTS['divst']):
+            what.append('divst=1')
+        if what:
+            bad.append(
+                'microword %d takes %s and uses %s. rd68011_seq.sv only gives '
+                'read data to alu=%s, and not to the flag rules %s or the '
+                'divider, so this would compute on zero. Stage the operand in '
+                'T1 first, or widen isa.READ_DATA_ALU and the operand '
+                'multiplexers in rd68011_seq.sv to match -- and re-measure, '
+                'because that is what decides whether the adder and the '
+                'shifter are in the half clock after read data arrives.'
+                % (i, ' and '.join(rd), ', '.join(what),
+                   '/'.join(isa.READ_DATA_ALU),
+                   ' and '.join(isa.READ_DATA_NOT_CCR)))
+    return bad
+
+
 def check_patterns(patterns):
     """Report any opcode pattern completely shadowed by an earlier one.
 
@@ -795,6 +839,7 @@ def main():
     rq = fill_previews(words)
     steering, problems = check_arms(words, rq)
     problems = problems + check_ir_dst(words, rq)
+    problems = problems + check_read_data(words)
     if problems:
         for p in problems:
             print('error: ' + p)
@@ -854,6 +899,13 @@ def main():
     print('conditions that steer a bus request: %s (rd68011_seq.sv implements %s)'
           % (', '.join(steering) or 'none',
              ', '.join(isa.BUS_STEERING_CONDS)))
+    src = {v: k for k, v in isa.SRC.items()}
+    rdw = [f for f, _ in words
+           if any(src[f.get(n, isa.DEFAULTS[n])] in isa.READ_DATA_SRCS
+                  for n in ('asrc', 'bsrc'))]
+    print('microwords that take read data as an operand: %d, through alu=%s '
+          'only (rd68011_seq.sv gives it to nothing else)'
+          % (len(rdw), '/'.join(isa.READ_DATA_ALU)))
     if changed:
         print('updated: ' + ', '.join(changed))
     else:

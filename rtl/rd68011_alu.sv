@@ -21,12 +21,23 @@
 // where S is the source, D the destination and R the result, m the most
 // significant bit of the operation's size. CMP uses SUB's rules. The logical
 // operations clear both.
+//
+// TWO PAIRS OF OPERANDS
+//
+// `a` and `b` may carry the data a bus cycle has just read; `a_op` and `b_op`
+// are the same sources with that one left out. Only the operations the
+// microprogram applies to read data take the first pair -- passing it, CAT,
+// CAT8, SXW and OR, which is isa.READ_DATA_ALU -- and everything else,
+// the adders and the decimal correction in particular, takes the second. The
+// result multiplexer is where the two meet. rd68011_seq.sv says why.
 
 module rd68011_alu (
     input  logic [rd68011_ucode_pkg::U_ALU_W-1:0]  op,
     input  logic [rd68011_ucode_pkg::U_SIZE_W-1:0] size,
     input  logic                            [31:0] a,      // source
     input  logic                            [31:0] b,      // destination
+    input  logic                            [31:0] a_op,   // the same two,
+    input  logic                            [31:0] b_op,   // without read data
     input  logic                                   x_in,   // the X flag
     output logic                            [31:0] y,
     output logic                                   n_out,
@@ -46,13 +57,13 @@ module rd68011_alu (
 
   // The adders are always 32 bits wide; the flags are taken at the width the
   // operation actually used.
-  assign sum = {1'b0, b} + {1'b0, a};
-  assign dif = {1'b0, b} - {1'b0, a};
+  assign sum = {1'b0, b_op} + {1'b0, a_op};
+  assign dif = {1'b0, b_op} - {1'b0, a_op};
 
   // The extended forms carry X in and out, for multi-precision arithmetic.
   logic [32:0] sumx, difx;
-  assign sumx = {1'b0, b} + {1'b0, a} + {32'd0, x_in};
-  assign difx = {1'b0, b} - {1'b0, a} - {32'd0, x_in};
+  assign sumx = {1'b0, b_op} + {1'b0, a_op} + {32'd0, x_in};
+  assign difx = {1'b0, b_op} - {1'b0, a_op} - {32'd0, x_in};
 
   // -- Binary-coded decimal --------------------------------------------------
   //
@@ -80,8 +91,8 @@ module rd68011_alu (
   logic [7:0] bcd_add;
   logic       bcd_add_c;
 
-  assign bcd_sum     = {1'b0, b[7:0]} + {1'b0, a[7:0]} + {8'd0, x_in};
-  assign bcd_lo_sum  = {2'd0, b[3:0]} + {2'd0, a[3:0]} + {5'd0, x_in};
+  assign bcd_sum     = {1'b0, b_op[7:0]} + {1'b0, a_op[7:0]} + {8'd0, x_in};
+  assign bcd_lo_sum  = {2'd0, b_op[3:0]} + {2'd0, a_op[3:0]} + {5'd0, x_in};
   assign bcd_add_c   = bcd_sum[8] || (bcd_sum[7:0] > 8'h99);
   assign bcd_add_adj = {3'd0, (bcd_lo_sum > 6'd9) ? 6'h06 : 6'h00} +
                        (bcd_add_c ? 9'h060 : 9'h000);
@@ -97,10 +108,10 @@ module rd68011_alu (
   logic [7:0] bcd_sub;
   logic       bcd_sub_c;
 
-  assign bcd_dif       = {2'b0, b[7:0]} - {2'b0, a[7:0]} - {9'd0, x_in};
+  assign bcd_dif       = {2'b0, b_op[7:0]} - {2'b0, a_op[7:0]} - {9'd0, x_in};
   assign bcd_hi_borrow = bcd_dif[9] | bcd_dif[8];
-  assign bcd_lo_borrow = ({2'd0, b[3:0]} - {2'd0, a[3:0]} - {5'd0, x_in}) > 6'd15
-                         || (({1'b0, b[3:0]} < ({1'b0, a[3:0]} + {4'd0, x_in})));
+  assign bcd_lo_borrow = ({2'd0, b_op[3:0]} - {2'd0, a_op[3:0]} - {5'd0, x_in}) > 6'd15
+                         || (({1'b0, b_op[3:0]} < ({1'b0, a_op[3:0]} + {4'd0, x_in})));
   assign bcd_sub_t     = bcd_dif
                        - (bcd_lo_borrow ? 10'd6   : 10'd0)
                        - (bcd_hi_borrow ? 10'h060 : 10'h000);
@@ -113,29 +124,29 @@ module rd68011_alu (
       rd68011_ucode_pkg::U_ALU_B:   y = b;
       rd68011_ucode_pkg::U_ALU_ADD: y = sum[31:0];
       rd68011_ucode_pkg::U_ALU_SUB: y = dif[31:0];
-      rd68011_ucode_pkg::U_ALU_AND: y = a & b;
+      rd68011_ucode_pkg::U_ALU_AND: y = a_op & b_op;
       rd68011_ucode_pkg::U_ALU_OR:  y = a | b;
-      rd68011_ucode_pkg::U_ALU_EOR: y = a ^ b;
-      rd68011_ucode_pkg::U_ALU_NOT: y = ~a;
+      rd68011_ucode_pkg::U_ALU_EOR: y = a_op ^ b_op;
+      rd68011_ucode_pkg::U_ALU_NOT: y = ~a_op;
       rd68011_ucode_pkg::U_ALU_CAT:  y = {a[15:0], b[15:0]};
       rd68011_ucode_pkg::U_ALU_SXW:  y = {{16{a[15]}}, a[15:0]};
-      rd68011_ucode_pkg::U_ALU_SXB:  y = {{24{a[7]}},  a[7:0]};
-      rd68011_ucode_pkg::U_ALU_SWAP: y = {a[15:0], a[31:16]};
-      rd68011_ucode_pkg::U_ALU_NOTX: y = ~b;
+      rd68011_ucode_pkg::U_ALU_SXB:  y = {{24{a_op[7]}},  a_op[7:0]};
+      rd68011_ucode_pkg::U_ALU_SWAP: y = {a_op[15:0], a_op[31:16]};
+      rd68011_ucode_pkg::U_ALU_NOTX: y = ~b_op;
       // MOVEP, which moves a register through alternate byte addresses,
       // high-order byte first (PRM section 4). Reading, a byte shifts in at
       // the bottom; writing, the byte wanted is brought down to where a byte
       // write takes it from.
       rd68011_ucode_pkg::U_ALU_CAT8:  y = {b[23:0], a[7:0]};
-      rd68011_ucode_pkg::U_ALU_SHR8:  y = {8'd0,  a[31:8]};
-      rd68011_ucode_pkg::U_ALU_SHR16: y = {16'd0, a[31:16]};
-      rd68011_ucode_pkg::U_ALU_SHR24: y = {24'd0, a[31:24]};
-      rd68011_ucode_pkg::U_ALU_ANDN: y = b & ~a;
+      rd68011_ucode_pkg::U_ALU_SHR8:  y = {8'd0,  a_op[31:8]};
+      rd68011_ucode_pkg::U_ALU_SHR16: y = {16'd0, a_op[31:16]};
+      rd68011_ucode_pkg::U_ALU_SHR24: y = {24'd0, a_op[31:24]};
+      rd68011_ucode_pkg::U_ALU_ANDN: y = b_op & ~a_op;
       // MULU and MULS produce nothing here: the microword carrying them
       // starts rd68011_mul, and the microword after it reads the answer. See
       // that file for why the multiplier is not in this module.
-      rd68011_ucode_pkg::U_ALU_ABCD: y = {b[31:8], bcd_add};
-      rd68011_ucode_pkg::U_ALU_SBCD: y = {b[31:8], bcd_sub};
+      rd68011_ucode_pkg::U_ALU_ABCD: y = {b_op[31:8], bcd_add};
+      rd68011_ucode_pkg::U_ALU_SBCD: y = {b_op[31:8], bcd_sub};
       rd68011_ucode_pkg::U_ALU_ADDX: y = sumx[31:0];
       rd68011_ucode_pkg::U_ALU_SUBX: y = difx[31:0];
       default:                      y = a;
@@ -151,19 +162,19 @@ module rd68011_alu (
   logic        xb;
 
   assign xb     = x_in;
-  assign sum_b  = {1'b0, b[7:0]}  + {1'b0, a[7:0]};
-  assign dif_b  = {1'b0, b[7:0]}  - {1'b0, a[7:0]};
-  assign sumx_b = {1'b0, b[7:0]}  + {1'b0, a[7:0]}  + {8'd0, xb};
-  assign difx_b = {1'b0, b[7:0]}  - {1'b0, a[7:0]}  - {8'd0, xb};
-  assign sum_w  = {1'b0, b[15:0]} + {1'b0, a[15:0]};
-  assign dif_w  = {1'b0, b[15:0]} - {1'b0, a[15:0]};
-  assign sumx_w = {1'b0, b[15:0]} + {1'b0, a[15:0]} + {16'd0, xb};
-  assign difx_w = {1'b0, b[15:0]} - {1'b0, a[15:0]} - {16'd0, xb};
+  assign sum_b  = {1'b0, b_op[7:0]}  + {1'b0, a_op[7:0]};
+  assign dif_b  = {1'b0, b_op[7:0]}  - {1'b0, a_op[7:0]};
+  assign sumx_b = {1'b0, b_op[7:0]}  + {1'b0, a_op[7:0]}  + {8'd0, xb};
+  assign difx_b = {1'b0, b_op[7:0]}  - {1'b0, a_op[7:0]}  - {8'd0, xb};
+  assign sum_w  = {1'b0, b_op[15:0]} + {1'b0, a_op[15:0]};
+  assign dif_w  = {1'b0, b_op[15:0]} - {1'b0, a_op[15:0]};
+  assign sumx_w = {1'b0, b_op[15:0]} + {1'b0, a_op[15:0]} + {16'd0, xb};
+  assign difx_w = {1'b0, b_op[15:0]} - {1'b0, a_op[15:0]} - {16'd0, xb};
 
   always_comb begin
     if (is_byte) begin
-      sm    = a[7];
-      dm    = b[7];
+      sm    = a_op[7];
+      dm    = b_op[7];
       rm    = y[7];
       unique case (op)
         rd68011_ucode_pkg::U_ALU_SUB:  carry = dif_b[8];
@@ -172,8 +183,8 @@ module rd68011_alu (
         default:                       carry = sum_b[8];
       endcase
     end else if (is_word) begin
-      sm    = a[15];
-      dm    = b[15];
+      sm    = a_op[15];
+      dm    = b_op[15];
       rm    = y[15];
       unique case (op)
         rd68011_ucode_pkg::U_ALU_SUB:  carry = dif_w[16];
@@ -182,8 +193,8 @@ module rd68011_alu (
         default:                       carry = sum_w[16];
       endcase
     end else begin
-      sm    = a[31];
-      dm    = b[31];
+      sm    = a_op[31];
+      dm    = b_op[31];
       rm    = y[31];
       unique case (op)
         rd68011_ucode_pkg::U_ALU_SUB:  carry = dif[32];

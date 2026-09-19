@@ -486,6 +486,7 @@ module rd68011_seq #(
   // declared here because a name has to be declared before it is used
   // (doc/coding-standard.md).
   logic [31:0] a_bus, b_bus, y;  // the ALU result bus and its two sources
+  logic [31:0] a_ops, b_ops;     // the two sources, without read data
   logic        cc_true;          // the condition the cc field selects
   logic  [2:0] irq_taken;        // the level being serviced, latched
   logic        exc_from_stop;    // this exception was taken out of a STOP
@@ -763,110 +764,140 @@ module rd68011_seq #(
   // The other two tools infer the real dependencies and were happy, which is
   // exactly the kind of disagreement `make lint` cannot catch on its own.
   // Two muxes is also what the hardware is: two independent source buses.
+  //
+  // Each is built in two steps, and the split is the design's critical path.
+  // Read data is latched on the falling edge of S6 and the microword that
+  // reads it commits on the next rising one, so anything it reaches has half a
+  // clock. What it actually has to reach is small: every microword that takes
+  // read data as an operand passes it through, concatenates it, sign-extends
+  // it or ORs it (isa.READ_DATA_ALU), and none adds it, shifts it, multiplies
+  // or divides it, or tests a bit of it. So `a_ops` and `b_ops` are every
+  // other source, and they alone feed the adder, the shifter, the decimal
+  // unit, the multiplier, the divider and the bit test; `a_bus` and `b_bus`
+  // are those with read data put back, and reach only the ALU operations that
+  // need it and the flags TAS takes from the operand. Read data then passes
+  // one 2:1 multiplexer and a concatenation on its way to the next address,
+  // where it used to pass a 32-bit adder or the shifter's barrel as far as
+  // static timing could tell. assemble.py fails the build if a microword ever
+  // needs more than that, because the RTL would give it zero.
 
   always_comb begin
     unique case (f_asrc)
-      rd68011_ucode_pkg::U_ASRC_ZERO:     a_bus = 32'd0;
-      rd68011_ucode_pkg::U_ASRC_ONE:      a_bus = 32'd1;
-      rd68011_ucode_pkg::U_ASRC_TWO:      a_bus = 32'd2;
-      rd68011_ucode_pkg::U_ASRC_FOUR:     a_bus = 32'd4;
-      rd68011_ucode_pkg::U_ASRC_PC:       a_bus = pc;
-      rd68011_ucode_pkg::U_ASRC_IR_PC:    a_bus = ir_pc;
-      rd68011_ucode_pkg::U_ASRC_IRC_PC:   a_bus = irc_pc;
-      rd68011_ucode_pkg::U_ASRC_IRC:      a_bus = {16'd0, irc};
-      rd68011_ucode_pkg::U_ASRC_IRC_SX:   a_bus = {{16{irc[15]}}, irc};
-      rd68011_ucode_pkg::U_ASRC_IR_SXB:   a_bus = {{24{ir[7]}}, ir[7:0]};
-      rd68011_ucode_pkg::U_ASRC_T0:       a_bus = t0;
-      rd68011_ucode_pkg::U_ASRC_T1:       a_bus = t1;
-      rd68011_ucode_pkg::U_ASRC_RDATA:    a_bus = {16'd0, rdata};
-      rd68011_ucode_pkg::U_ASRC_RDATA_SX: a_bus = {{16{rdata[15]}}, rdata};
-      rd68011_ucode_pkg::U_ASRC_REG:      a_bus = `RDREG(reg_index);
-      rd68011_ucode_pkg::U_ASRC_CREG:     a_bus = creg_val;
-      rd68011_ucode_pkg::U_ASRC_IR:       a_bus = {16'd0, ir};
-      rd68011_ucode_pkg::U_ASRC_XW:       a_bus = {16'd0, xw};
-      rd68011_ucode_pkg::U_ASRC_UPC:      a_bus = {{(32 - rd68011_ucode_pkg::UADDR){1'b0}},
+      rd68011_ucode_pkg::U_ASRC_ZERO:     a_ops = 32'd0;
+      rd68011_ucode_pkg::U_ASRC_ONE:      a_ops = 32'd1;
+      rd68011_ucode_pkg::U_ASRC_TWO:      a_ops = 32'd2;
+      rd68011_ucode_pkg::U_ASRC_FOUR:     a_ops = 32'd4;
+      rd68011_ucode_pkg::U_ASRC_PC:       a_ops = pc;
+      rd68011_ucode_pkg::U_ASRC_IR_PC:    a_ops = ir_pc;
+      rd68011_ucode_pkg::U_ASRC_IRC_PC:   a_ops = irc_pc;
+      rd68011_ucode_pkg::U_ASRC_IRC:      a_ops = {16'd0, irc};
+      rd68011_ucode_pkg::U_ASRC_IRC_SX:   a_ops = {{16{irc[15]}}, irc};
+      rd68011_ucode_pkg::U_ASRC_IR_SXB:   a_ops = {{24{ir[7]}}, ir[7:0]};
+      rd68011_ucode_pkg::U_ASRC_T0:       a_ops = t0;
+      rd68011_ucode_pkg::U_ASRC_T1:       a_ops = t1;
+      rd68011_ucode_pkg::U_ASRC_REG:      a_ops = `RDREG(reg_index);
+      rd68011_ucode_pkg::U_ASRC_CREG:     a_ops = creg_val;
+      rd68011_ucode_pkg::U_ASRC_IR:       a_ops = {16'd0, ir};
+      rd68011_ucode_pkg::U_ASRC_XW:       a_ops = {16'd0, xw};
+      rd68011_ucode_pkg::U_ASRC_UPC:      a_ops = {{(32 - rd68011_ucode_pkg::UADDR){1'b0}},
                                                    upc_save};
-      rd68011_ucode_pkg::U_ASRC_SSW:      a_bus = {16'd0, ssw};
-      rd68011_ucode_pkg::U_ASRC_FAULT:    a_bus = fault_addr;
-      rd68011_ucode_pkg::U_ASRC_DIB:      a_bus = {16'd0, dib};
+      rd68011_ucode_pkg::U_ASRC_SSW:      a_ops = {16'd0, ssw};
+      rd68011_ucode_pkg::U_ASRC_FAULT:    a_ops = fault_addr;
+      rd68011_ucode_pkg::U_ASRC_DIB:      a_ops = {16'd0, dib};
       // Bits 13-10 are the version number UM 6.4 requires; bits 9-8 are ours,
       // and carry whether a loop was running and which half of it was next.
-      rd68011_ucode_pkg::U_ASRC_VERWORD:  a_bus = {18'd0,
+      rd68011_ucode_pkg::U_ASRC_VERWORD:  a_ops = {18'd0,
                                                    rd68011_pkg::FRAME_VERSION,
                                                    loop_saved, 8'd0};
       // Format in bits 15-12, the vector offset -- the vector number times
       // four -- in the twelve below it (UM figure 6-8).
-      rd68011_ucode_pkg::U_ASRC_FMTVEC8:  a_bus = {16'd0, 4'h8, 2'd0, vec_num,
+      rd68011_ucode_pkg::U_ASRC_FMTVEC8:  a_ops = {16'd0, 4'h8, 2'd0, vec_num,
                                                    2'd0};
-      rd68011_ucode_pkg::U_ASRC_FRAMESZ:  a_bus = 32'd58;
-      rd68011_ucode_pkg::U_ASRC_FRAMEVER: a_bus = 32'd26;
+      rd68011_ucode_pkg::U_ASRC_FRAMESZ:  a_ops = 32'd58;
+      rd68011_ucode_pkg::U_ASRC_FRAMEVER: a_ops = 32'd26;
+      rd68011_ucode_pkg::U_ASRC_INDEX:    a_ops = index_val;
+      rd68011_ucode_pkg::U_ASRC_IRC_SXB:  a_ops = {{24{irc[7]}}, irc[7:0]};
+      rd68011_ucode_pkg::U_ASRC_DBUF:     a_ops = dbuf;
+      rd68011_ucode_pkg::U_ASRC_REG2:     a_ops = reg2_val;
+      rd68011_ucode_pkg::U_ASRC_QUICK:    a_ops = quick_val;
+      rd68011_ucode_pkg::U_ASRC_BITMASK:  a_ops = bit_mask;
+      rd68011_ucode_pkg::U_ASRC_SCC:      a_ops = {32{cc_true}};
+      rd68011_ucode_pkg::U_ASRC_BIT7:     a_ops = 32'h0000_0080;
+      rd68011_ucode_pkg::U_ASRC_EAL:      a_ops = ea_latch;
+      rd68011_ucode_pkg::U_ASRC_EALSAVE:  a_ops = ea_save;
+      rd68011_ucode_pkg::U_ASRC_SRSAVE:   a_ops = {16'd0, sr_save};
+      rd68011_ucode_pkg::U_ASRC_VBR:      a_ops = vbr;
+      rd68011_ucode_pkg::U_ASRC_VECOFF:   a_ops = {22'd0, vec_num, 2'd0};
+      rd68011_ucode_pkg::U_ASRC_FMTVEC:   a_ops = {18'd0, 4'h0, vec_num, 2'd0};
+      rd68011_ucode_pkg::U_ASRC_SR:       a_ops = {16'd0, sr};
+      rd68011_ucode_pkg::U_ASRC_CCRVAL:   a_ops = {24'd0, 3'd0, sr[4:0]};
+      rd68011_ucode_pkg::U_ASRC_USP:      a_ops = usp;
+      rd68011_ucode_pkg::U_ASRC_IRQVEC:   a_ops = {8'd0, 20'hFFFFF, irq_taken, 1'b1};
+      rd68011_ucode_pkg::U_ASRC_IRQPC:    a_ops = exc_from_stop ? pc : ir_pc;
+      rd68011_ucode_pkg::U_ASRC_DIVRES:   a_ops = {div_r, div_q};
+      rd68011_ucode_pkg::U_ASRC_MULRES:   a_ops = mul_res;
+      rd68011_ucode_pkg::U_ASRC_LOOPIR:   a_ops = {16'd0, loop_ir};
+      rd68011_ucode_pkg::U_ASRC_LOOPST:   a_ops = {30'd0, loop_saved};
+      default:                            a_ops = 32'd0;
+    endcase
+  end
+
+  // ... and read data, which joins here and nowhere earlier.
+  always_comb begin
+    unique case (f_asrc)
+      rd68011_ucode_pkg::U_ASRC_RDATA:    a_bus = {16'd0, rdata};
+      rd68011_ucode_pkg::U_ASRC_RDATA_SX: a_bus = {{16{rdata[15]}}, rdata};
       rd68011_ucode_pkg::U_ASRC_RDATA_B:  a_bus = {24'd0, rdata_byte};
-      rd68011_ucode_pkg::U_ASRC_INDEX:    a_bus = index_val;
-      rd68011_ucode_pkg::U_ASRC_IRC_SXB:  a_bus = {{24{irc[7]}}, irc[7:0]};
-      rd68011_ucode_pkg::U_ASRC_DBUF:     a_bus = dbuf;
-      rd68011_ucode_pkg::U_ASRC_REG2:     a_bus = reg2_val;
-      rd68011_ucode_pkg::U_ASRC_QUICK:    a_bus = quick_val;
-      rd68011_ucode_pkg::U_ASRC_BITMASK:  a_bus = bit_mask;
-      rd68011_ucode_pkg::U_ASRC_SCC:      a_bus = {32{cc_true}};
-      rd68011_ucode_pkg::U_ASRC_BIT7:     a_bus = 32'h0000_0080;
-      rd68011_ucode_pkg::U_ASRC_EAL:      a_bus = ea_latch;
-      rd68011_ucode_pkg::U_ASRC_EALSAVE:  a_bus = ea_save;
-      rd68011_ucode_pkg::U_ASRC_SRSAVE:   a_bus = {16'd0, sr_save};
-      rd68011_ucode_pkg::U_ASRC_VBR:      a_bus = vbr;
-      rd68011_ucode_pkg::U_ASRC_VECOFF:   a_bus = {22'd0, vec_num, 2'd0};
-      rd68011_ucode_pkg::U_ASRC_FMTVEC:   a_bus = {18'd0, 4'h0, vec_num, 2'd0};
-      rd68011_ucode_pkg::U_ASRC_SR:       a_bus = {16'd0, sr};
-      rd68011_ucode_pkg::U_ASRC_CCRVAL:   a_bus = {24'd0, 3'd0, sr[4:0]};
-      rd68011_ucode_pkg::U_ASRC_USP:      a_bus = usp;
-      rd68011_ucode_pkg::U_ASRC_IRQVEC:   a_bus = {8'd0, 20'hFFFFF, irq_taken, 1'b1};
-      rd68011_ucode_pkg::U_ASRC_IRQPC:    a_bus = exc_from_stop ? pc : ir_pc;
-      rd68011_ucode_pkg::U_ASRC_DIVRES:   a_bus = {div_r, div_q};
-      rd68011_ucode_pkg::U_ASRC_MULRES:   a_bus = mul_res;
-      rd68011_ucode_pkg::U_ASRC_LOOPIR:   a_bus = {16'd0, loop_ir};
-      rd68011_ucode_pkg::U_ASRC_LOOPST:   a_bus = {30'd0, loop_saved};
-      default:                            a_bus = 32'd0;
+      default:                            a_bus = a_ops;
     endcase
   end
 
   always_comb begin
     unique case (f_bsrc)
-      rd68011_ucode_pkg::U_BSRC_ZERO:     b_bus = 32'd0;
-      rd68011_ucode_pkg::U_BSRC_ONE:      b_bus = 32'd1;
-      rd68011_ucode_pkg::U_BSRC_TWO:      b_bus = 32'd2;
-      rd68011_ucode_pkg::U_BSRC_FOUR:     b_bus = 32'd4;
-      rd68011_ucode_pkg::U_BSRC_PC:       b_bus = pc;
-      rd68011_ucode_pkg::U_BSRC_IR_PC:    b_bus = ir_pc;
-      rd68011_ucode_pkg::U_BSRC_IRC_PC:   b_bus = irc_pc;
-      rd68011_ucode_pkg::U_BSRC_IRC:      b_bus = {16'd0, irc};
-      rd68011_ucode_pkg::U_BSRC_IRC_SX:   b_bus = {{16{irc[15]}}, irc};
-      rd68011_ucode_pkg::U_BSRC_IR_SXB:   b_bus = {{24{ir[7]}}, ir[7:0]};
-      rd68011_ucode_pkg::U_BSRC_T0:       b_bus = t0;
-      rd68011_ucode_pkg::U_BSRC_T1:       b_bus = t1;
+      rd68011_ucode_pkg::U_BSRC_ZERO:     b_ops = 32'd0;
+      rd68011_ucode_pkg::U_BSRC_ONE:      b_ops = 32'd1;
+      rd68011_ucode_pkg::U_BSRC_TWO:      b_ops = 32'd2;
+      rd68011_ucode_pkg::U_BSRC_FOUR:     b_ops = 32'd4;
+      rd68011_ucode_pkg::U_BSRC_PC:       b_ops = pc;
+      rd68011_ucode_pkg::U_BSRC_IR_PC:    b_ops = ir_pc;
+      rd68011_ucode_pkg::U_BSRC_IRC_PC:   b_ops = irc_pc;
+      rd68011_ucode_pkg::U_BSRC_IRC:      b_ops = {16'd0, irc};
+      rd68011_ucode_pkg::U_BSRC_IRC_SX:   b_ops = {{16{irc[15]}}, irc};
+      rd68011_ucode_pkg::U_BSRC_IR_SXB:   b_ops = {{24{ir[7]}}, ir[7:0]};
+      rd68011_ucode_pkg::U_BSRC_T0:       b_ops = t0;
+      rd68011_ucode_pkg::U_BSRC_T1:       b_ops = t1;
+      rd68011_ucode_pkg::U_BSRC_REG:      b_ops = `RDREG(reg_index);
+      rd68011_ucode_pkg::U_BSRC_INDEX:    b_ops = index_val;
+      rd68011_ucode_pkg::U_BSRC_IRC_SXB:  b_ops = {{24{irc[7]}}, irc[7:0]};
+      rd68011_ucode_pkg::U_BSRC_DBUF:     b_ops = dbuf;
+      rd68011_ucode_pkg::U_BSRC_REG2:     b_ops = reg2_val;
+      rd68011_ucode_pkg::U_BSRC_QUICK:    b_ops = quick_val;
+      rd68011_ucode_pkg::U_BSRC_BITMASK:  b_ops = bit_mask;
+      rd68011_ucode_pkg::U_BSRC_SCC:      b_ops = {32{cc_true}};
+      rd68011_ucode_pkg::U_BSRC_BIT7:     b_ops = 32'h0000_0080;
+      rd68011_ucode_pkg::U_BSRC_EAL:      b_ops = ea_latch;
+      rd68011_ucode_pkg::U_BSRC_EALSAVE:  b_ops = ea_save;
+      rd68011_ucode_pkg::U_BSRC_SRSAVE:   b_ops = {16'd0, sr_save};
+      rd68011_ucode_pkg::U_BSRC_VBR:      b_ops = vbr;
+      rd68011_ucode_pkg::U_BSRC_VECOFF:   b_ops = {22'd0, vec_num, 2'd0};
+      rd68011_ucode_pkg::U_BSRC_FMTVEC:   b_ops = {18'd0, 4'h0, vec_num, 2'd0};
+      rd68011_ucode_pkg::U_BSRC_SR:       b_ops = {16'd0, sr};
+      rd68011_ucode_pkg::U_BSRC_CCRVAL:   b_ops = {24'd0, 3'd0, sr[4:0]};
+      rd68011_ucode_pkg::U_BSRC_USP:      b_ops = usp;
+      rd68011_ucode_pkg::U_BSRC_IRQVEC:   b_ops = {8'd0, 20'hFFFFF, irq_taken, 1'b1};
+      rd68011_ucode_pkg::U_BSRC_IRQPC:    b_ops = exc_from_stop ? pc : ir_pc;
+      rd68011_ucode_pkg::U_BSRC_DIVRES:   b_ops = {div_r, div_q};
+      default:                            b_ops = 32'd0;
+    endcase
+  end
+
+  // ... and read data, which joins here and nowhere earlier.
+  always_comb begin
+    unique case (f_bsrc)
       rd68011_ucode_pkg::U_BSRC_RDATA:    b_bus = {16'd0, rdata};
       rd68011_ucode_pkg::U_BSRC_RDATA_SX: b_bus = {{16{rdata[15]}}, rdata};
-      rd68011_ucode_pkg::U_BSRC_REG:      b_bus = `RDREG(reg_index);
       rd68011_ucode_pkg::U_BSRC_RDATA_B:  b_bus = {24'd0, rdata_byte};
-      rd68011_ucode_pkg::U_BSRC_INDEX:    b_bus = index_val;
-      rd68011_ucode_pkg::U_BSRC_IRC_SXB:  b_bus = {{24{irc[7]}}, irc[7:0]};
-      rd68011_ucode_pkg::U_BSRC_DBUF:     b_bus = dbuf;
-      rd68011_ucode_pkg::U_BSRC_REG2:     b_bus = reg2_val;
-      rd68011_ucode_pkg::U_BSRC_QUICK:    b_bus = quick_val;
-      rd68011_ucode_pkg::U_BSRC_BITMASK:  b_bus = bit_mask;
-      rd68011_ucode_pkg::U_BSRC_SCC:      b_bus = {32{cc_true}};
-      rd68011_ucode_pkg::U_BSRC_BIT7:     b_bus = 32'h0000_0080;
-      rd68011_ucode_pkg::U_BSRC_EAL:      b_bus = ea_latch;
-      rd68011_ucode_pkg::U_BSRC_EALSAVE:  b_bus = ea_save;
-      rd68011_ucode_pkg::U_BSRC_SRSAVE:   b_bus = {16'd0, sr_save};
-      rd68011_ucode_pkg::U_BSRC_VBR:      b_bus = vbr;
-      rd68011_ucode_pkg::U_BSRC_VECOFF:   b_bus = {22'd0, vec_num, 2'd0};
-      rd68011_ucode_pkg::U_BSRC_FMTVEC:   b_bus = {18'd0, 4'h0, vec_num, 2'd0};
-      rd68011_ucode_pkg::U_BSRC_SR:       b_bus = {16'd0, sr};
-      rd68011_ucode_pkg::U_BSRC_CCRVAL:   b_bus = {24'd0, 3'd0, sr[4:0]};
-      rd68011_ucode_pkg::U_BSRC_USP:      b_bus = usp;
-      rd68011_ucode_pkg::U_BSRC_IRQVEC:   b_bus = {8'd0, 20'hFFFFF, irq_taken, 1'b1};
-      rd68011_ucode_pkg::U_BSRC_IRQPC:    b_bus = exc_from_stop ? pc : ir_pc;
-      rd68011_ucode_pkg::U_BSRC_DIVRES:   b_bus = {div_r, div_q};
-      default:                            b_bus = 32'd0;
+      default:                            b_bus = b_ops;
     endcase
   end
 
@@ -1003,7 +1034,7 @@ module rd68011_seq #(
   // directly: the static forms have to save the mask before the prefetch
   // replaces the extension word it came from, so by the time the test happens
   // it arrives on the A bus out of the data output buffer.
-  assign bit_z = ((b_bus & a_bus) == 32'd0);
+  assign bit_z = ((b_ops & a_ops) == 32'd0);
 
   // Whether the instruction just fetched can be the looped one. Read against
   // the prefetch pipe, because the decision is made on the second fetch of it:
@@ -1034,8 +1065,8 @@ module rd68011_seq #(
       .rst_n     (rst_n),
       .start     (mul_start),
       .is_signed (mul_signed),
-      .a         (a_bus[15:0]),
-      .b         (b_bus[15:0]),
+      .a         (a_ops[15:0]),
+      .b         (b_ops[15:0]),
       .result    (mul_res)
   );
 
@@ -1052,8 +1083,8 @@ module rd68011_seq #(
       .rst_n     (rst_n),
       .start     (div_start),
       .is_signed (div_signed),
-      .dividend  (b_bus),
-      .divisor   (a_bus[15:0]),
+      .dividend  (b_ops),
+      .divisor   (a_ops[15:0]),
       .busy      (div_busy),
       .quotient  (div_q),
       .remainder (div_r),
@@ -1071,7 +1102,7 @@ module rd68011_seq #(
       .sh    (sh_sel),
       .size  (f_size),
       .count (shift_count),
-      .din   (b_bus),
+      .din   (b_ops),
       .x_in  (sr_x),
       .dout  (sh_out),
       .c_out (sh_c),
@@ -1083,6 +1114,7 @@ module rd68011_seq #(
 
   rd68011_alu u_alu (
       .op (f_alu), .size (f_size), .a (a_bus), .b (b_bus),
+      .a_op (a_ops), .b_op (b_ops),
       .x_in (sr_x), .y (alu_y),
       .n_out (n_flag_alu), .z_out (z_flag_alu), .v_out (v_flag),
       .c_out (c_flag)
