@@ -29,6 +29,14 @@ BUILD    := build
 SCRATCH  ?= $(BUILD)
 
 IVFLAGS  := -g2012 -Wall -Wno-timescale
+
+# iverilog, without the 'sorry: ... unique ... ignored' note it prints for every
+# unique case, and with its exit status kept. The filter used to be a pipe into
+# `grep -v ... || true`, which threw the status away along with the notes: a
+# testbench that stopped elaborating left the last .vvp that did in build/, and
+# the next line ran that instead. harte_tb ran a three-week-old core that way.
+iverilog_quiet = out=$$(iverilog $(1) 2>&1); rc=$$?; \
+    printf '%s\n' "$$out" | grep -v -e 'sorry:' -e '^$$' || true; exit $$rc
 VLFLAGS  := --lint-only -Wall
 YOSYS    := yosys
 
@@ -287,8 +295,8 @@ harte: dirs
 	@mkdir -p $(VECDIR)
 	@test -f $(VECDIR)/$(OP).$(N).hex || \
 	    python3 tools/harte/export.py $(OP) $(N) > $(VECDIR)/$(OP).$(N).hex
-	@iverilog $(IVFLAGS) -I sim/tb -o $(BUILD)/harte_tb.vvp -s harte_tb \
-	    $(RTL) $(MODELS) sim/tb/harte_tb.sv 2>&1 | grep -v 'sorry:' || true
+	@$(call iverilog_quiet,$(IVFLAGS) -I sim/tb -o $(BUILD)/harte_tb.vvp -s harte_tb \
+	    $(RTL) $(MODELS) sim/tb/harte_tb.sv)
 	@vvp $(BUILD)/harte_tb.vvp +vec=$(VECDIR)/$(OP).$(N).hex
 
 # ---------------------------------------------------------------------------
@@ -354,9 +362,8 @@ IVRL    := $(if $(filter-out 0,$(RTELOOP)),-DRD68011_RTE_RESTORES_LOOP=$(RTELOOP
 
 programs: dirs $(PROGHEX)
 	@echo "== test programs (waits=$(WAITS), loop buffer $(LOOPBUF)) =="
-	@iverilog $(IVFLAGS) $(IVLB) $(IVRL) -I sim/tb -o $(BUILD)/program_tb.vvp \
-	    -s core_program_tb $(RTL) $(MODELS) sim/tb/core_program_tb.sv 2>&1 | \
-	    grep -v 'sorry:' || true
+	@$(call iverilog_quiet,$(IVFLAGS) $(IVLB) $(IVRL) -I sim/tb -o $(BUILD)/program_tb.vvp \
+	    -s core_program_tb $(RTL) $(MODELS) sim/tb/core_program_tb.sv)
 	@fail=0; for p in $(PROGHEX); do \
 	  a=sim/programs/$$(basename $$p .hex).args; \
 	  extra=$$(test -f $$a && cat $$a || true); \
@@ -377,12 +384,11 @@ LBWORDS ?= 16
 
 loopbuf: dirs $(PROGHEX)
 	@echo "== the loop buffer, $(LBWORDS) words =="
-	@iverilog $(IVFLAGS) -I sim/tb -o $(BUILD)/program_tb.vvp \
-	    -s core_program_tb $(RTL) $(MODELS) sim/tb/core_program_tb.sv 2>&1 | \
-	    grep -v 'sorry:' || true
-	@iverilog $(IVFLAGS) -DRD68011_LOOP_BUF_WORDS=$(LBWORDS) -I sim/tb \
+	@$(call iverilog_quiet,$(IVFLAGS) -I sim/tb -o $(BUILD)/program_tb.vvp \
+	    -s core_program_tb $(RTL) $(MODELS) sim/tb/core_program_tb.sv)
+	@$(call iverilog_quiet,$(IVFLAGS) -DRD68011_LOOP_BUF_WORDS=$(LBWORDS) -I sim/tb \
 	    -o $(BUILD)/program_lb.vvp -s core_program_tb $(RTL) $(MODELS) \
-	    sim/tb/core_program_tb.sv 2>&1 | grep -v 'sorry:' || true
+	    sim/tb/core_program_tb.sv)
 	@printf '%-12s %10s %10s %9s\n' program off $(LBWORDS) change
 	@fail=0; for p in $(PROGHEX); do \
 	  n=$$(basename $$p .hex); \
@@ -511,9 +517,8 @@ suska: dirs $(SUSKADIR)/bus_probe.hex
 	@cd $(SUSKADIR) && ghdl -e $(GHDLFLAGS) wf68k10_tb 2>/dev/null; \
 	    ghdl -r $(GHDLFLAGS) wf68k10_tb --stop-time=2ms 2>&1 | \
 	    grep -o 'CYCLE .*' > suska.txt
-	@iverilog $(IVFLAGS) -I sim/tb -o $(SUSKADIR)/rd68011_bus_tb.vvp \
-	    -s rd68011_bus_tb $(RTL) $(MODELS) sim/suska/rd68011_bus_tb.sv 2>&1 | \
-	    grep -v 'sorry:' || true
+	@$(call iverilog_quiet,$(IVFLAGS) -I sim/tb -o $(SUSKADIR)/rd68011_bus_tb.vvp \
+	    -s rd68011_bus_tb $(RTL) $(MODELS) sim/suska/rd68011_bus_tb.sv)
 	@cd $(SUSKADIR) && vvp rd68011_bus_tb.vvp +image=bus_probe.hex \
 	    +timeout=2000000 +cycles=400 2>&1 | grep -o 'CYCLE .*' > ours.txt
 	@python3 tools/suska/compare.py $(SUSKADIR)/ours.txt $(SUSKADIR)/suska.txt
@@ -553,9 +558,8 @@ $(COSIMDIR)/musashi_trace: tools/cosim/musashi_trace.c tools/cosim/m68kconf.h
 
 cosim: programs $(COSIMDIR)/musashi_trace
 	@echo "== musashi co-simulation (loop buffer $(LOOPBUF)) =="
-	@iverilog $(IVFLAGS) $(IVLB) $(IVRL) -I sim/tb -o $(BUILD)/program_tb.vvp \
-	    -s core_program_tb $(RTL) $(MODELS) sim/tb/core_program_tb.sv 2>&1 | \
-	    grep -v 'sorry:' || true
+	@$(call iverilog_quiet,$(IVFLAGS) $(IVLB) $(IVRL) -I sim/tb -o $(BUILD)/program_tb.vvp \
+	    -s core_program_tb $(RTL) $(MODELS) sim/tb/core_program_tb.sv)
 	@fail=0; for p in $(COSIMPROG); do \
 	  vvp $(BUILD)/program_tb.vvp +prog=$(PROGDIR)/$$p.hex +waits=$(WAITS) \
 	      +timeout=6000000 +trace=$(COSIMDIR)/$$p.rtl >/dev/null 2>&1; \
@@ -614,9 +618,8 @@ timing-events: dirs $(SUSKADIR)/bus_probe.hex
 	@echo "== AC timing: measuring =="
 	@mkdir -p $(TIMDIR)
 	@cp $(SUSKADIR)/bus_probe.hex $(TIMDIR)/
-	@iverilog $(IVFLAGS) $(TIMINC) -o $(TIMDIR)/ac.vvp -s rd68011_ac_tb \
-	    $(RTL) $(TIMMODELS) sim/tb/timing/rd68011_ac_tb.sv 2>&1 | \
-	    grep -v 'sorry:' || true
+	@$(call iverilog_quiet,$(IVFLAGS) $(TIMINC) -o $(TIMDIR)/ac.vvp -s rd68011_ac_tb \
+	    $(RTL) $(TIMMODELS) sim/tb/timing/rd68011_ac_tb.sv)
 	@cd $(TIMDIR) && for p in $(TIMPERIODS); do \
 	    vvp ac.vvp +image=bus_probe.hex +period=$$p \
 	        +cycles=$(TIMCYCLES) > ours-$$p.events 2>&1; done
@@ -657,9 +660,8 @@ timing-setup: dirs $(SUSKADIR)/bus_probe.hex
 	@echo "== AC timing: where the processor samples its inputs =="
 	@mkdir -p $(TIMDIR)
 	@cp $(SUSKADIR)/bus_probe.hex $(TIMDIR)/
-	@iverilog $(IVFLAGS) $(TIMINC) -o $(TIMDIR)/setup.vvp -s rd68011_setup_tb \
-	    $(RTL) $(TIMMODELS) sim/tb/timing/rd68011_setup_tb.sv 2>&1 | \
-	    grep -v 'sorry:' || true
+	@$(call iverilog_quiet,$(IVFLAGS) $(TIMINC) -o $(TIMDIR)/setup.vvp -s rd68011_setup_tb \
+	    $(RTL) $(TIMMODELS) sim/tb/timing/rd68011_setup_tb.sv)
 	@cd $(TIMDIR) && for p in $(TIMPERIODS); do \
 	    vvp setup.vvp +image=bus_probe.hex +period=$$p \
 	        +timeout=20000000 2>&1 | \

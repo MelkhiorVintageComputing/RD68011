@@ -327,7 +327,9 @@ module harte_tb;
       tb_opcode          = ipf0;
       #1;
       dut.u_seq.upc      = tb_entry;
-      dut.u_seq.u_urom.uw_q = tb_uw;
+      // The store's register is its first level; the microword is decoded
+      // from it combinationally, so this is all that has to be copied.
+      dut.u_seq.u_urom.l1_q = u_tb_urom.l1_q;
     end
   endtask
 
