@@ -270,10 +270,19 @@ MC68000 with a seven-word frame.
 
 ## What changed the clock and not these numbers
 
-Three things came off the critical path while the frequency was being chased --
+Four things came off the critical path while the frequency was being chased --
 the multiplier moved into a unit of its own, the decoder stopped taking its
-address through the ALU, and the late second read of the microcode store gave
-way to previews carried in the microword. None of them changed a cycle count,
-which is what
+address through the ALU, the late second read of the microcode store gave
+way to previews carried in the microword, and read data stopped reaching the
+adder, the shifter and the other units that never compute on it. None of them
+changed a cycle count, which is what
 `sim/tb/core_timing_tb.sv` is there to say: every row of it was measured again
-afterwards and none moved. `doc/implementation.md` has what they did change.
+afterwards and none moved. `doc/implementation.md` and `doc/critical-path.md`
+have what they did change.
+
+The last of them was nearly the opposite trade. Moving the decimal unit and the
+shifter out of read data's reach by giving each a clock more -- the shifts and
+the BCD group above are faster than the MC68010 by more than that -- was
+measured, and bought +1.7 ns on the Artix and 6.8 % on the MAX 10. Taking all
+of the units out of reach instead cost no clock at all and bought more, so none
+of the rows above paid for it.
