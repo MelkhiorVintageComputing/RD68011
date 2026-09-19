@@ -17,7 +17,7 @@ implementation's source.
 | **One open question** | whether a bus error ends loop mode or suspends it — UM appendix A says both, `doc/divergences.md` argues each, and `RTE_RESTORES_LOOP` builds either. Resolving it needs a real MC68010 |
 | **Optional** | a loop buffer, off by default: loops of any shape and any instruction, up to `LOOP_BUF_WORDS` words, run with one instruction fetch a trip instead of one a word — **-29 %** of the clocks on compiled C, for 306 flip-flops and no frequency |
 | **Verified by** | 23492 reference vectors, 95275 co-simulated instructions, 16 directed testbenches, 7 programs, a second core in VHDL |
-| **Implemented** | 20.8 MHz post-route on an `xc7a100t-1`, 6727 LUTs, 1342 FFs, 7.5 block RAMs |
+| **Implemented** | 20.8 MHz post-route on an `xc7a100t-1`, 6645 LUTs, 1348 FFs, 7.5 block RAMs |
 | **For scale** | the fastest MC68010 Motorola shipped ran at 12.5 MHz |
 
 ```sh
@@ -161,10 +161,13 @@ selects, so an exception switches stacks without moving anything.
 The **address unit** sits between `y` and the bus request. It picks a base
 register, applies the pre-decrement or post-increment the microword asks for,
 bypasses a register write landing in the same edge, and checks the result for an
-address error before the request is presented. Read data, through the datapath,
-into the next bus address, inside half a clock — that is what "no wasted clock
-between an address arriving and the cycle that uses it" costs, and it is the
-design's critical path.
+address error before the request is presented. Read data reaches the next bus
+address inside half a clock — that is what "no wasted clock between an address
+arriving and the cycle that uses it" costs — but only through a multiplexer and
+a concatenation or a sign extension: the adder, the shifter and the other units take
+their operands from multiplexers that leave read data out, because no microword
+needs them to see it, and the assembler enforces that none does. What limits the
+clock is the bus unit's turnaround, from a cycle ending to the next one starting.
 
 ### The bus cycle
 
@@ -356,17 +359,18 @@ Post-route, `xc7a100tcsg324-1`, out of context, 48 ns with a 50 % duty cycle:
 | | |
 |---|--:|
 | Clock | **48.0 ns — 20.8 MHz** |
-| Setup slack | 2.048 ns |
-| Slice LUTs | 6585 (10.4 % of the part) |
-| Slice registers | 1342 (1.1 %) |
+| Setup slack | 4.155 ns |
+| Slice LUTs | 6645 (10.5 % of the part) |
+| Slice registers | 1348 (1.1 %) |
 | DSP48E1 | 3 |
 | Block RAM | 7.5 of 135 |
 
 48 ns is the constraint every figure in this project is measured against, not
-the limit: the design also closes at 44, 42 and 40 ns, and fails at 36. On a
-MAX 10 `10M50DAF484C7G` the same design fits in 13749 logic elements — 28 % of
-the part — and 30 M9K memory blocks, at 19.98 MHz. `doc/size-and-speed.md` has
-how it got there: six candidates measured on both devices, four kept.
+the limit: the design also closes at 40, 36 and 34 ns — 29.4 MHz — and fails
+at 32. On a MAX 10 `10M50DAF484C7G` the same design fits in 13947 logic elements
+— 28 % of the part — and 30 M9K memory blocks, at 22.52 MHz, and at 24.22 MHz on
+the `C6GES` part a DECA board carries. `doc/size-and-speed.md` has how it got
+there, and `doc/critical-path.md` what limits it now.
 
 Two cautions, both learned here: **place and route varies more than small changes
 do** — two runs differing only in the contents of one unreachable microcode word
@@ -424,7 +428,7 @@ make timing     # AC-specification conformance
 make synth impl # Vivado synthesis, then place and route
 make paths      # what limits the frequency, unreachable routes excluded
 make lint-questa lint-quartus   # two more front-ends, from the Altera tools
-make quartus    # ... and the MAX 10 fit, for a second frequency — 19.98 MHz
+make quartus    # ... and the MAX 10 fit, for a second frequency — 22.52 MHz
 make check      # the gate: ucode-check, lint, audit, sim, programs, AC timing
 ```
 

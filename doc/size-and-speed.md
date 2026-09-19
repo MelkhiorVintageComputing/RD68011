@@ -469,6 +469,27 @@ Read that as *the design closes at 40 ns*, which is the last row with more than 
 1.3 ns of run-to-run variation this project has already measured between it and failure.
 Before this work it closed at 48 and once, marginally, at 46.
 
+### After read data stopped reaching the datapath
+
+The same search once the adder, the shifter and the rest stopped seeing read data
+(`doc/critical-path.md`, *Read data only where it is read*), again one run each:
+
+| period | setup slack | |
+|--:|--:|---|
+| 48 ns | 4.155 ns | 20.8 MHz |
+| 40 ns | 0.629 ns | 25.0 MHz |
+| 36 ns | 0.613 ns | 27.8 MHz, where the table above fails |
+| **34 ns** | **0.539 ns** | **29.4 MHz** |
+| 32 ns | **−0.405 ns** | does not close |
+
+The slack no longer shrinks steadily as the period does, because Vivado stops working
+on timing once it is met: at 40, 36 and 34 ns it came back with about half a
+nanosecond each time. So the rows say *it closes at 34 ns and not at 32*, not how much
+room there is at any of them. The MAX 10 figures from the same change are Fmax, which
+Quartus computes rather than searches: 22.52 MHz on the `C7` part the rest of this
+document measures, where it was 20.19, and 24.22 MHz on the DECA board's `C6GES`,
+where it was 22.14.
+
 ## A defect this study introduced, and how it was found
 
 The shared shifter barrel read `dd`, `rsh_amt`, `xdd` and `xsh_amt` above the lines that
@@ -512,9 +533,12 @@ nobody had watched fail; here, an inference nobody had watched decline.
 
 ## What is left
 
-- **The shifter is the floor now.** Three shifter families sit inside 0.5 ns of each other
-  and `alu -> alu_y` is 2.5 ns behind. The barrel is shared and the operand widths are
-  already trimmed by both tools, so what remains is the barrel's own depth.
+- **The shifter was the floor, and is off it.** Three shifter families sat inside 0.5 ns
+  of each other, and trimming the barrel was all this study found to do about them. The
+  answer turned out to be that nothing reaching the shifter in half a clock ever needed
+  to: no microword shifts read data, so the shifter no longer sees it
+  (`doc/critical-path.md`, *Read data only where it is read*). What limits both parts
+  now is the bus unit's turnaround.
 - **Frequency is not where the logic is.** Four rounds of this work moved the Artix from
   13,121 LUTs to 6,585 and the MAX 10 from 72 % of the part to 28 %, and the clock moved
   from 48 ns to 40. Those are not proportional and were never going to be: the two

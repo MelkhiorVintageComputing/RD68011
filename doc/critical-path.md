@@ -75,48 +75,43 @@ the very end, when `impl.tcl` asks a clock that does not exist for its slack.
 
 ## What limits it now
 
-34 endpoints at 48 ns, and it is the shape the cycle counts require:
+36 endpoints at 48 ns, and it is the bus unit's own turnaround:
 
 ```
-req_rdata                     latched on the falling edge of S6
-  -> the A and B source multiplexers
-  -> the ALU, or the shifter, whichever the microword selects
-  -> t0_nxt / pc_nxt / ea_latch_nxt
-  -> n_addr, and the address-error check on it
+st_n, term_berr, term_retry   the bus unit's falling-edge half: which state it
+                              is in, and how the cycle is ending
+  -> req_last                 this is the edge the cycle ends on
+  -> retire                   so the microword ends with it
+  -> the next microword's request and its address
+  -> the address-error check
   -> req_valid
   -> start_new                the bus unit latches the next cycle, rising edge
 ```
 
-The microcode that needs it is absolute-long addressing, where one microword
-reads the low half of an address and concatenates it with `irc` into T0, and the
-next issues at `asel=T0`:
-
-```
-1119  next=1120 asrc=IRC bsrc=RDATA alu=CAT dst=T0 bus=READ pf=FETCH
-1120  next=1121 asrc=T1 dst=DBUF bus=WRITE asel=T0 fc=DATA aeasel=DST dhi=1 size=LONG
-```
-
-and branch targets do the same through `dst=PC` into `asel=PC`. Read data through
-the datapath into the next bus address, in half a period, is what "no wasted
-clock between the address arriving and the cycle that uses it" means. Shortening
-it means changing what the instructions cost.
+That is what lets one bus cycle start in the clock after the last one ended,
+and it has half a period because termination is sampled on a falling edge. It
+is 19 logic levels, and 76 % of its delay is routing.
 
 The families behind it, from `make paths`:
 
 | slack | behind | ends | family |
 |--:|--:|--:|---|
-| **2.077** | — | 34 | `a-mux -> shifter -> req_valid -> start_new` |
-| 2.315 | +0.24 | 3 | the same, ending at `req_valid` |
-| 2.566 | +0.49 | 59 | `a-mux -> shifter`, into the sequencer's own registers |
-| 3.806 | +1.73 | 272 | `shifter` |
-| 4.835 | +2.76 | 18 | `shifter -> loop-rom` |
-| 8.342 | +6.27 | 1 | `alu` |
-| 8.898 | +6.82 | 13 | `alu -> alu_y` |
+| **4.155** | — | 36 | `req_last -> req_valid -> start_new` |
+| 4.984 | +0.83 | 137 | `req_last` |
+| 6.034 | +1.88 | 1 | `req_last -> req_valid` |
+| 7.217 | +3.06 | 8 | `alu -> alu_y -> ucode-rom` |
+| 9.770 | +5.62 | 205 | `alu -> alu_y` |
+| 12.316 | +8.16 | 13 | `req_last -> loop-rom` |
 
-At 60 ns the ALU was the worse of the two datapath arms and at 48 ns the
-shifter is. They are the same path with a different unit in the middle.
+Until the change described under *Read data only where it is read*, the top
+of this table was read data -- latched on the falling edge of S6, through the
+source multiplexers and the shifter or the adder, into the next address -- at
+2.077 ns, with the shifter and the ALU trading places from run to run because
+they were the same path with a different unit in the middle. Neither is in it
+now. The ALU families that remain start from registers and have the whole
+period.
 
-## The four changes
+## The changes
 
 ### Decode the next opcode without waiting for the bus cycle to end
 
@@ -188,6 +183,70 @@ prints the number, which is 3. `make paths` also reports what the tool thinks th
 requirement is, because a `-to` pattern that stops matching would drop the
 constraint silently.
 
+### Read data only where it is read
+
+This was the path the cycle counts require, and it still is -- but most of what
+static timing put on it was not. Read data is latched on the falling edge of S6
+and the microword that takes it commits on the next rising edge, and the source
+multiplexers gave it to every unit behind them: the adder, the shifter, the
+decimal correction, the multiplier, the divider and the bit test. The absolute
+long address was genuinely on the path,
+
+```
+1119  next=1120 asrc=IRC bsrc=RDATA alu=CAT dst=T0 bus=READ pf=FETCH
+1120  next=1121 asrc=T1 dst=DBUF bus=WRITE asel=T0 fc=DATA aeasel=DST dhi=1 size=LONG
+```
+
+but a concatenation is wiring, and what the report measured was read data
+through a 32-bit carry chain or the shifter's barrel on its way to T0.
+
+Tabulating the 1576 microwords that take read data as an operand settles what
+it has to reach:
+
+```
+alu    microwords
+A          1376    passed through (the default)
+CAT         181
+SXW           8
+OR            7
+CAT8          4
+anything else 0    -- no add, subtract, shift, multiply, divide, decimal, bit test
+```
+
+Memory operands those need are staged in T1 by an earlier microword. So the
+source multiplexers are built in two steps: `a_ops` and `b_ops` are every
+source but read data and feed the six units, and `a_bus` and `b_bus` put read
+data back through one 2:1 multiplexer for the ALU's pass-through, `CAT`,
+`CAT8`, `SXW` and `OR`, and for the flags TAS takes from its operand.
+`isa.READ_DATA_ALU` is that list, and `assemble.py` fails the build if a
+microword ever needs more -- the RTL would give it zero.
+
+One more route turned up when the first attempt measured no better than the
+design it replaced: the interrupt vector. The microword after an acknowledge
+cycle reads the vector number, and it read it out of `req_rdata`, so the
+operand multiplexers' VECOFF and FMTVEC arms put read data back in front of the
+shifter. The byte is now registered as the acknowledge commits; the autovector
+decision still reads `req_end` in the clock after, because the bus unit sets it
+on the commit edge itself.
+
+| at 48 ns | before | after |
+|---|--:|--:|
+| Artix-7 setup slack | +1.677 ns | +4.155 ns |
+| MAX 10 `10M50DAF484C7G` Fmax | 20.19 MHz | 22.52 MHz |
+| MAX 10 `10M50DAF484C6GES` Fmax | 22.14 MHz | 24.22 MHz |
+
+No instruction's clock count moved -- `sim/tb/core_timing_tb.sv` fails if one
+does -- and the AC-timing event logs are byte-identical, so the bus did not move
+either. `doc/size-and-speed.md` has where the frequency now closes.
+
+Two things measured along the way are worth keeping. Moving only the decimal
+unit off the shared multiplexers bought nothing -- the Artix went from +1.677
+to +1.243 ns and both MAX 10s moved by under 1.5 %, with the shifter at the top
+in its place. Moving the decimal unit and the shifter, at the cost of a
+clock on each -- both are faster here than on the MC68010, so there was room --
+bought +1.7 ns on the Artix and 6.8 % on the MAX 10, and the adder took their
+place. Only removing all of them removed the family, and it cost no clock at all.
+
 ## What the exclusion is, and why it is not in the build
 
 `scripts/paths.tcl` applies, in the reporting session only, a *pair* of `-through`
@@ -224,28 +283,34 @@ not an error -- when the route simply is not there, which is what it now says.
 
 ## What is left
 
-- **The floor is the address path.** Read data through the datapath into the
-  next bus address is required by absolute-long addressing and by branch
-  targets. The address-error check standing between `n_addr` and `req_valid`
-  *has* now been looked at: `doc/size-and-speed.md` bounds it at **0.175 ns**,
-  a fifth of the router's own spread, and moving it into the bus unit would make
-  a cycle that does not happen visible on `fc_o`. Not worth it, and now measured
-  rather than open.
-- **One thing on that path was not required, and is gone.** The next microword's
-  address register was selected from `ir_nxt`, whose `U_DST_IR` arm is RTE
-  reloading the opcode out of the ALU -- so read data reached a register
+- **The floor is the bus unit's turnaround.** Termination, sampled on a falling
+  edge, through `retire` and the choice of the next microword into its request,
+  in half a period. That is required by back-to-back bus cycles, which is to say
+  by the cycle counts. The address-error check is on this path too, and
+  `doc/size-and-speed.md` bounds it at **0.175 ns**, a fifth of the router's own
+  spread; moving it into the bus unit would make a cycle that does not happen
+  visible on `fc_o`. Not worth it.
+- **Read data is off the floor, and should stay off it.** It reaches the next
+  address through a 2:1 multiplexer and a concatenation or a sign extension
+  now. Anything that widens `isa.READ_DATA_ALU` puts a unit back in that half
+  clock, and `assemble.py` says so before the RTL does.
+- **One thing on the old path was not required, and is gone.** The next
+  microword's address register was selected from `ir_nxt`, whose `U_DST_IR` arm
+  is RTE reloading the opcode out of the ALU -- so read data reached a register
   *number*, then a 16:1 register-file read. One microword in 6674 writes `ir`
   that way and its successor addresses through A7, so `n_ea_reg` now reads the
   prefetch pipe's own value and the assembler enforces that it may.
-  Worth **0.82 ns**, and `shifter -> req_valid -> start_new` went from the worst
-  family to the third.
-- **76.8 % of the delay is routing.** The worst path is 21.7 ns in 24 logic
-  levels and only 5.0 ns of that is gates; before these changes it was 29.4 ns
-  in 41 levels at 72 %. Taking logic out made the ratio worse, which is what
-  should be expected and is worth knowing before anyone restructures logic to
-  fix a placement and congestion problem.
+  Worth **0.82 ns** when it was made.
+- **76 % of the delay is routing.** The worst path is 19.6 ns in 19 logic
+  levels and 4.6 ns of that is gates; it was 21.7 ns in 24 levels before the
+  read-data change, and 29.4 ns in 41 levels before any of this. Taking logic
+  out keeps making the ratio worse, which is what should be expected and is
+  worth knowing before anyone restructures logic to fix a placement and
+  congestion problem.
 - **Place and route varies more than small changes do.** Two runs of the same
-  design 1.3 ns apart, and a one-flop change reading as 0.576 ns; treat anything
-  under about 1.5 ns as a statement about the router. Several rows above differ
-  by less than that and are not regressions. Re-run the baseline rather than
-  trusting a figure in a document, including these.
+  design 1.3 ns apart, and a one-flop change reading as 0.576 ns; and the
+  read-data change measured +4.155 and +6.637 ns in two runs whose RTL differed
+  only in comments and one register's name. Treat anything under about 2 ns as a
+  statement about the router. Several rows above differ by less than that and
+  are not regressions. Re-run the baseline rather than trusting a figure in a
+  document, including these.

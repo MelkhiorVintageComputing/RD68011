@@ -19,11 +19,11 @@ with a 50 % duty cycle:
 | | |
 |---|--:|
 | Clock period | **48.0 ns**, which is **20.8 MHz** |
-| Setup slack | 1.975 ns |
+| Setup slack | 4.155 ns |
 | Hold slack | 0.143 ns |
-| Slice LUTs | 6727 (10.6 % of the part) |
-| Slice registers | 1342 (1.1 %) |
-| F7 / F8 muxes | 538 / 96 |
+| Slice LUTs | 6645 (10.5 % of the part) |
+| Slice registers | 1348 (1.1 %) |
+| F7 / F8 muxes | 599 / 119 |
 | DSP48E1 | 3 |
 | Block RAM | 7.5 of 135 |
 
@@ -40,11 +40,11 @@ M9K blocks where the Artix-7 has six-input LUTs and 36 kbit block RAMs.
 
 | | |
 |---|--:|
-| Fmax | **20.04 MHz** |
-| Setup slack | −0.951 ns against 48 ns |
-| Hold slack | 0.323 ns |
-| Logic elements | 13733 (28 % of the part) |
-| Registers | 1391 |
+| Fmax | **22.52 MHz** |
+| Setup slack | +2.004 ns against 48 ns |
+| Hold slack | 0.339 ns |
+| Logic elements | 13947 (28 % of the part) |
+| Registers | 1397 |
 | Embedded 9-bit multipliers | 4 (1 %) |
 | M9K blocks | 30 of 182 (16 %) |
 | Memory bits | 245760 (of 1677312) |
@@ -57,9 +57,12 @@ the image is built to carry the contents, so without
 `doc/size-and-speed.md` has that measurement and the six others it took to find
 it.
 
-It does not quite reach 48 ns, and `make quartus` gates on the Fmax floor in the
-Makefile rather than on that slack, which is a regression test rather than an
-aspiration.
+It closes 48 ns now, which it did not until read data stopped reaching the
+adder and the shifter (`doc/critical-path.md`). `make quartus` still gates on
+the Fmax floor in the Makefile rather than on that slack, which is a regression
+test rather than an aspiration. The DECA board's `10M50DAF484C6GES` is the same
+die a speed grade faster, and fits at 24.22 MHz:
+`make quartus APART=10M50DAF484C6GES`.
 
 Quartus's Fmax is the more trustworthy of the two frequency figures here. The
 section below on reading a frequency off a slack explains why `1000 / (period −
@@ -177,14 +180,14 @@ added every area claim in this document was a guess:
 
 | | LUTs | FFs | BRAM | |
 |---|--:|--:|--:|---|
-| `u_seq` itself | 3467 | 1096 | 0 | source multiplexers, address unit, register file |
-| `u_decode` | 1076 | 0 | 0 | 1401 opcode patterns, entry point and preview |
+| `u_seq` itself | 3566 | 1102 | 0 | source multiplexers, address unit, register file |
+| `u_decode` | 1080 | 0 | 0 | 1401 opcode patterns, entry point and preview |
 | `u_urom` | 589 | 0 | 7.5 | the microcode store: 533 control table, 56 previews |
-| `u_shifter` | 578 | 0 | 0 | one barrel, shared |
-| `u_alu` | 500 | 0 | 0 | |
-| `u_divider` | 224 | 89 | 0 | |
-| `u_biu` | 135 | 157 | 0 | the bus interface is almost all flops |
-| total | 6585 | 1342 | 7.5 | plus 3 DSP48E1 for the multiplier |
+| `u_shifter` | 579 | 0 | 0 | one barrel, shared |
+| `u_alu` | 501 | 0 | 0 | |
+| `u_divider` | 209 | 89 | 0 | |
+| `u_biu` | 122 | 157 | 0 | the bus interface is almost all flops |
+| total | 6645 | 1348 | 7.5 | plus 3 DSP48E1 for the multiplier |
 
 The store used to be 6665 LUTs and half the design. `doc/size-and-speed.md` is
 what changed that, and it is also where the shifter's 814 became 578.
