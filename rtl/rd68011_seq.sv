@@ -915,6 +915,7 @@ module rd68011_seq #(
   logic       trace_armed;    // the trace bit as the current instruction began
   logic [7:0] irq_vec;
   logic       irq_auto;
+  logic [7:0] irq_data;       // the acknowledge cycle's data byte
 
   assign irq_level = ~ipl_sync_n;
 
@@ -955,9 +956,19 @@ module rd68011_seq #(
 
   // The vector number: the one the device put on the bus, or the autovector
   // for its level when it answered with VPA instead (UM 5.1.4, appendix B.2).
+  //
+  // The microword after the acknowledge reads it, not the acknowledge itself,
+  // so the byte is taken into `irq_data` as the acknowledge commits rather than
+  // read from req_rdata a clock later. It is the same value either way. The
+  // difference is that req_rdata is latched on a falling edge, and read
+  // directly it put every consumer of `vec_num` -- the operand multiplexers,
+  // and through them the adder and the shifter -- in half a clock of read data.
+  // `req_end` is not taken early: the bus unit sets it on the very edge the
+  // acknowledge commits, so it is only valid in the clock after, which is when
+  // this is read, and it is a rising-edge register already.
   assign irq_auto = (req_end == rd68011_pkg::CE_AVEC);
   assign irq_vec  = irq_auto ? (rd68011_pkg::VEC_AUTOVEC0 + {5'd0, irq_taken})
-                             : req_rdata[7:0];
+                             : irq_data;
 
   // The vector an exception is taking, and the two things built from it: the
   // offset into the vector table, and the frame's format-and-offset word,
@@ -2035,6 +2046,7 @@ module rd68011_seq #(
       cur_addr   <= 32'd0;
       cur_ssw    <= 16'd0;
       irq_taken   <= 3'd0;
+      irq_data    <= 8'd0;
       irq_prev    <= 3'd0;
       irq7_edge   <= 1'b0;
       trace_armed <= 1'b0;
@@ -2074,6 +2086,9 @@ module rd68011_seq #(
       // The level is latched as the interrupt is taken: it has to survive the
       // acknowledge cycle, which is what decides the vector.
       if (commit && take_irq) irq_taken <= irq_level;
+      if (commit && (f_bus == rd68011_ucode_pkg::U_BUS_IACK)) begin
+        irq_data <= req_rdata[7:0];
+      end
       // Which program counter the frame gets. A STOP does no prefetch, so an
       // exception taken out of one has to stack the instruction after it from
       // `pc` rather than from `ir_pc`, which is still the STOP's own address.
