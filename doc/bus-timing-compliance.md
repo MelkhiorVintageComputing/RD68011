@@ -6,8 +6,8 @@ check.
 
 Sources, all under `Inputs/doc/MC68030_Doc_More_Readable/MC68000UM_split/`:
 §3 signal description, §5 16-bit bus operation, appendix B M6800 peripheral
-interface, `ac-electrical-specifications.csv`, and the thirteen redrawn
-`figure-10-*.md`.
+interface, `ac-electrical-specifications.csv`, its footnotes in
+`ac-table-notes.csv`, and the thirteen redrawn `figure-10-*.md`.
 
 ## What is checked, and what cannot be
 

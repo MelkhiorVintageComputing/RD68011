@@ -76,16 +76,17 @@ Everything authoritative lives in `Inputs/doc/MC68030_Doc_More_Readable/`. **Ign
 
 | Need | Read |
 |---|---|
-| Pin behaviour | `MC68000UM_split/06-section-03-signal-description.pdf` |
+| Pin behaviour | `MC68000UM_split/06-section-03-signal-description.pdf`, with Table 3-4 as text and CSV in `table-3-4-signal-summary.md` + `signal-summary.csv` |
 | Bus protocol | `MC68000UM_split/08-section-05-16-bit-bus-operation.pdf` (40 pp) |
 | Exceptions, stack frames | `MC68000UM_split/09-section-06-exception-processing.pdf` |
 | MC68010 cycle counts | `MC68000UM_split/12-section-09-mc68010-instruction-execution-times.pdf` |
-| Bus timing figures | `MC68000UM_split/figure-10-*.md` + `ac-electrical-specifications.csv` |
+| Bus timing figures | `MC68000UM_split/figure-10-*.md` + `ac-electrical-specifications.csv`, footnotes in `ac-table-notes.csv` |
 | Loop mode | `MC68000UM_split/15-appendix-a-mc68010-loop-mode-operation.pdf` |
 | M6800 interface | `MC68000UM_split/16-appendix-b-m6800-peripheral-interface.pdf` |
 | Instruction semantics | `M68000PRM_split/07-section-04-integer-instructions.pdf`, `09-section-06-supervisor-instructions.pdf` |
 | Opcode encodings | `M68000PRM_split/11-section-08-instruction-format-summary.pdf` |
-| Which instructions exist | `M68000PRM_split/INSTRUCTIONS-BY-CPU.md` (MC68010 = 89 instructions) |
+| Which instructions exist | `M68000PRM_split/INSTRUCTIONS-BY-CPU.md` (MC68010 = 89 instructions), machine-readable in `instructions-by-cpu.csv` |
+| Condition codes per instruction | `M68000PRM_split/CONDITION-CODES.md` + `condition-codes.csv`, `condition-code-notes.csv`, `table-3-18-condition-code-computations.csv` |
 
 `MC68000UM_split/README.md` documents the manual's own internal contradictions — read it
 before "correcting" a spec that looks wrong.

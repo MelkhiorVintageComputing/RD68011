@@ -4,6 +4,12 @@ Derived from **Table 3-4, Signal Summary** and §3.1–3.11 of
 `Inputs/doc/MC68030_Doc_More_Readable/MC68000UM_split/06-section-03-signal-description.pdf`
 (Figure 3-1 is the MC68000/MC68HC000/**MC68010** signal set).
 
+That table is now also machine-readable, as `table-3-4-signal-summary.md` and
+`signal-summary.csv` beside it. Its `hiz_on_halt` and `hiz_on_bus_relinquish`
+columns are the part's own answer for every pin to the two questions the
+`_oe` outputs below have to get right, so it is the thing to check this file
+against rather than the prose.
+
 The original has three-state and bidirectional pins. This core has none: every such pin is
 split into an input `_i`, an output `_o` and an output-enable `_oe`. An external wrapper
 recombines them:
