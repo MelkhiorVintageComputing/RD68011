@@ -1109,3 +1109,49 @@ inside it, another context, a short frame nested in a long one -- is now built
 here and none of it, alone or together, makes this core mishandle the restore.
 Whatever is required is a property of the machine rather than a property of the
 sequence.
+
+## A gate that stopped being a gate, and said nothing
+
+Not a defect in the design. A defect in what was watching it, which is worse for
+a while, because the record shows a pass.
+
+**What it was.** `sim/tb/harte_tb.sv` sets up each vector by writing the
+architectural state into the core and then forcing the microword the opcode
+decodes to, which it copies out of a second instance of the store. The name it
+copied into was `dut.u_seq.u_urom.uw_q`. Splitting the store into two levels --
+`doc/size-and-speed.md`, where it is worth 3.91x fewer stored bits -- renamed
+that register `l1_q`, and the testbench stopped elaborating that day.
+
+Nothing said so. Every iverilog compile in the Makefile piped into
+`grep -v 'sorry:' || true`, to drop the notes iverilog prints for each `unique
+case` it does not enforce, and `|| true` threw away the exit status with them.
+The error scrolled past inside a recipe that carried on; `build/harte_tb.vvp`
+from an hour before the rename was still on disk; the next line ran it. So for
+three weeks any `make harte` or `make harte-all` in a tree holding that file ran
+a core from before the loop buffer, before the RTE loop-mode change, and before
+everything else in that window -- and printed passes for it.
+
+**How it was found.** Not by the gate failing -- it could not. By running the
+sweep in a fresh git worktree, which had no stale `.vvp` to fall back on, so the
+elaboration error was the whole output. A clean checkout is a test of the build
+that a developer's tree stops performing the moment it has artefacts in it.
+
+**What stops it coming back.** Two things, because the rename was the easy half.
+
+- The copy takes `u_tb_urom.l1_q`, the register the microword is now decoded
+  from. Current master passes all 23492 vectors, so the stale binary had not been
+  concealing a regression -- only the absence of a check.
+- `iverilog_quiet` in the Makefile keeps the filter and the exit status: it runs
+  iverilog, keeps its status, and prints everything but the notes. Eight compiles
+  used the old idiom -- the programs, the loop-buffer comparison, cosim, the
+  Suska comparison, both AC-timing measurements and harte -- and any of them
+  could have run a stale binary the same way. All eight use it now. Watched to
+  fail: with the Makefile fixed and the old testbench, `make harte` stops at the
+  elaboration error with status 2 instead of reporting passes.
+
+The general point is the one this file opens with, from the other side. A gate
+nobody has watched fail is not a gate; what this adds is that a gate also has to
+be watched to still *run*, against the tree it is supposed to be gating. The passes it printed
+were true of an old netlist and said nothing about the current one; whether a
+regression went unnoticed in that window cannot be recovered from the record,
+only bounded, by the fact that every vector passes on master now.

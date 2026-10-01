@@ -15,9 +15,9 @@ implementation's source.
 | **Bus** | asynchronous S0–S7 cycles, read-modify-write, arbitration, M6800 synchronous cycles, autovectored and vectored interrupts |
 | **MC68010 proper** | instruction continuation (format $8 frame + RTE), loop mode, VBR, SFC/DFC, MOVEC/MOVES/RTD/BKPT |
 | **One open question** | whether a bus error ends loop mode or suspends it — UM appendix A says both, `doc/divergences.md` argues each, and `RTE_RESTORES_LOOP` builds either. Resolving it needs a real MC68010 |
-| **Optional** | a loop buffer, off by default: loops of any shape and any instruction, up to `LOOP_BUF_WORDS` words, run with one instruction fetch a trip instead of one a word — **-29 %** of the clocks on compiled C, for 306 flip-flops and no frequency |
-| **Verified by** | 23492 reference vectors, 95275 co-simulated instructions, 16 directed testbenches, 7 programs, a second core in VHDL |
-| **Implemented** | 20.8 MHz post-route on an `xc7a100t-1`, 6645 LUTs, 1348 FFs, 7.5 block RAMs |
+| **Optional** | a loop buffer, off by default: loops of any shape and any instruction, up to `LOOP_BUF_WORDS` words, run with one instruction fetch a trip instead of one a word — **-29 %** of the clocks on compiled C, for 306 flip-flops and no frequency. It is virtually tagged, so a system that remaps underneath it says so on `loop_inv_n_i` (`doc/divergences.md`) |
+| **Verified by** | 23492 reference vectors, 95275 co-simulated instructions, 18 directed testbenches, 7 programs, a second core in VHDL |
+| **Implemented** | 6645 LUTs, 1348 FFs, 7.5 block RAMs on an `xc7a100t-1`; 20.8 MHz at the 48 ns constraint every figure here is measured against, and it closes at 34 ns — **29.4 MHz** |
 | **For scale** | the fastest MC68010 Motorola shipped ran at 12.5 MHz |
 
 ```sh
@@ -158,6 +158,14 @@ obvious design:
 `A7` is not in the register array: it is whichever stack pointer the S bit
 selects, so an exception switches stacks without moving anything.
 
+Those two source lists are built twice over. Read data arrives on a falling edge
+and the microword that reads it ends on the next rising one, so everything it
+reaches has half a clock — and no microword adds, shifts, multiplies, divides or
+tests a bit of it. So the adder, the shifter, the divider, the multiplier and the
+bit test are fed from a pair of buses that leaves read data out, and it rejoins
+only for the pass-through, concatenations and sign extensions that use it.
+`isa.READ_DATA_ALU` is that list and the assembler enforces it.
+
 The **address unit** sits between `y` and the bus request. It picks a base
 register, applies the pre-decrement or post-increment the microword asks for,
 bypasses a register write landing in the same edge, and checks the result for an
@@ -243,7 +251,7 @@ found the bugs the others did.
 | | What it is | Scale |
 |---|---|--:|
 | **Reference vectors** | `make harte-all` runs SingleStepTests through the core one instruction at a time, comparing registers, prefetch pipe, memory and the whole bus transaction list | 124 opcode files, **23492 tests, zero failures** |
-| **Directed testbenches** | `make sim` — what vectors cannot reach: the bus protocol edge by edge, faults and continuation, loop mode and the loop buffer, arbitration, the MC68010's own instructions, exact clock counts | 16 testbenches |
+| **Directed testbenches** | `make sim` — what vectors cannot reach: the bus protocol edge by edge, faults and continuation, loop mode and the loop buffer, arbitration, the MC68010's own instructions, exact clock counts | 18 testbenches |
 | **Real programs** | `make programs` — flat images built with `m68k-linux-gnu` and run to completion, self-checking; sequences long enough for carried state to be what breaks | 7 programs, incl. C at `-Os` |
 | **Co-simulation** | `make cosim` compares PC, SR and all sixteen registers against Musashi before every instruction | **95275 instructions, every register the same** |
 | **A second core** | `make suska` runs the Suska WF68K10, an unrelated VHDL MC68010, under ghdl and compares bus transactions | 79 data accesses, same addresses, same order |
@@ -253,7 +261,7 @@ under **iverilog, Verilator, yosys, Vivado, Quartus and Questa** — the
 intersection of what those six accept is the language this project is written
 in, `make lint` runs the three that need no vendor installation — and
 `make audit` proves, in the source *and* in the yosys netlist, that not one of
-1385 flip-flops initialises outside reset. Exactly one register is exempt — the
+1393 flip-flops initialises outside reset. Exactly one register is exempt — the
 microcode store's read register, which a block RAM keeps inside the primitive —
 and the audit names it, explains it, and fails if a second one appears.
 
@@ -343,7 +351,7 @@ tests did not cover:
 | `doc/ssw.md` | the special status word, field by field, on this core and two others |
 | `doc/divergences.md` | every place this does not behave as the part does, and why |
 | `doc/timing-divergences.md` | every instruction whose cycle count differs, measured and justified |
-| `doc/bugs-found.md` | every defect found in this design, how it was found, and what stops it coming back |
+| `doc/bugs-found.md` | every defect found in this design — and one in what was checking it — how each was found, and what stops it coming back |
 | `doc/implementation.md` | area, frequency, the reset audit, and two cautions about the numbers |
 | `doc/critical-path.md` | what actually limits the frequency, with the unreachable routes excluded |
 | `doc/size-and-speed.md` | making it smaller and faster: six candidates measured, four kept |
@@ -420,6 +428,7 @@ make lint       # elaborate every module under the three always-available tools
 make audit      # prove no register initialises outside reset
 make sim        # the directed testbenches
 make programs   # build sim/programs/ and run them
+make loopbuf    # ... each twice, with and without the loop buffer, for its clocks
 make programs WAITS=13   # ... against slow memory, as a shared bus makes it
 make cosim      # ... and against Musashi, comparing every register
 make harte-all  # the whole reference sweep
