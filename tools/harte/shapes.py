@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+# SPDX-License-Identifier: CERN-OHL-S-2.0
+# Source location: https://github.com/MelkhiorVintageComputing/RD68011
 """Summarise the bus-cycle shape of an opcode's reference vectors.
 
     python3 tools/harte/shapes.py ADD.w 010

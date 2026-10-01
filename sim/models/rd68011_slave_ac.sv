@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // A bus slave whose answers are timed in nanoseconds, not in clock edges.
 //
 // WHY THIS EXISTS

@@ -1,3 +1,6 @@
+-- SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+-- SPDX-License-Identifier: CERN-OHL-S-2.0
+-- Source location: https://github.com/MelkhiorVintageComputing/RD68011
 -- Does the Suska WF68K10's RTE come back from a format $8 frame at all?
 --
 -- A diagnostic companion to sim/suska/wf68k10_p03_tb.vhd, derived from it.

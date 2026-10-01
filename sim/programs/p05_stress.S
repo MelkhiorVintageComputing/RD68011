@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+ * SPDX-License-Identifier: CERN-OHL-S-2.0
+ * Source location: https://github.com/MelkhiorVintageComputing/RD68011
+ */
 | p05_stress -- arithmetic in long chains, for the co-simulation to chew on.
 |
 | The reference vectors test each instruction exhaustively and in isolation:

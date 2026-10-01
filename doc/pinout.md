@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+SPDX-License-Identifier: CERN-OHL-S-2.0
+Source location: https://github.com/MelkhiorVintageComputing/RD68011
+-->
 # RD68011 pinout
 
 Derived from **Table 3-4, Signal Summary** and §3.1–3.11 of

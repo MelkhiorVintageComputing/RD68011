@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // The fetch/decode/execute loop: reset, NOP and BRA.
 //
 // What is being checked is not that NOP does nothing -- it is that the

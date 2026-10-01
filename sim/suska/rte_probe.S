@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+ * SPDX-License-Identifier: CERN-OHL-S-2.0
+ * Source location: https://github.com/MelkhiorVintageComputing/RD68011
+ */
 | rte_probe -- does RTE come back from a format $8 frame at all?
 |
 | A companion probe to sim/programs/p03_fault.S, written to separate two

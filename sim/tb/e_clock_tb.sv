@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // E clock testbench.
 //
 // UM section 3.7: "A single period of clock E consists of 10 MC68000 clock

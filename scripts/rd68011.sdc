@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+# SPDX-License-Identifier: CERN-OHL-S-2.0
+# Source location: https://github.com/MelkhiorVintageComputing/RD68011
 # RD68011 timing constraints, for Quartus.
 #
 # The Altera twin of scripts/rd68011.xdc, and it exists to say the same thing to

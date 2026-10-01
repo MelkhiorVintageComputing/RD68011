@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+# SPDX-License-Identifier: CERN-OHL-S-2.0
+# Source location: https://github.com/MelkhiorVintageComputing/RD68011
 # What actually limits this design's frequency?
 #
 #   vivado -mode batch -source scripts/paths.tcl -tclargs <repo-root>

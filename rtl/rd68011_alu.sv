@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // RD68011 - arithmetic and logic unit, with the condition codes.
 //
 // The operation and flag-rule encodings come from rd68011_ucode_pkg, which is

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // The transaction list of this design, for comparison with Suska's.
 //
 // The other half of the cross-check sim/suska/wf68k10_tb.vhd starts: the same

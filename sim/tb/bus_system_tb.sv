@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // System control: the RESET instruction's output pulse, the double bus fault
 // HALT output, the RESET input's effect on the buses, and input synchronisation.
 //

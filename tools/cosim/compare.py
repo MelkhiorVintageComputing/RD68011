@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+# SPDX-License-Identifier: CERN-OHL-S-2.0
+# Source location: https://github.com/MelkhiorVintageComputing/RD68011
 """Find the first place the RTL and Musashi stop agreeing.
 
     python3 tools/cosim/compare.py <rtl trace> <musashi trace>

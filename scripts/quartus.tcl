@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+# SPDX-License-Identifier: CERN-OHL-S-2.0
+# Source location: https://github.com/MelkhiorVintageComputing/RD68011
 # Quartus analysis, fit and timing for RD68011.
 #
 #   quartus_sh -t scripts/quartus.tcl <family> <device> <top> <repo-root> <stage>

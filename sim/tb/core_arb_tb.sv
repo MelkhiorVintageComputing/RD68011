@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // Bus arbitration with the processor actually running.
 //
 // sim/tb/bus_arb_tb.sv checks the handshake itself -- specifications 35, 36,

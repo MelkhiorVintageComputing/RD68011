@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+# SPDX-License-Identifier: CERN-OHL-S-2.0
+# Source location: https://github.com/MelkhiorVintageComputing/RD68011
 # Run Vivado, putting it on the PATH first if it is not there already.
 #
 # The work is all in scripts/xilinx.sh, which does the same for any tool in the

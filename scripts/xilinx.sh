@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+# SPDX-License-Identifier: CERN-OHL-S-2.0
+# Source location: https://github.com/MelkhiorVintageComputing/RD68011
 # Run any tool from the Xilinx installation, putting it on the PATH first.
 #
 #     scripts/xilinx.sh xvlog -sv foo.sv

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // M6800 synchronous cycles: UM appendix B.
 //
 // When VPA is recognised instead of DTACK the cycle becomes synchronous with E,

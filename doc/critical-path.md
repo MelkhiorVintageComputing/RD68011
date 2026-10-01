@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+SPDX-License-Identifier: CERN-OHL-S-2.0
+Source location: https://github.com/MelkhiorVintageComputing/RD68011
+-->
 # What actually limits the frequency
 
 For most of this design's life the worst path `make impl` reported was one the

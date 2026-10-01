@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+ * SPDX-License-Identifier: CERN-OHL-S-2.0
+ * Source location: https://github.com/MelkhiorVintageComputing/RD68011
+ */
 | libmc68010 -- the arithmetic gcc assumes somebody else has written.
 |
 | An MC68010 multiplies 16 by 16 and divides 32 by 16, and that is all. Every

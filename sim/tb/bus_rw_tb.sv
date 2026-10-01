@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // Read and write cycle timing.
 //
 // Checks the S0..S7 asynchronous cycle against UM 5.1.1 and 5.1.2 state by

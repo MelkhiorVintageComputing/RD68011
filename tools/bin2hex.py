@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+# SPDX-License-Identifier: CERN-OHL-S-2.0
+# Source location: https://github.com/MelkhiorVintageComputing/RD68011
 """Flat MC68010 image to one big-endian word per line, for $readmemh.
 
     python3 tools/bin2hex.py build/programs/p01_flow.bin > p01_flow.hex

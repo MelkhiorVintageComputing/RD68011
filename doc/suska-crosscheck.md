@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+SPDX-License-Identifier: CERN-OHL-S-2.0
+Source location: https://github.com/MelkhiorVintageComputing/RD68011
+-->
 # The Suska cross-check
 
 `Inputs/Suska_Configware/68K10/` is another MC68010-compatible design, in VHDL,

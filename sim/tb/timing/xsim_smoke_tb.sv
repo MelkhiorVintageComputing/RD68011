@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // Does Vivado's simulator bind SystemVerilog to VHDL for these two designs?
 //
 // This is the gate the AC-timing work is built on. Everything else assumes one

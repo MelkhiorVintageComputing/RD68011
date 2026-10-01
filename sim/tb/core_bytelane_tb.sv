@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // Byte lanes: which half of the data bus a byte comes from, and goes to.
 //
 // A byte access puts no A0 on the address bus -- there is no A0 pin (UM 3.1).

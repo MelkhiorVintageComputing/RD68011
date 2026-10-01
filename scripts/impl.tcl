@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+# SPDX-License-Identifier: CERN-OHL-S-2.0
+# Source location: https://github.com/MelkhiorVintageComputing/RD68011
 # Vivado place and route for RD68011, for the numbers that mean something.
 #
 #   vivado -mode batch -source scripts/impl.tcl -tclargs <part> <top> <repo-root>

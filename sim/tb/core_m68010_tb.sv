@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // The four instructions the MC68010 added, and the cases no vector reaches.
 //
 // RTD, BKPT, MOVEC and MOVES exist only on this part, so the SingleStepTests

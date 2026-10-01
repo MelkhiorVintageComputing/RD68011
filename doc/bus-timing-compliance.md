@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+SPDX-License-Identifier: CERN-OHL-S-2.0
+Source location: https://github.com/MelkhiorVintageComputing/RD68011
+-->
 # Bus timing compliance
 
 What `rd68011_biu` does on the pins, where each behaviour comes from in the

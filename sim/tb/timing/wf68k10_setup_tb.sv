@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // Where does the Suska core sample its inputs?
 //
 // sim/tb/timing/rd68011_setup_tb.sv with a different processor in it, which is

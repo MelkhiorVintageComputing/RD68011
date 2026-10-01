@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // Bus arbitration: UM 5.2, 5.3 and figures 5-18 through 5-24.
 //
 // The delays are checked against the arbitration specifications, which the

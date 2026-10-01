@@ -1,3 +1,6 @@
+-- SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+-- SPDX-License-Identifier: CERN-OHL-S-2.0
+-- Source location: https://github.com/MelkhiorVintageComputing/RD68011
 -- The special status word of a faulted bus cycle, on the Suska WF68K10.
 --
 -- Companion to sim/programs/p06_ssw.S, which is the same image this runs and

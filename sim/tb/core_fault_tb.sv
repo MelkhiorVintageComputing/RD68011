@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // Bus error, address error, the format $8 frame, and continuation.
 //
 // This is what the MC68010 exists for. UM 5.4.1: "The MC68010 stacks the frame

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+# SPDX-License-Identifier: CERN-OHL-S-2.0
+# Source location: https://github.com/MelkhiorVintageComputing/RD68011
 """Pull the headline numbers out of a Quartus fit report, and gate on Fmax.
 
     quartus_report.py <rd68011.fit.rpt> [<fmax.rpt> <floor-MHz>]

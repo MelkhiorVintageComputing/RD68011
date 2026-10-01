@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // Bus error, retry and halt: UM 5.4 and table 5-1.
 //
 // Table 5-1 enumerates six ways a cycle can terminate, of which cases 4 and 6

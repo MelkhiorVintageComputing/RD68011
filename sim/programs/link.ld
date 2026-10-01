@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+ * SPDX-License-Identifier: CERN-OHL-S-2.0
+ * Source location: https://github.com/MelkhiorVintageComputing/RD68011
+ */
 /* Flat image for the RD68011 testbench memory.
  *
  * The memory model in sim/models/rd68011_slave.sv is 32K of word-wide RAM at

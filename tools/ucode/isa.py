@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+# SPDX-License-Identifier: CERN-OHL-S-2.0
+# Source location: https://github.com/MelkhiorVintageComputing/RD68011
 """The RD68011 microword: fields, encodings, and the datapath they control.
 
 This file is the single definition of the microcode format. The assembler emits

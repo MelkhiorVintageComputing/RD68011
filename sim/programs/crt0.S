@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+ * SPDX-License-Identifier: CERN-OHL-S-2.0
+ * Source location: https://github.com/MelkhiorVintageComputing/RD68011
+ */
 | crt0 -- what a C program needs before main and after it.
 |
 | The vector table, a zeroed .bss, a jump to main, and the translation of its

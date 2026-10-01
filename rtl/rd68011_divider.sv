@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // RD68011 - the divider for DIVU and DIVS.
 //
 // Thirty-two bits by sixteen, producing a sixteen-bit quotient and a

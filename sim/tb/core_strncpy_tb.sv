@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // A reproducer for a field report: "An address error on a byte move, in libc's
 // strncpy". Reported against a Sun-2/50 replica on a MAX 10 running SunOS
 // 4.0.3, where three unrelated programs die with SIGBUS -- which on that kernel

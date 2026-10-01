@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // RD68011 - shifter for ASL/ASR, LSL/LSR, ROL/ROR and ROXL/ROXR.
 //
 // PRM section 4 defines eight operations that differ only in what is shifted

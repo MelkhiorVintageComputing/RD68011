@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+SPDX-License-Identifier: CERN-OHL-S-2.0
+Source location: https://github.com/MelkhiorVintageComputing/RD68011
+-->
 # RD68011 — a SystemVerilog MC68010
 
 A from-scratch implementation of the Motorola MC68010 in portable SystemVerilog,
@@ -413,6 +418,47 @@ register takes its value from the reset branch of its `always_ff`, and
 Verilator, yosys, Vivado, Quartus and Questa. `make lint` is the gate for the
 three that need no vendor installation; yosys is the strictest and therefore
 defines the subset.
+
+---
+
+## Licence
+
+**CERN Open Hardware Licence Version 2 — Strongly Reciprocal** (`CERN-OHL-S-2.0`).
+The full text is in [`LICENSE`](LICENSE); every file of ours carries an SPDX
+header naming it.
+
+> Copyright © 2026 Romain Dolbeau
+>
+> This source describes Open Hardware and is licensed under the CERN-OHL-S v2.
+> You may redistribute and modify this source and make products using it under
+> the terms of the CERN-OHL-S v2 (https://ohwr.org/cern_ohl_s_v2.txt).
+>
+> This source is distributed WITHOUT ANY EXPRESS OR IMPLIED WARRANTY, INCLUDING
+> OF MERCHANTABILITY, SATISFACTORY QUALITY AND FITNESS FOR A PARTICULAR PURPOSE.
+> Please see the CERN-OHL-S v2 for applicable conditions.
+>
+> Source location: https://github.com/MelkhiorVintageComputing/RD68011
+
+Strongly reciprocal means a product made from this source carries the obligation
+on: whoever conveys such a product has to make the complete source of what they
+made available, under this same licence, and tell recipients where it is
+(licence §§3 and 4). Section 4 also lets a licensor require the source location
+to be displayed on the product itself; this project does not require that today,
+and saying so here is what would change it.
+
+**Two exceptions, both of them other people's work:**
+
+- Everything under [`Inputs/`](Inputs) is a submodule under its own upstream
+  licence — the manuals, Musashi, the SingleStepTests vectors and the Suska
+  configware. Nothing in it is covered by the licence above, and nothing in it
+  may be modified.
+- [`tools/cosim/m68kconf.h`](tools/cosim/m68kconf.h) is Musashi's own
+  configuration header with three switches changed, so it keeps Musashi's
+  copyright and licence and carries no header of ours.
+
+The only other files without a header are the `.args` files, which are
+command-line fragments `vvp` reads verbatim and cannot hold a comment, and
+[`LICENSE`](LICENSE) itself, which is CERN's text unaltered.
 
 ---
 

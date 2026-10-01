@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+SPDX-License-Identifier: CERN-OHL-S-2.0
+Source location: https://github.com/MelkhiorVintageComputing/RD68011
+-->
 # RD68011 — SystemVerilog MC68010
 
 A from-scratch SystemVerilog implementation of the Motorola MC68010, targeting FPGA
@@ -54,6 +59,23 @@ The RTL must elaborate under **iverilog, Verilator, yosys, Vivado, Quartus and Q
 See `doc/coding-standard.md` for the permitted subset. `make lint` is the gate for the
 three that need no vendor installation; `make synth`, `make lint-quartus` and
 `make lint-questa` are the other three, and they are not in `make check` for that reason.
+
+### Every file carries its SPDX header
+
+The project is **CERN-OHL-S-2.0** (`LICENSE`, and a notice in `README.md`). Every file of
+ours starts with three lines, in that file's comment syntax:
+
+```
+SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+SPDX-License-Identifier: CERN-OHL-S-2.0
+Source location: https://github.com/MelkhiorVintageComputing/RD68011
+```
+
+A new file gets them too. For `rtl/gen/`, they come from `BANNER` in
+`tools/ucode/assemble.py`, so regenerating keeps them. Four things do not have them and
+should not grow them: anything under `Inputs/`, `tools/cosim/m68kconf.h` (Musashi's own
+header, under Musashi's licence), the `.args` files, which `vvp` reads verbatim, and
+`LICENSE`, which is the licence text as CERN publishes it.
 
 ## Layout
 

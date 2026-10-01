@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // Where does the processor actually sample its inputs?
 //
 // The class-3 specifications -- 27 data setup, 28 DTACK hold, 29 data hold, 47

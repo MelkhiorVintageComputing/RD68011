@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+ * SPDX-License-Identifier: CERN-OHL-S-2.0
+ * Source location: https://github.com/MelkhiorVintageComputing/RD68011
+ */
 | p07_loops -- loops of every shape the loop buffer can and cannot take.
 |
 | The buffer is a fetch optimisation and nothing else: with LOOP_BUF_WORDS set

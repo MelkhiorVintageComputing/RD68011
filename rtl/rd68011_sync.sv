@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // RD68011 - asynchronous input synchroniser.
 //
 // UM 5.3, figure 5-17: "All asynchronous bus arbitration signals to the

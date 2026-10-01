@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Source location: https://github.com/MelkhiorVintageComputing/RD68011
 // The loop buffer -- doc/divergences.md, "Deliberate divergences: the loop
 // buffer". Not an MC68010 mechanism, and off unless LOOP_BUF_WORDS says
 // otherwise, so this is the only testbench that turns it on.

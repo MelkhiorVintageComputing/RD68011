@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+# SPDX-License-Identifier: CERN-OHL-S-2.0
+# Source location: https://github.com/MelkhiorVintageComputing/RD68011
 # RD68011 timing constraints.
 #
 # CLK_PERIOD_NS is the target, not the original part's 125 ns (8 MHz). An FPGA

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Romain Dolbeau <romain@dolbeau.org>
+# SPDX-License-Identifier: CERN-OHL-S-2.0
+# Source location: https://github.com/MelkhiorVintageComputing/RD68011
 """Export SingleStepTests vectors as a flat hex stream a testbench can read.
 
     python3 tools/harte/export.py NOP [count] > build/vectors/NOP.hex
